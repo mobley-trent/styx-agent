@@ -6,6 +6,9 @@ Thumbs.db
 # Agent scratch space (local-markdown issue tracker artifacts, if ever used)
 .scratch/
 
+# Freebuff local tool state
+.freebuff/
+
 # Env / secrets
 .env
 .env.*
