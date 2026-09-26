@@ -1,0 +1,17 @@
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+
+# Agent scratch space (local-markdown issue tracker artifacts, if ever used)
+.scratch/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies / build output
+node_modules/
+dist/
+build/
