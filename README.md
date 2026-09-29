@@ -15,10 +15,9 @@ spec and [CONTEXT.md](CONTEXT.md) for the domain glossary.
 Requires Go 1.24+.
 
 ```sh
-go build ./...          # build the module
-go build ./cmd/styx     # build the styx binary
+make check              # the full CI gate: build, vet, lint, test
+make build              # build the styx binary
 ./styx --help           # usage
-go test -race ./...     # tests
 ```
 
 ## Layout
