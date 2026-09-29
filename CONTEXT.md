@@ -66,6 +66,11 @@ project config overlay.
 The live TUI ask when the policy engine returns *prompt*: allow-once, allow-this-session,
 or deny-this-session. Session-scoped only; never writes persistent config.
 
+**Degraded isolation**
+Container execution when the harness cannot enforce container egress at the host's network
+edge: the container gets no external network plus a harness-mediated egress path scoped to
+the engagement. A visible, audited downgrade — never silent, never the quiet default.
+
 ## Agents
 
 **Subagent**
@@ -90,6 +95,11 @@ system prompt. Not a Skill.
 A SKILL.md-defined agent capability the user or the model can invoke, loaded from
 global and project skill directories. Project skills shadow global ones by name.
 Distinct from a Skill pack.
+
+**Skill tool**
+The tool through which the model invokes a Skill. Returns the skill's workflow content as
+its result for the model to execute with its ordinary tools. It grants no tools and widens
+no policy; a skill is workflow text, never a plugin.
 
 **STYX.md**
 The per-project memory file, auto-loaded into the system prompt. User- and
