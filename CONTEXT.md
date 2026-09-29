@@ -117,3 +117,20 @@ Reduction of conversation context: tool-output truncation at capture, plus thres
 The TUI presentation of a proposed multi-step plan before execution. Approving it
 pre-authorizes exactly the listed actions for that turn; it never overrides hard
 denies, ROE violations, or out-of-scope checks.
+
+## Testing
+
+**Fake model**
+The in-process, per-test-scriptable stand-in for the model. It implements the
+harness's single model boundary and is the only path tests take into the agent
+loop; no test talks to a live model.
+
+**Stub server**
+A local OpenAI-compatible model server for client-path testing: real streaming,
+tool calls, strict-mode argument enforcement, and injected faults. Recorded
+sessions replay through it as a mode; there is no separate replay mechanism.
+
+**Transcript fixture**
+A scrubbed, versioned recording of a styx session, derived from a persisted
+session and kept in the shared test-data directory. Secrets and real engagement
+targets never enter the repo.
