@@ -18,3 +18,8 @@ Thumbs.db
 node_modules/
 dist/
 build/
+
+# Go build artifacts
+/styx
+/styx-stamped
+*.test

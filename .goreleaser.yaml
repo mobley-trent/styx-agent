@@ -1,0 +1,34 @@
+version: 2
+
+project_name: styx
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: styx
+    main: ./cmd/styx
+    binary: styx
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.versionOverride={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      styx_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: SHA256SUMS
+
+# Keyless cosign signing of the checksum file lands with the release
+# pipeline (docs/spec.md §12.2); kept out of this scaffold so `goreleaser
+# check` stays green without release credentials.
