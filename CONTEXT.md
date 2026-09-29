@@ -109,8 +109,7 @@ feeds structured errors back to the model, bounded per turn.
 DeepSeek's schema-enforced tool-calling mode, applied uniformly to all built-in tools.
 
 **Compaction**
-Reduction of conversation context. v1: tool-output truncation at capture plus manual
-`/compact` — never automatic.
+Reduction of conversation context: tool-output truncation at capture, plus threshold-triggered compaction — old tool results are evicted first, and the oldest conversation segment is summarized into a state summary only if eviction isn't enough. Never touches the system prompt, engagement context, ROE state, or audit records. Manual `/compact` remains available as an override.
 
 ## Terminal interface
 
