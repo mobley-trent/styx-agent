@@ -44,6 +44,11 @@ mode flag alone.
 The human-authored declaration of authorized targets and rules of engagement. Checked
 on every network/exec action. It authorizes *scope*, not tool rules.
 
+**Engagement gate**
+The single strict checkpoint every engagement activation passes through, whether
+raised at launch or in-session. Same validation, same refuse-to-start behavior, no
+weaker second door.
+
 **In scope**
 An action whose target parameters match the engagement file (host / CIDR / domain).
 In-scope + engagement mode → auto-allow, audit-logged. Out-of-scope → prompt.
@@ -74,6 +79,26 @@ with subagent attribution.
 A built-in subagent definition. v1 presets: `coder`, `recon`, `exploit-dev`,
 `log-triage`.
 
+## Skills & memory
+
+**Skill pack**
+One of the four built-in domain bundles (coding, red team, reverse engineering, blue
+team): workflow prompts, allowlist deltas, and preset references layered onto the
+system prompt. Not a Skill.
+
+**Skill**
+A SKILL.md-defined agent capability the user or the model can invoke, loaded from
+global and project skill directories. Project skills shadow global ones by name.
+Distinct from a Skill pack.
+
+**STYX.md**
+The per-project memory file, auto-loaded into the system prompt. User- and
+agent-editable. Engagement notes live here.
+
+**Engagement notes**
+The timestamped, structured record the harness appends to STYX.md when an engagement
+ends. Never silent, never model-invented after the fact.
+
 ## Model interaction
 
 **Repair layer**
@@ -86,3 +111,10 @@ DeepSeek's schema-enforced tool-calling mode, applied uniformly to all built-in 
 **Compaction**
 Reduction of conversation context. v1: tool-output truncation at capture plus manual
 `/compact` — never automatic.
+
+## Terminal interface
+
+**Plan block**
+The TUI presentation of a proposed multi-step plan before execution. Approving it
+pre-authorizes exactly the listed actions for that turn; it never overrides hard
+denies, ROE violations, or out-of-scope checks.
