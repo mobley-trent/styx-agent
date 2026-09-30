@@ -1,0 +1,20 @@
+# Fixture: a well-formed engagement file (docs/spec.md §7.1).
+#
+# IP-only on purpose: it loads without DNS, so tests that exercise the file
+# path stay hermetic. Hostname and wildcard pinning are covered with the
+# injected resolver seam. Placeholder addresses only (TEST-NET-1/2) — real
+# engagement targets never enter the repo (internal/testdata/README.md).
+apiVersion: styx.engagement/v1
+name: acme-q4-redteam
+operator: eddy
+expires: 2026-10-15T23:59:59Z
+targets:
+  - 10.0.0.0/24
+  - 192.0.2.44
+roe:
+  exploit_allowed: true
+  destructive_forbidden: true
+  time_window:
+    start: "08:00"
+    end: "18:00"
+    tz: America/New_York
