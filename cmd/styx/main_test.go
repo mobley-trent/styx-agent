@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/mobley-trent/styx-agent/internal/app"
 )
 
 func TestRun(t *testing.T) {
@@ -37,13 +41,6 @@ func TestRun(t *testing.T) {
 			wantOut: "styx v9.9.9-test",
 		},
 		{
-			name:      "no args prints usage",
-			args:      []string{"styx"},
-			version:   "v0.1.0",
-			wantUsage: true,
-			wantOut:   "Usage: styx",
-		},
-		{
 			name:      "unknown flag fails with usage on stderr and exit 2",
 			args:      []string{"styx", "--bogus"},
 			version:   "v0.1.0",
@@ -52,11 +49,12 @@ func TestRun(t *testing.T) {
 			exitCode:  2,
 		},
 		{
-			name:     "engagement flag is explicitly not implemented yet",
-			args:     []string{"styx", "--engagement", "engagement.yaml"},
-			version:  "v0.1.0",
-			wantErr:  "not available in this scaffold",
-			exitCode: 2,
+			name:      "missing flag value fails with usage and exit 2",
+			args:      []string{"styx", "--engagement"},
+			version:   "v0.1.0",
+			wantUsage: true,
+			wantErr:   "needs a value",
+			exitCode:  2,
 		},
 	}
 
@@ -76,6 +74,71 @@ func TestRun(t *testing.T) {
 				t.Errorf("stderr %q does not contain %q", stderr, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestRunLaunchesHarness(t *testing.T) {
+	tests := []struct {
+		name           string
+		args           []string
+		wantEngagement string
+		wantProject    string
+	}{
+		{name: "no args launches in safe mode", args: []string{"styx"}},
+		{
+			name:           "engagement flag passes the file through the gate",
+			args:           []string{"styx", "--engagement", "engagement.yaml"},
+			wantEngagement: "engagement.yaml",
+		},
+		{
+			name:           "inline flag form",
+			args:           []string{"styx", "--engagement=acme.yaml", "--project", "/repo"},
+			wantEngagement: "acme.yaml",
+			wantProject:    "/repo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got *app.Options
+			previous := runApp
+			runApp = func(_ context.Context, opts app.Options) error {
+				got = &opts
+				return nil
+			}
+			t.Cleanup(func() { runApp = previous })
+
+			stdout, stderr, code := run(tt.args, "v0.1.0")
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty for a launch", stdout)
+			}
+			if got == nil {
+				t.Fatal("the harness was never launched")
+			}
+			if got.Engagement != tt.wantEngagement {
+				t.Errorf("engagement = %q, want %q", got.Engagement, tt.wantEngagement)
+			}
+			if got.ProjectDir != tt.wantProject {
+				t.Errorf("project = %q, want %q", got.ProjectDir, tt.wantProject)
+			}
+		})
+	}
+}
+
+func TestRunReportsLaunchFailure(t *testing.T) {
+	previous := runApp
+	runApp = func(context.Context, app.Options) error { return errors.New("refusing to start: bad engagement file") }
+	t.Cleanup(func() { runApp = previous })
+
+	_, stderr, code := run([]string{"styx"}, "v0.1.0")
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "refusing to start") {
+		t.Errorf("stderr = %q, want the launch failure", stderr)
 	}
 }
 

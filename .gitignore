@@ -23,3 +23,6 @@ build/
 /styx
 /styx-stamped
 *.test
+
+# styx runtime artifacts (the per-session audit trail)
+styx-audit-*.jsonl

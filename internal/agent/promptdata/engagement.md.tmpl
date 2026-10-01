@@ -1,0 +1,17 @@
+# Engagement
+
+An engagement file is active: **{{.Name}}**.
+
+Authorized targets (advisory — the harness enforces scope):
+{{range .Targets}}- {{.}}
+{{end}}
+Rules of engagement:
+- exploit-class tooling: {{if .ExploitAllowed}}allowed{{else}}forbidden{{end}}
+- destructive-tagged calls: {{if .DestructiveForbidden}}forbidden{{else}}allowed{{end}}
+{{- if .Expires}}
+- expires: {{.Expires}}
+{{- end}}
+
+This summary is advisory self-restraint only. Every network and exec action is
+still checked against the pinned scope by the harness; a request outside these
+targets is refused or held for the operator.
