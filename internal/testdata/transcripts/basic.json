@@ -1,0 +1,52 @@
+{
+  "version": "styx.transcript/v1",
+  "model": "deepseek-flash",
+  "turns": [
+    {
+      "request": {
+        "messages": [
+          { "role": "system", "content": "You are styx, a terminal agent harness." },
+          { "role": "user", "content": "Read README.md and tell me what this project is." }
+        ],
+        "tools": [
+          { "name": "read_file", "strict": true, "description": "Read a file from the session workspace." }
+        ]
+      },
+      "response": {
+        "reasoning": ["The user wants the README, so I should call read_file."],
+        "text": ["Let me read README.md."],
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "name": "read_file",
+            "arguments": "{\"path\":\"README.md\"}"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 24,
+          "total_tokens": 144,
+          "prompt_cache_hit_tokens": 100,
+          "prompt_cache_miss_tokens": 20
+        }
+      }
+    },
+    {
+      "request": {
+        "messages": [
+          { "role": "tool", "content": "# styx-agent\n", "tool_call_id": "call_1" }
+        ]
+      },
+      "response": {
+        "text": ["This project is styx-agent, a terminal agent harness."],
+        "usage": {
+          "prompt_tokens": 200,
+          "completion_tokens": 12,
+          "total_tokens": 212,
+          "prompt_cache_hit_tokens": 180,
+          "prompt_cache_miss_tokens": 20
+        }
+      }
+    }
+  ]
+}
