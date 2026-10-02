@@ -30,6 +30,12 @@ func runTUI(ctx context.Context, h *Harness) error {
 	var program *tea.Program
 	var busy atomic.Bool
 
+	// A cancelable child context unblocks a live permission card when the
+	// program exits, so the loop goroutine never waits on a terminal that is
+	// gone.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	model := tui.New(tui.Config{
 		Status: func() tui.Status { return h.Status(busy.Load()) },
 		Submit: func(text string) {
@@ -46,17 +52,23 @@ func runTUI(ctx context.Context, h *Harness) error {
 				}()
 				// The loop emits its own error event (§4.4); the turn stays
 				// resumable and the UI already shows the failure.
-				_ = h.Submit(ctx, text)
+				_ = h.Submit(runCtx, text)
 			}()
 		},
 		Command: h.command,
 	})
 
-	program = tea.NewProgram(model, tea.WithContext(ctx))
+	program = tea.NewProgram(model, tea.WithContext(runCtx))
 	h.setUI(func(ev sessions.Event) { program.Send(tui.EventMsg{Event: ev}) })
-	defer h.setUI(nil)
+	h.setPromptUI(func(msg tui.PromptMsg) { program.Send(msg) })
+	defer func() {
+		h.setUI(nil)
+		h.setPromptUI(nil)
+	}()
 
-	if _, err := program.Run(); err != nil && !errors.Is(err, tea.ErrProgramKilled) {
+	_, err := program.Run()
+	cancel()
+	if err != nil && !errors.Is(err, tea.ErrProgramKilled) {
 		return err
 	}
 	return nil

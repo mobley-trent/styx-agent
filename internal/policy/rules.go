@@ -123,6 +123,9 @@ func DefaultRules(mode Mode) *RuleTable {
 		{Tool: "ssh_logs", Action: VerdictPrompt, Source: "default"},
 		// Delegation is consequential: prompt.
 		{Tool: "dispatch_subagent", Action: VerdictPrompt, Source: "default"},
+		// Proposing a plan is read-only: it asks the operator for
+		// turn-scoped pre-authorization and widens nothing by itself (§9.2).
+		{Tool: "propose_plan", Action: VerdictAllow, Source: "default"},
 		// Skill invocation returns workflow text only; widens nothing.
 		{Tool: "skill", Action: VerdictAllow, Source: "default"},
 	}

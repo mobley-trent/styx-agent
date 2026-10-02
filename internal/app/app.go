@@ -90,6 +90,10 @@ type Harness struct {
 	session  *sessions.Session
 	messages []model.Message
 	ui       func(sessions.Event)
+	// ask is the live operator-interaction sink (the TUI's inline cards). Nil
+	// means no interactive operator is attached, and guarded actions take
+	// their safe default: deny, reject, or no plan.
+	ask func(tui.PromptMsg)
 }
 
 // Run builds the harness and hands it to the runner. Every startup failure is
@@ -185,7 +189,14 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		return nil, err
 	}
 
-	tools, err := agent.NewRegistry(agent.ReadFileTool(workDir))
+	tools, err := agent.NewRegistry(
+		agent.ReadFileTool(workDir),
+		agent.WriteFileTool(workDir),
+		agent.EditFileTool(workDir),
+		agent.GlobTool(workDir),
+		agent.GrepTool(workDir),
+		agent.ProposePlanTool(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -231,6 +242,9 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		agent.WithModel(cfg.Model),
 		agent.WithClock(now),
 		agent.WithEmitter(h.emit),
+		agent.WithPrompter(operator{h}),
+		agent.WithDiffReviewer(operator{h}),
+		agent.WithPlanApprover(operator{h}),
 	)
 
 	// An engagement gate activation is a session event (§4.3, §7.2).
@@ -340,6 +354,127 @@ func (h *Harness) setUI(ui func(sessions.Event)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.ui = ui
+}
+
+// setPromptUI installs the live operator-interaction sink (the TUI's inline
+// cards).
+func (h *Harness) setPromptUI(ask func(tui.PromptMsg)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ask = ask
+}
+
+// askOperator delivers one card to the TUI and waits for the operator's
+// choice. An empty choice means no interactive operator is attached; callers
+// then take their safe default. The wait is bounded by ctx.
+func (h *Harness) askOperator(ctx context.Context, p tui.Prompt) (string, error) {
+	h.mu.Lock()
+	ask := h.ask
+	h.mu.Unlock()
+	if ask == nil {
+		return "", nil
+	}
+	reply := make(chan string, 1)
+	ask(tui.PromptMsg{Prompt: p, Reply: func(choice string) {
+		select {
+		case reply <- choice:
+		default:
+		}
+	}})
+	select {
+	case choice := <-reply:
+		return choice, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// operator adapts the harness's live TUI interaction onto the agent's
+// prompter, diff-reviewer, and plan-approver interfaces. It is a distinct type
+// because the Harness already has a Prompt field (the system prompt).
+type operator struct{ h *Harness }
+
+// Prompt implements agent.Prompter (§6.4, §9.3): it renders an inline
+// permission card and maps the operator's choice onto a loop decision.
+func (o operator) Prompt(ctx context.Context, req agent.PromptRequest) (agent.Decision, error) {
+	choice, err := o.h.askOperator(ctx, tui.Prompt{
+		Kind:   tui.PromptPermission,
+		Tool:   req.Tool,
+		Params: req.Params,
+		Reason: string(req.Reason),
+		Risk:   riskClass(req.Tool),
+	})
+	if err != nil {
+		return agent.DecisionDeny, err
+	}
+	switch choice {
+	case tui.ChoiceAllowOnce:
+		return agent.DecisionAllowOnce, nil
+	case tui.ChoiceAllowSession:
+		return agent.DecisionAllowSession, nil
+	default:
+		return agent.DecisionDeny, nil
+	}
+}
+
+// Review implements agent.DiffReviewer (§9.2): it renders a staged write's
+// diff and maps the operator's choice onto a review decision.
+func (o operator) Review(ctx context.Context, req agent.DiffRequest) (agent.DiffDecision, error) {
+	choice, err := o.h.askOperator(ctx, tui.Prompt{
+		Kind:   tui.PromptDiff,
+		Tool:   req.Tool,
+		Params: req.Params,
+		Path:   req.Diff.Path,
+		Diff:   req.Diff,
+	})
+	if err != nil {
+		return agent.DiffReject, err
+	}
+	switch choice {
+	case tui.ChoiceAccept:
+		return agent.DiffAccept, nil
+	case tui.ChoiceAcceptRest:
+		return agent.DiffAcceptRest, nil
+	default:
+		return agent.DiffReject, nil
+	}
+}
+
+// Approve implements agent.PlanApprover (§9.2): it renders a plan-approval
+// card and reports whether the operator pre-authorized the turn.
+func (o operator) Approve(ctx context.Context, plan agent.Plan) (bool, error) {
+	steps := make([]sessions.PlanStep, 0, len(plan.Actions))
+	for _, a := range plan.Actions {
+		steps = append(steps, sessions.PlanStep{Tool: a.Tool, Params: a.Params})
+	}
+	choice, err := o.h.askOperator(ctx, tui.Prompt{
+		Kind:  tui.PromptPlan,
+		Steps: steps,
+	})
+	if err != nil {
+		return false, err
+	}
+	return choice == tui.ChoiceApprove, nil
+}
+
+// riskClass names a tool's risk class for the permission card (§9.3).
+func riskClass(tool string) string {
+	switch tool {
+	case "read_file", "glob", "grep":
+		return "read"
+	case "write_file", "edit_file":
+		return "write"
+	case "bash", "code_exec":
+		return "exec"
+	case "web_fetch", "ssh_logs":
+		return "network"
+	case "dispatch_subagent":
+		return "delegation"
+	case agent.PlanToolName:
+		return "plan"
+	default:
+		return ""
+	}
 }
 
 // emit is the loop's session event bus: persist, then render (§4.3).
