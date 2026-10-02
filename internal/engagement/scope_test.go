@@ -95,6 +95,48 @@ func TestScopesAreSeparate(t *testing.T) {
 	}
 }
 
+// TestScopeHostPins is the harness resolver's input (§5.2): the hostname and
+// wildcard entries with the exact addresses they were pinned to at load, and
+// nothing else.
+func TestScopeHostPins(t *testing.T) {
+	eng, err := gate(t, scopeFixture)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	hosts := eng.Scope().HostPins()
+	byName := map[string]HostPins{}
+	for _, h := range hosts {
+		byName[h.Name] = h
+	}
+
+	host, ok := byName["app.acme.example"]
+	if !ok || host.Wildcard {
+		t.Fatalf("HostPins = %+v, want the exact hostname entry", hosts)
+	}
+	if len(host.Addrs) != 2 || host.Addrs[0].String() != "192.0.2.44" {
+		t.Errorf("hostname pins = %v, want the load-time expansion", host.Addrs)
+	}
+
+	wildcard, ok := byName["acme.example"]
+	if !ok || !wildcard.Wildcard {
+		t.Fatalf("HostPins = %+v, want the wildcard entry keyed by its base", hosts)
+	}
+	if len(wildcard.Addrs) != 2 {
+		t.Errorf("wildcard pins = %v, want the load-time expansion", wildcard.Addrs)
+	}
+
+	// IP and CIDR entries carry no name and must not become resolver answers.
+	if len(hosts) != 2 {
+		t.Errorf("HostPins = %d entries, want only the two named ones", len(hosts))
+	}
+
+	// The returned pins are a copy: mutating them cannot change the scope.
+	host.Addrs[0] = netip.MustParseAddr("203.0.113.9")
+	if !eng.Scope().InScope("192.0.2.44") {
+		t.Error("mutating HostPins widened the scope")
+	}
+}
+
 // TestScopeAccessorsReturnCopies confirms the accessors hand out copies: a
 // caller mutating the returned slices cannot widen or narrow the engagement.
 func TestScopeAccessorsReturnCopies(t *testing.T) {

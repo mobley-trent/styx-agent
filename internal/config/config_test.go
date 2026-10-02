@@ -175,6 +175,32 @@ func TestLoadRejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestContainerConfigMergesAndValidates(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, "config.yaml", `
+container:
+  image: registry.example/styx:1
+  egress_allow:
+    - 203.0.113.0/24
+    - 198.51.100.7
+`)
+	cfg, err := Load(path, "")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.Container.Image != "registry.example/styx:1" {
+		t.Errorf("container image = %q, want the declared image", cfg.Container.Image)
+	}
+	if len(cfg.Container.EgressAllow) != 2 {
+		t.Errorf("egress_allow = %v, want both entries", cfg.Container.EgressAllow)
+	}
+
+	bad := writeConfig(t, t.TempDir(), "config.yaml", "container:\n  egress_allow:\n    - not-an-address\n")
+	if _, err := Load(bad, ""); err == nil {
+		t.Error("Load(bad egress) = nil error, want an unparseable widening rejected")
+	}
+}
+
 func TestDefaultPaths(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/xdg")
 	if got, want := DefaultGlobalPath(), filepath.Join("/xdg", "styx", "config.yaml"); got != want {

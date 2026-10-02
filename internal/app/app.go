@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/agent"
 	"github.com/mobley-trent/styx-agent/internal/audit"
 	"github.com/mobley-trent/styx-agent/internal/config"
+	"github.com/mobley-trent/styx-agent/internal/containerlayer"
 	"github.com/mobley-trent/styx-agent/internal/engagement"
 	"github.com/mobley-trent/styx-agent/internal/memory"
 	"github.com/mobley-trent/styx-agent/internal/model"
@@ -52,6 +54,13 @@ type Options struct {
 	Client model.ModelClient
 	// Runner replaces the Bubble Tea program when non-nil (tests).
 	Runner Runner
+	// ContainerRuntime overrides the container engine factory (tests).
+	ContainerRuntime func() (containerlayer.Runtime, error)
+	// ContainerFirewall overrides the host-edge firewall (tests).
+	ContainerFirewall containerlayer.Firewall
+	// Executor overrides exec dispatch entirely (tests): when set, no
+	// container runtime is constructed.
+	Executor agent.Executor
 	// SkipModelCheck disables the startup GET /models validation (§3.1).
 	SkipModelCheck bool
 	// Now is the harness clock; nil means time.Now.
@@ -80,11 +89,12 @@ type Harness struct {
 	// Version is the binary version.
 	Version string
 
-	sessions *sessions.Store
-	audit    *audit.Writer
-	out      io.Writer
-	now      func() time.Time
-	warned   bool
+	sessions  *sessions.Store
+	audit     *audit.Writer
+	container *containerlayer.Manager
+	out       io.Writer
+	now       func() time.Time
+	warned    bool
 
 	mu       sync.Mutex
 	session  *sessions.Session
@@ -189,12 +199,41 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		return nil, err
 	}
 
+	// Exec tools run in a per-session container (§5.2). The manager starts the
+	// container lazily, on the first exec, so a session that never runs a
+	// command never touches Docker. Tests may replace the whole dispatch.
+	var h *Harness
+	exec := opts.Executor
+	var container *containerlayer.Manager
+	if exec == nil {
+		factory := opts.ContainerRuntime
+		if factory == nil {
+			factory = func() (containerlayer.Runtime, error) { return containerlayer.NewDocker() }
+		}
+		container = containerlayer.NewManager(containerlayer.ManagerOptions{
+			RuntimeFactory: factory,
+			Image:          cfg.Container.Image,
+			Workspace:      workDir,
+			Allowed:        allowedEgress(eng, cfg),
+			Pins:           namePins(eng),
+			Firewall:       opts.ContainerFirewall,
+			OnStart: func(info containerlayer.SessionInfo) {
+				if h != nil {
+					h.emitIsolation(info)
+				}
+			},
+		})
+		exec = container
+	}
+
 	tools, err := agent.NewRegistry(
 		agent.ReadFileTool(workDir),
 		agent.WriteFileTool(workDir),
 		agent.EditFileTool(workDir),
 		agent.GlobTool(workDir),
 		agent.GrepTool(workDir),
+		agent.BashTool(exec),
+		agent.CodeExecTool(exec),
 		agent.ProposePlanTool(),
 	)
 	if err != nil {
@@ -223,7 +262,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		return nil, err
 	}
 
-	h := &Harness{
+	h = &Harness{
 		Config:     cfg,
 		Mode:       mode,
 		Engagement: eng,
@@ -234,6 +273,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		Version:    opts.Version,
 		sessions:   store,
 		audit:      auditWriter,
+		container:  container,
 		out:        out,
 		now:        now,
 		session:    session,
@@ -245,6 +285,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		agent.WithPrompter(operator{h}),
 		agent.WithDiffReviewer(operator{h}),
 		agent.WithPlanApprover(operator{h}),
+		agent.WithIsolationProvider(func() audit.Isolation { return h.isolation() }),
 	)
 
 	// An engagement gate activation is a session event (§4.3, §7.2).
@@ -279,6 +320,71 @@ func modelClient(ctx context.Context, cfg *config.Config, opts Options, env func
 		}
 	}
 	return client, nil
+}
+
+// allowedEgress is the container egress allowlist (§5.2): the engagement's
+// pinned scope plus any operator-configured extra destinations (model
+// endpoint, package mirrors).
+func allowedEgress(eng *engagement.Engagement, cfg *config.Config) []netip.Prefix {
+	var out []netip.Prefix
+	if eng != nil {
+		for _, ip := range eng.Scope().Pins() {
+			out = append(out, netip.PrefixFrom(ip, ip.BitLen()))
+		}
+		out = append(out, eng.Scope().Prefixes()...)
+	}
+	for _, entry := range cfg.Container.EgressAllow {
+		s := strings.TrimSpace(entry)
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p)
+			continue
+		}
+		if ip, err := netip.ParseAddr(s); err == nil {
+			out = append(out, netip.PrefixFrom(ip, ip.BitLen()))
+		}
+	}
+	return out
+}
+
+// namePins maps the engagement's authorized names onto the container layer's
+// resolver pins (§5.2): the harness answers exactly these names and nothing
+// else.
+func namePins(eng *engagement.Engagement) []containerlayer.NamePin {
+	if eng == nil {
+		return nil
+	}
+	hosts := eng.Scope().HostPins()
+	out := make([]containerlayer.NamePin, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, containerlayer.NamePin{Name: h.Name, Wildcard: h.Wildcard, Addrs: h.Addrs})
+	}
+	return out
+}
+
+// isolation is the container enforcement level for the status bar and the
+// audit trail. An unstarted or unavailable container reports "" so nothing
+// claims enforced egress it does not have.
+func (h *Harness) isolation() audit.Isolation {
+	if h.container == nil {
+		return ""
+	}
+	switch h.container.Isolation() {
+	case containerlayer.IsolationContainer, containerlayer.IsolationDegraded:
+		return audit.Isolation(h.container.Isolation())
+	default:
+		return ""
+	}
+}
+
+// emitIsolation surfaces the session's isolation level once, three ways
+// (§5.2, §9.5): the status bar reads it, the stream renders this banner, and
+// the audit trail records the level on every subsequent call.
+func (h *Harness) emitIsolation(info containerlayer.SessionInfo) {
+	detail := "container isolation: egress enforced at the host edge"
+	if info.Degraded {
+		detail = "degraded isolation: the host firewall could not be programmed; the session container has no external network and egress is limited to pinned scope through the harness proxy"
+	}
+	h.emit(sessions.Event{Kind: sessions.KindIsolation, Detail: detail, Isolation: string(info.Isolation)})
 }
 
 // engagementContext renders the §7.4 advisory scope summary, or nil in safe
@@ -341,6 +447,9 @@ func (h *Harness) Close() error {
 	var errs []error
 	if session != nil {
 		errs = append(errs, session.Close())
+	}
+	if h.container != nil {
+		errs = append(errs, h.container.Close())
 	}
 	if h.audit != nil {
 		errs = append(errs, h.audit.Close())
@@ -497,10 +606,11 @@ func (h *Harness) emit(ev sessions.Event) {
 // Status is the status-bar state for the TUI (§9.1).
 func (h *Harness) Status(busy bool) tui.Status {
 	return tui.Status{
-		Mode:    string(h.Mode),
-		Model:   h.Config.Model,
-		Session: shortID(h.SessionID()),
-		Busy:    busy,
+		Mode:      string(h.Mode),
+		Model:     h.Config.Model,
+		Session:   shortID(h.SessionID()),
+		Isolation: string(h.isolation()),
+		Busy:      busy,
 	}
 }
 
@@ -573,6 +683,9 @@ func (h *Harness) statusText() string {
 	if h.Engagement != nil {
 		lines = append(lines, fmt.Sprintf("engagement: %s", h.Engagement.Name()))
 		lines = append(lines, fmt.Sprintf("targets:  %s", strings.Join(h.Engagement.Targets(), ", ")))
+	}
+	if iso := h.isolation(); iso != "" {
+		lines = append(lines, fmt.Sprintf("isolation: %s", iso))
 	}
 	lines = append(lines, fmt.Sprintf("messages: %d", len(h.Messages())))
 	return strings.Join(lines, "\n")

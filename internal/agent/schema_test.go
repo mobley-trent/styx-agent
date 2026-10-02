@@ -19,6 +19,8 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 		EditFileTool(dir),
 		GlobTool(dir),
 		GrepTool(dir),
+		BashTool(nil),
+		CodeExecTool(nil),
 		ProposePlanTool(),
 	}
 	for _, tool := range tools {

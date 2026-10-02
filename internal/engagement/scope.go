@@ -114,6 +114,41 @@ func (s *Scope) contains(ip netip.Addr) bool {
 	return false
 }
 
+// HostPins is one hostname authorization with the addresses it was pinned to
+// at load. It is the name-to-address mapping the harness's authoritative
+// resolver answers from (§5.2): a query for the name returns exactly these
+// addresses, and a name absent from this set does not resolve at all.
+type HostPins struct {
+	// Name is the normalized hostname; for a wildcard entry it is the base
+	// the pattern covers (excluding the leading `*.`).
+	Name string
+	// Wildcard is true when the entry was declared as `*.name`: any name
+	// strictly below it resolves to Addrs.
+	Wildcard bool
+	// Addrs are the addresses the name resolved to once, at load.
+	Addrs []netip.Addr
+}
+
+// HostPins returns the pool's hostname and wildcard entries with their
+// load-time pins, in declaration order. IP and CIDR entries carry no name and
+// are not included.
+func (s *Scope) HostPins() []HostPins {
+	var out []HostPins
+	for _, e := range s.entries {
+		switch e.kind {
+		case entryHost:
+			out = append(out, HostPins{Name: e.name, Addrs: append([]netip.Addr(nil), e.pins...)})
+		case entryWildcard:
+			out = append(out, HostPins{
+				Name:     strings.TrimPrefix(e.name, "*."),
+				Wildcard: true,
+				Addrs:    append([]netip.Addr(nil), e.pins...),
+			})
+		}
+	}
+	return out
+}
+
 // Pins returns every concrete IP the pool authorizes — literals plus the
 // load-time expansions of hostnames and wildcards — deduplicated and sorted.
 // The container egress layer programs from this set (§5.2).

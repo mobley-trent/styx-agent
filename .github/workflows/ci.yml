@@ -32,3 +32,25 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+  egress:
+    name: container egress (root docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install nftables
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nftables
+
+      # The hermetic egress tests need root to program nft/iptables. They skip
+      # gracefully anywhere privileges are absent, so the main gate still runs
+      # them (as a no-op) and this job is what actually exercises enforcement.
+      - name: Egress tests
+        run: sudo env "PATH=$PATH" "GOCACHE=/tmp/gocache" "GOPATH=/tmp/gopath" go test ./internal/containerlayer/ -run TestHermeticEgress -v -count=1 -timeout 10m

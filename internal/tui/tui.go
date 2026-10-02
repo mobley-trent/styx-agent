@@ -510,6 +510,13 @@ func (m *Model) apply(ev sessions.Event) {
 		m.append("… compacted: " + ev.Detail)
 	case sessions.KindEngagement:
 		m.append("⚑ engagement active: " + ev.Engagement)
+	case sessions.KindIsolation:
+		m.commitPartial()
+		text := ev.Detail
+		if text == "" {
+			text = ev.Isolation
+		}
+		m.append(bannerStyle.Render("⚑ " + text))
 	case sessions.KindError:
 		m.commitPartial()
 		m.append(failStyle.Render("! " + ev.Failure))
@@ -603,6 +610,7 @@ var (
 	failStyle       = lipgloss.NewStyle().Bold(true)
 	cardStyle       = lipgloss.NewStyle().Faint(true)
 	cardKeyStyle    = lipgloss.NewStyle().Bold(true)
+	bannerStyle     = lipgloss.NewStyle().Bold(true)
 	diffHeaderStyle = lipgloss.NewStyle().Bold(true)
 	addStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	delStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
