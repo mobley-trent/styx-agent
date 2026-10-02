@@ -45,8 +45,10 @@ func boolArg(args map[string]any, name string) (bool, error) {
 	return b, nil
 }
 
-// intArg reads an optional positive integer argument, clamped to [1,
-// maximum]. Zero maximum means uncapped; absent means def.
+// intArg reads a bounded integer argument, clamped to [1, maximum]. Zero
+// maximum means uncapped. Absent or zero means def — schemas require every
+// property (strict mode), so 0 is the documented "use the default" sentinel.
+// A negative value is rejected.
 func intArg(args map[string]any, name string, def, maximum int) (int, error) {
 	v, ok := args[name]
 	if !ok {
@@ -66,8 +68,11 @@ func intArg(args map[string]any, name string, def, maximum int) (int, error) {
 	default:
 		return 0, fmt.Errorf("argument %q must be an integer", name)
 	}
-	if n <= 0 {
-		return 0, fmt.Errorf("argument %q must be positive", name)
+	if n < 0 {
+		return 0, fmt.Errorf("argument %q must not be negative", name)
+	}
+	if n == 0 {
+		return def, nil
 	}
 	if maximum > 0 && n > maximum {
 		n = maximum

@@ -48,7 +48,7 @@ const editFileSchema = `{
       "description": "Replace every occurrence of old_string instead of requiring it to be unique."
     }
   },
-  "required": ["path", "old_string", "new_string"],
+  "required": ["path", "old_string", "new_string", "replace_all"],
   "additionalProperties": false
 }`
 

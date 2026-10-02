@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // PlanToolName is the built-in tool the model calls to propose a multi-step
@@ -30,12 +31,12 @@ const proposePlanSchema = `{
             "type": "string",
             "description": "The tool the step calls."
           },
-          "params": {
-            "type": "object",
-            "description": "Parameter values the step authorizes; omitted means any call to the tool."
+          "params_json": {
+            "type": "string",
+            "description": "A JSON object of the parameter values the step authorizes, e.g. {\"path\":\"main.go\"}. Use {} to authorize any call to the tool."
           }
         },
-        "required": ["tool"],
+        "required": ["tool", "params_json"],
         "additionalProperties": false
       }
     }
@@ -82,10 +83,9 @@ func parsePlan(params map[string]any) ([]PlanAction, error) {
 			return nil, fmt.Errorf("step %d: tool is required", i+1)
 		}
 		var p map[string]any
-		if v, present := obj["params"]; present && v != nil {
-			p, ok = v.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("step %d: params must be an object", i+1)
+		if raw, present := obj["params_json"].(string); present && strings.TrimSpace(raw) != "" {
+			if err := json.Unmarshal([]byte(raw), &p); err != nil {
+				return nil, fmt.Errorf("step %d: params_json is not a JSON object: %w", i+1, err)
 			}
 		}
 		out = append(out, PlanAction{Tool: tool, Params: p})

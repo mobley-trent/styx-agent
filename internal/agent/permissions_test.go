@@ -86,7 +86,21 @@ func callWrite(path, content string) model.ToolCall {
 
 func callPlan(t *testing.T, summary string, steps ...sessions.PlanStep) model.ToolCall {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"summary": summary, "steps": steps})
+	// The strict schema carries params as a JSON string, required on every
+	// step, so always serialize one.
+	rawSteps := make([]map[string]any, 0, len(steps))
+	for _, s := range steps {
+		paramsJSON := "{}"
+		if len(s.Params) > 0 {
+			encoded, err := json.Marshal(s.Params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paramsJSON = string(encoded)
+		}
+		rawSteps = append(rawSteps, map[string]any{"tool": s.Tool, "params_json": paramsJSON})
+	}
+	raw, err := json.Marshal(map[string]any{"summary": summary, "steps": rawSteps})
 	if err != nil {
 		t.Fatal(err)
 	}

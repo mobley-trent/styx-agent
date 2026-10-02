@@ -35,10 +35,10 @@ const globSchema = `{
     },
     "limit": {
       "type": "integer",
-      "description": "Maximum number of paths to return (default 200)."
+      "description": "Maximum number of paths to return. Use 0 for the default (200)."
     }
   },
-  "required": ["pattern"],
+  "required": ["pattern", "limit"],
   "additionalProperties": false
 }`
 
@@ -51,18 +51,18 @@ const grepSchema = `{
     },
     "path": {
       "type": "string",
-      "description": "File or directory to search, relative to the workspace root (default the whole workspace)."
+      "description": "File or directory to search, relative to the workspace root. Use \".\" for the whole workspace."
     },
     "glob": {
       "type": "string",
-      "description": "Only search files whose workspace-relative path matches this glob, e.g. \"*.go\"."
+      "description": "Only search files whose workspace-relative path matches this glob, e.g. \"*.go\". Use \"\" to search every file."
     },
     "limit": {
       "type": "integer",
-      "description": "Maximum number of matching lines to return (default 100)."
+      "description": "Maximum number of matching lines to return. Use 0 for the default (100)."
     }
   },
-  "required": ["pattern"],
+  "required": ["pattern", "path", "glob", "limit"],
   "additionalProperties": false
 }`
 
