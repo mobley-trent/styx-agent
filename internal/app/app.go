@@ -13,6 +13,8 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/engagement"
 	"github.com/mobley-trent/styx-agent/internal/memory"
 	"github.com/mobley-trent/styx-agent/internal/model"
+	"github.com/mobley-trent/styx-agent/internal/netfetch"
 	"github.com/mobley-trent/styx-agent/internal/policy"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
 	"github.com/mobley-trent/styx-agent/internal/tui"
@@ -61,6 +64,12 @@ type Options struct {
 	// Executor overrides exec dispatch entirely (tests): when set, no
 	// container runtime is constructed.
 	Executor agent.Executor
+	// Fetcher overrides the harness-side web_fetch transport (tests). Nil
+	// means the scope-checked netfetch fetcher.
+	Fetcher agent.Fetcher
+	// LogFetcher overrides the ssh_logs transport (tests). Nil means the
+	// scope-checked netfetch fetcher.
+	LogFetcher agent.LogFetcher
 	// SkipModelCheck disables the startup GET /models validation (§3.1).
 	SkipModelCheck bool
 	// Now is the harness clock; nil means time.Now.
@@ -96,10 +105,21 @@ type Harness struct {
 	now       func() time.Time
 	warned    bool
 
-	mu       sync.Mutex
-	session  *sessions.Session
-	messages []model.Message
-	ui       func(sessions.Event)
+	// Wired once at Build and reused across mode switches.
+	client         model.ModelClient
+	memory         string
+	execOverride   agent.Executor
+	runtimeFactory func() (containerlayer.Runtime, error)
+	firewall       containerlayer.Firewall
+	fetcher        agent.Fetcher
+	logFetcher     agent.LogFetcher
+
+	mu              sync.Mutex
+	session         *sessions.Session
+	messages        []model.Message
+	engagementStart time.Time
+	notesWritten    bool
+	ui              func(sessions.Event)
 	// ask is the live operator-interaction sink (the TUI's inline cards). Nil
 	// means no interactive operator is attached, and guarded actions take
 	// their safe default: deny, reject, or no plan.
@@ -156,86 +176,18 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		return nil, err
 	}
 
-	// Engagement gate: strict, refuse-to-start validation (§7.2).
-	mode := policy.ModeSafe
+	// Engagement gate: strict, refuse-to-start validation (§7.2). The launch
+	// door and the in-session /engagement door run exactly this gate.
 	var eng *engagement.Engagement
 	if path := strings.TrimSpace(opts.Engagement); path != "" {
-		eng, err = engagement.Load(ctx, path, engagement.WithClock(now))
+		eng, err = loadEngagement(ctx, path, now)
 		if err != nil {
 			return nil, fmt.Errorf("styx: refusing to start: %w", err)
 		}
-		mode = policy.ModeEngagement
 	}
 
 	// Project memory (§10.2): absent is fine, malformed is not our call.
 	mem, err := memory.Load(workDir)
-	if err != nil {
-		return nil, err
-	}
-
-	engCtx := engagementContext(eng)
-	prompt, err := agent.BuildSystemPrompt(agent.PromptInput{
-		Mode:       mode,
-		Engagement: engCtx,
-		Memory:     mem,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// The policy engine: one choke point, scope and ROE from the gate (§6).
-	engineOpts := []policy.Option{
-		policy.WithProjectRules(cfg.Rules),
-		policy.WithClock(now),
-	}
-	if eng != nil {
-		engineOpts = append(engineOpts,
-			policy.WithScope(eng.Scope()),
-			policy.WithROE(eng.ROE()),
-		)
-	}
-	engine, err := policy.NewEngine(mode, engineOpts...)
-	if err != nil {
-		return nil, err
-	}
-
-	// Exec tools run in a per-session container (§5.2). The manager starts the
-	// container lazily, on the first exec, so a session that never runs a
-	// command never touches Docker. Tests may replace the whole dispatch.
-	var h *Harness
-	exec := opts.Executor
-	var container *containerlayer.Manager
-	if exec == nil {
-		factory := opts.ContainerRuntime
-		if factory == nil {
-			factory = func() (containerlayer.Runtime, error) { return containerlayer.NewDocker() }
-		}
-		container = containerlayer.NewManager(containerlayer.ManagerOptions{
-			RuntimeFactory: factory,
-			Image:          cfg.Container.Image,
-			Workspace:      workDir,
-			Allowed:        allowedEgress(eng, cfg),
-			Pins:           namePins(eng),
-			Firewall:       opts.ContainerFirewall,
-			OnStart: func(info containerlayer.SessionInfo) {
-				if h != nil {
-					h.emitIsolation(info)
-				}
-			},
-		})
-		exec = container
-	}
-
-	tools, err := agent.NewRegistry(
-		agent.ReadFileTool(workDir),
-		agent.WriteFileTool(workDir),
-		agent.EditFileTool(workDir),
-		agent.GlobTool(workDir),
-		agent.GrepTool(workDir),
-		agent.BashTool(exec),
-		agent.CodeExecTool(exec),
-		agent.ProposePlanTool(),
-	)
 	if err != nil {
 		return nil, err
 	}
@@ -262,37 +214,349 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		return nil, err
 	}
 
-	h = &Harness{
-		Config:     cfg,
-		Mode:       mode,
-		Engagement: eng,
-		Engine:     engine,
-		Tools:      tools,
-		Prompt:     prompt,
-		WorkDir:    workDir,
-		Version:    opts.Version,
-		sessions:   store,
-		audit:      auditWriter,
-		container:  container,
-		out:        out,
-		now:        now,
-		session:    session,
+	factory := opts.ContainerRuntime
+	if factory == nil {
+		factory = func() (containerlayer.Runtime, error) { return containerlayer.NewDocker() }
 	}
-	h.Loop = agent.NewLoop(client, tools, engine, auditWriter, prompt,
-		agent.WithModel(cfg.Model),
-		agent.WithClock(now),
-		agent.WithEmitter(h.emit),
-		agent.WithPrompter(operator{h}),
-		agent.WithDiffReviewer(operator{h}),
-		agent.WithPlanApprover(operator{h}),
-		agent.WithIsolationProvider(func() audit.Isolation { return h.isolation() }),
-	)
+
+	h := &Harness{
+		Config:         cfg,
+		Engagement:     eng,
+		WorkDir:        workDir,
+		Version:        opts.Version,
+		sessions:       store,
+		audit:          auditWriter,
+		out:            out,
+		now:            now,
+		session:        session,
+		client:         client,
+		memory:         mem,
+		execOverride:   opts.Executor,
+		runtimeFactory: factory,
+		firewall:       opts.ContainerFirewall,
+		fetcher:        opts.Fetcher,
+		logFetcher:     opts.LogFetcher,
+	}
+	if eng != nil {
+		h.engagementStart = now()
+	}
+	if err := h.configure(); err != nil {
+		_ = h.Close()
+		return nil, err
+	}
 
 	// An engagement gate activation is a session event (§4.3, §7.2).
 	if eng != nil {
 		h.emit(sessions.Event{Kind: sessions.KindEngagement, Engagement: eng.Name()})
 	}
 	return h, nil
+}
+
+// loadEngagement is the engagement gate's single implementation (§7.2). Both
+// doors — the launch flag and the in-session /engagement command — call it, so
+// they share one validation and one refusal.
+func loadEngagement(ctx context.Context, path string, now func() time.Time) (*engagement.Engagement, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("engagement: a file path is required")
+	}
+	return engagement.Load(ctx, path, engagement.WithClock(now))
+}
+
+// configure (re)builds everything that depends on the current mode: the
+// system prompt, the policy engine, the container egress rules, the network
+// tooling, the tool registry, and the loop. Build calls it once; an engagement
+// activation or a /mode teardown calls it again, so the scope summary and the
+// egress allowlist are torn down and rebuilt with the mode (§7.3).
+func (h *Harness) configure() error {
+	h.mu.Lock()
+	eng := h.Engagement
+	h.mu.Unlock()
+
+	mode := policy.ModeSafe
+	if eng != nil {
+		mode = policy.ModeEngagement
+	}
+
+	prompt, err := agent.BuildSystemPrompt(agent.PromptInput{
+		Mode:       mode,
+		Engagement: engagementContext(eng),
+		Memory:     h.memory,
+	})
+	if err != nil {
+		return err
+	}
+
+	// The policy engine: one choke point, scope and ROE from the gate (§6).
+	engineOpts := []policy.Option{
+		policy.WithProjectRules(h.Config.Rules),
+		policy.WithClock(h.now),
+	}
+	if eng != nil {
+		engineOpts = append(engineOpts,
+			policy.WithScope(eng.Scope()),
+			policy.WithROE(eng.ROE()),
+		)
+	}
+	engine, err := policy.NewEngine(mode, engineOpts...)
+	if err != nil {
+		return err
+	}
+
+	// Exec tools run in a per-session container (§5.2). The manager starts the
+	// container lazily, on the first exec, so a session that never runs a
+	// command never touches Docker. A mode switch replaces the manager and
+	// tears the old session's egress rules down (§7.3).
+	var container *containerlayer.Manager
+	var exec agent.Executor
+	if h.execOverride != nil {
+		exec = h.execOverride
+	} else {
+		container = containerlayer.NewManager(containerlayer.ManagerOptions{
+			RuntimeFactory: h.runtimeFactory,
+			Image:          h.Config.Container.Image,
+			Workspace:      h.WorkDir,
+			Allowed:        allowedEgress(eng, h.Config),
+			Pins:           namePins(eng),
+			Firewall:       h.firewall,
+			OnStart: func(info containerlayer.SessionInfo) {
+				h.emitIsolation(info)
+			},
+		})
+		exec = container
+	}
+
+	fetcher, logFetcher := h.networkTooling(eng)
+
+	tools, err := agent.NewRegistry(
+		agent.ReadFileTool(h.WorkDir),
+		agent.WriteFileTool(h.WorkDir),
+		agent.EditFileTool(h.WorkDir),
+		agent.GlobTool(h.WorkDir),
+		agent.GrepTool(h.WorkDir),
+		agent.BashTool(exec),
+		agent.CodeExecTool(exec),
+		agent.WebFetchTool(fetcher),
+		agent.SSHLogsTool(logFetcher),
+		agent.ProposePlanTool(),
+	)
+	if err != nil {
+		if container != nil {
+			_ = container.Close()
+		}
+		return err
+	}
+
+	old := h.container
+
+	h.mu.Lock()
+	h.Mode = mode
+	h.Prompt = prompt
+	h.Engine = engine
+	h.Tools = tools
+	h.container = container
+	h.Loop = agent.NewLoop(h.client, tools, engine, h.audit, prompt, h.loopOptions()...)
+	h.mu.Unlock()
+
+	if old != nil {
+		_ = old.Close()
+	}
+	return nil
+}
+
+// loopOptions are the loop options shared by every mode's loop.
+func (h *Harness) loopOptions() []agent.LoopOption {
+	return []agent.LoopOption{
+		agent.WithModel(h.Config.Model),
+		agent.WithClock(h.now),
+		agent.WithEmitter(h.emit),
+		agent.WithPrompter(operator{h}),
+		agent.WithDiffReviewer(operator{h}),
+		agent.WithPlanApprover(operator{h}),
+		agent.WithIsolationProvider(func() audit.Isolation { return h.isolation() }),
+	}
+}
+
+// networkTooling returns the scope-checked fetchers for the current mode. The
+// production fetcher re-resolves every destination and refuses anything outside
+// the engagement's pinned scope; safe mode passes no scope, where the policy
+// prompt is the guard.
+func (h *Harness) networkTooling(eng *engagement.Engagement) (agent.Fetcher, agent.LogFetcher) {
+	if h.fetcher != nil || h.logFetcher != nil {
+		return h.fetcher, h.logFetcher
+	}
+	var scope netfetch.Scope
+	if eng != nil {
+		scope = eng.Scope()
+	}
+	f := netfetch.New(netfetch.Options{Scope: scope})
+	return f, f
+}
+
+// ActivateEngagement runs the in-session door of the engagement gate (§7.2):
+// the same validation and refusal as the launch flag. On success it injects the
+// scope summary into the system prompt and rebuilds the engine, registry, and
+// egress allowlist for engagement mode. It refuses when an engagement is
+// already active — return to safe mode with /mode first.
+func (h *Harness) ActivateEngagement(ctx context.Context, path string) error {
+	h.mu.Lock()
+	active := h.Engagement != nil
+	h.mu.Unlock()
+	if active {
+		return errors.New("an engagement is already active; run /mode safe before activating another")
+	}
+
+	eng, err := loadEngagement(ctx, path, h.now)
+	if err != nil {
+		return err
+	}
+
+	h.mu.Lock()
+	h.Engagement = eng
+	h.mu.Unlock()
+	if err := h.configure(); err != nil {
+		// Roll back to safe mode if the rebuild fails, so the harness never
+		// sits in engagement mode with stale enforcement.
+		h.mu.Lock()
+		h.Engagement = nil
+		h.mu.Unlock()
+		_ = h.configure()
+		return fmt.Errorf("styx: engagement activation failed: %w", err)
+	}
+
+	h.mu.Lock()
+	h.engagementStart = h.now()
+	h.mu.Unlock()
+	h.emit(sessions.Event{Kind: sessions.KindEngagement, Engagement: eng.Name()})
+	return nil
+}
+
+// Deactivate returns the harness to safe mode (§7.3): it appends the
+// engagement notes to STYX.md, tears down the scope summary and the container
+// egress allowlist, and rebuilds the safe-mode engine. It is a no-op when no
+// engagement is active.
+func (h *Harness) Deactivate() error {
+	h.mu.Lock()
+	eng := h.Engagement
+	h.Engagement = nil
+	h.mu.Unlock()
+	if eng == nil {
+		return nil
+	}
+
+	var errs []error
+	if err := h.writeEngagementNotes(eng); err != nil {
+		errs = append(errs, err)
+	}
+	if err := h.configure(); err != nil {
+		errs = append(errs, err)
+	}
+	h.emit(sessions.Event{Kind: sessions.KindEngagement, Detail: "safe mode: engagement " + eng.Name() + " torn down"})
+	return errors.Join(errs...)
+}
+
+// writeEngagementNotes appends the engagement's structured notes to STYX.md
+// once, at engagement end (§7.5, §10.2). The block is assembled from the
+// engagement file and the session's own records; the model never authors it.
+func (h *Harness) writeEngagementNotes(eng *engagement.Engagement) error {
+	h.mu.Lock()
+	if h.notesWritten {
+		h.mu.Unlock()
+		return nil
+	}
+	h.notesWritten = true
+	started := h.engagementStart
+	sessionID := ""
+	if h.session != nil {
+		sessionID = h.session.ID()
+	}
+	h.mu.Unlock()
+
+	tools, artifacts := h.sessionSummary(sessionID)
+	notes := memory.EngagementNotes{
+		Name:                 eng.Name(),
+		Operator:             eng.Operator(),
+		Targets:              eng.Targets(),
+		ExploitAllowed:       eng.ROE().ExploitAllowed,
+		DestructiveForbidden: eng.ROE().DestructiveForbidden,
+		Ended:                h.now().UTC().Format(time.RFC3339),
+		Tools:                tools,
+		Artifacts:            artifacts,
+	}
+	if expires, ok := eng.Expires(); ok {
+		notes.Expires = expires.UTC().Format(time.RFC3339)
+	}
+	if !started.IsZero() {
+		notes.Started = started.UTC().Format(time.RFC3339)
+	}
+
+	_, err := memory.AppendEngagementNotes(h.WorkDir, notes)
+	if err != nil {
+		// A notes write failed: let a later attempt retry rather than losing
+		// the record of the engagement.
+		h.mu.Lock()
+		h.notesWritten = false
+		h.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// sessionSummary folds the session's events into the notes' tool counts and
+// artifact list.
+func (h *Harness) sessionSummary(sessionID string) (map[string]int, []string) {
+	tools := map[string]int{}
+	artifacts := map[string]bool{}
+	if strings.TrimSpace(sessionID) == "" {
+		return tools, nil
+	}
+	events, err := h.sessions.Replay(h.WorkDir, sessionID)
+	if err != nil {
+		return tools, nil
+	}
+	for _, ev := range events {
+		switch ev.Kind {
+		case sessions.KindToolCall:
+			if ev.Tool != "" {
+				tools[ev.Tool]++
+			}
+		case sessions.KindDiff:
+			if ev.Path != "" {
+				artifacts[ev.Path] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(artifacts))
+	for path := range artifacts {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return tools, out
+}
+
+// ListEngagementFiles returns the engagement files discovered under the
+// project directory for the /engagement picker, sorted.
+func (h *Harness) ListEngagementFiles() []string {
+	patterns := []string{
+		"*.engagement.yaml", "*.engagement.yml",
+		"engagement.yaml", "engagement.yml",
+		filepath.Join(".styx", "*.yaml"), filepath.Join(".styx", "*.yml"),
+	}
+	seen := map[string]bool{}
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(h.WorkDir, pattern))
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			seen[m] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for path := range seen {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // modelClient builds the model client, or validates an injected one.
@@ -365,15 +629,26 @@ func namePins(eng *engagement.Engagement) []containerlayer.NamePin {
 // audit trail. An unstarted or unavailable container reports "" so nothing
 // claims enforced egress it does not have.
 func (h *Harness) isolation() audit.Isolation {
-	if h.container == nil {
+	h.mu.Lock()
+	container := h.container
+	h.mu.Unlock()
+	if container == nil {
 		return ""
 	}
-	switch h.container.Isolation() {
+	switch container.Isolation() {
 	case containerlayer.IsolationContainer, containerlayer.IsolationDegraded:
-		return audit.Isolation(h.container.Isolation())
+		return audit.Isolation(container.Isolation())
 	default:
 		return ""
 	}
+}
+
+// modeAndEngagement reads the current mode and engagement together, under the
+// lock a concurrent mode switch also takes.
+func (h *Harness) modeAndEngagement() (policy.Mode, *engagement.Engagement) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.Mode, h.Engagement
 }
 
 // emitIsolation surfaces the session's isolation level once, three ways
@@ -399,6 +674,13 @@ func engagementContext(eng *engagement.Engagement) *agent.EngagementContext {
 		ExploitAllowed:       eng.ROE().ExploitAllowed,
 		DestructiveForbidden: eng.ROE().DestructiveForbidden,
 	}
+	if w := eng.ROE().TimeWindow; w != nil {
+		tz := w.TZ
+		if tz == "" {
+			tz = "UTC"
+		}
+		ctx.TimeWindow = fmt.Sprintf("%s–%s %s", w.Start, w.End, tz)
+	}
 	if expires, ok := eng.Expires(); ok {
 		ctx.Expires = expires.UTC().Format(time.RFC3339)
 	}
@@ -410,9 +692,11 @@ func engagementContext(eng *engagement.Engagement) *agent.EngagementContext {
 func (h *Harness) Submit(ctx context.Context, text string) error {
 	h.mu.Lock()
 	history := append([]model.Message(nil), h.messages...)
+	// Capture the loop so a concurrent /mode switch cannot swap it mid-turn.
+	loop := h.Loop
 	h.mu.Unlock()
 
-	result, err := h.Loop.Run(ctx, history, text)
+	result, err := loop.Run(ctx, history, text)
 
 	h.mu.Lock()
 	h.messages = append(h.messages, result.Messages...)
@@ -437,19 +721,32 @@ func (h *Harness) SessionID() string {
 	return h.session.ID()
 }
 
-// Close releases the session log and the audit trail.
+// Close releases the session log and the audit trail. An engagement still
+// active at close ends here: its notes are appended to STYX.md before the
+// session log is released (§7.5, §10.2).
 func (h *Harness) Close() error {
 	h.mu.Lock()
-	session := h.session
-	h.session = nil
+	eng := h.Engagement
+	h.Engagement = nil
 	h.mu.Unlock()
 
 	var errs []error
+	if eng != nil {
+		errs = append(errs, h.writeEngagementNotes(eng))
+	}
+
+	h.mu.Lock()
+	session := h.session
+	h.session = nil
+	container := h.container
+	h.container = nil
+	h.mu.Unlock()
+
 	if session != nil {
 		errs = append(errs, session.Close())
 	}
-	if h.container != nil {
-		errs = append(errs, h.container.Close())
+	if container != nil {
+		errs = append(errs, container.Close())
 	}
 	if h.audit != nil {
 		errs = append(errs, h.audit.Close())
@@ -605,8 +902,9 @@ func (h *Harness) emit(ev sessions.Event) {
 
 // Status is the status-bar state for the TUI (§9.1).
 func (h *Harness) Status(busy bool) tui.Status {
+	mode, _ := h.modeAndEngagement()
 	return tui.Status{
-		Mode:      string(h.Mode),
+		Mode:      string(mode),
 		Model:     h.Config.Model,
 		Session:   shortID(h.SessionID()),
 		Isolation: string(h.isolation()),
@@ -674,15 +972,16 @@ func (h *Harness) Resume(id string) (sessions.Summary, error) {
 
 // statusText is the /status rendering.
 func (h *Harness) statusText() string {
+	mode, eng := h.modeAndEngagement()
 	lines := []string{
-		fmt.Sprintf("mode:     %s", h.Mode),
+		fmt.Sprintf("mode:     %s", mode),
 		fmt.Sprintf("model:    %s", h.Config.Model),
 		fmt.Sprintf("session:  %s", h.SessionID()),
 		fmt.Sprintf("project:  %s", h.WorkDir),
 	}
-	if h.Engagement != nil {
-		lines = append(lines, fmt.Sprintf("engagement: %s", h.Engagement.Name()))
-		lines = append(lines, fmt.Sprintf("targets:  %s", strings.Join(h.Engagement.Targets(), ", ")))
+	if eng != nil {
+		lines = append(lines, fmt.Sprintf("engagement: %s", eng.Name()))
+		lines = append(lines, fmt.Sprintf("targets:  %s", strings.Join(eng.Targets(), ", ")))
 	}
 	if iso := h.isolation(); iso != "" {
 		lines = append(lines, fmt.Sprintf("isolation: %s", iso))

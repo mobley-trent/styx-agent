@@ -509,7 +509,13 @@ func (m *Model) apply(ev sessions.Event) {
 	case sessions.KindCompaction:
 		m.append("… compacted: " + ev.Detail)
 	case sessions.KindEngagement:
-		m.append("⚑ engagement active: " + ev.Engagement)
+		m.commitPartial()
+		switch {
+		case ev.Engagement != "":
+			m.append("⚑ engagement active: " + ev.Engagement)
+		case ev.Detail != "":
+			m.append("⚑ " + ev.Detail)
+		}
 	case sessions.KindIsolation:
 		m.commitPartial()
 		text := ev.Detail
