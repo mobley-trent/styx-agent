@@ -7,6 +7,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/openai/openai-go v1.12.0
+	golang.org/x/net v0.58.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

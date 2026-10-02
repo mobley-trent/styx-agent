@@ -51,6 +51,12 @@ type SessionOptions struct {
 	// ProxyAddr optionally pins the fallback proxy's listen address; empty
 	// binds the session gateway on an ephemeral port.
 	ProxyAddr string
+	// Pins are the engagement's authorized names and their load-time
+	// addresses, served by the harness's authoritative resolver.
+	Pins []NamePin
+	// DNSAddr optionally pins the resolver's listen address; empty binds the
+	// session gateway on port 53.
+	DNSAddr string
 }
 
 // Session is one running per-session container plus its egress enforcement: a
@@ -67,6 +73,8 @@ type Session struct {
 	spec        EgressSpec
 	firewall    Firewall
 	proxy       *EgressProxy
+	dns         *DNSServer
+	dnsIP       string
 	isolation   Isolation
 	workspace   string
 	keepAlive   string
@@ -142,6 +150,7 @@ func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	}
 	s.firewall = fw
 	s.isolation = IsolationContainer
+	s.startDNS(opts, gateway)
 
 	if err := s.startContainer(ctx, opts, image, workspace, nil); err != nil {
 		return nil, s.fail(ctx, err)
@@ -174,6 +183,7 @@ func (s *Session) startDegraded(ctx context.Context, opts SessionOptions, image,
 	}
 	s.proxy = proxy
 	s.isolation = IsolationDegraded
+	s.startDNS(opts, gateway)
 
 	// Inside the internal network the gateway is the container's route to the
 	// proxy; the proxy URL is what the exec tools' clients dial.
@@ -204,6 +214,7 @@ func (s *Session) startContainer(ctx context.Context, opts SessionOptions, image
 		Cmd:        []string{"sh", "-c", s.keepAlive},
 		Env:        proxyEnv,
 		Binds:      binds,
+		DNS:        s.dnsServers(),
 		WorkingDir: workspace,
 	}
 	id, err := s.rt.CreateContainer(ctx, spec)
@@ -243,6 +254,41 @@ func (s *Session) ProxyURL() string {
 		return ""
 	}
 	return s.proxy.URL()
+}
+
+// DNSAddr is the harness resolver's address, empty when it is not running.
+func (s *Session) DNSAddr() string {
+	if s.dns == nil {
+		return ""
+	}
+	return s.dns.Addr()
+}
+
+// startDNS brings up the harness's authoritative resolver (§5.2). It is
+// best-effort: the resolver is a resolution guarantee, not the egress
+// boundary, so a host that cannot bind it (an unprivileged port) still runs,
+// just without name resolution inside the container.
+func (s *Session) startDNS(opts SessionOptions, gateway string) {
+	server, err := NewDNSServer(DNSServerOptions{
+		Addr: dnsListenAddr(opts.DNSAddr, gateway),
+		Pins: opts.Pins,
+	})
+	if err != nil {
+		return
+	}
+	if err := server.Start(); err != nil {
+		return
+	}
+	s.dns = server
+	s.dnsIP = gateway
+}
+
+// dnsServers is the container's resolver list.
+func (s *Session) dnsServers() []string {
+	if s.dns == nil || s.dnsIP == "" {
+		return nil
+	}
+	return []string{s.dnsIP}
 }
 
 // Shell runs a shell command in the session container (the `bash` tool).
@@ -317,7 +363,7 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
-	containerID, networkID, firewall, proxy, spec := s.containerID, s.networkID, s.firewall, s.proxy, s.spec
+	containerID, networkID, firewall, proxy, dns, spec := s.containerID, s.networkID, s.firewall, s.proxy, s.dns, s.spec
 	s.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -336,6 +382,11 @@ func (s *Session) Close() error {
 	}
 	if proxy != nil {
 		if err := proxy.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if dns != nil {
+		if err := dns.Stop(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -372,6 +423,15 @@ func proxyListenAddr(override, gateway string) string {
 		return override
 	}
 	return netip.MustParseAddr(gateway).String() + ":0"
+}
+
+// dnsListenAddr picks the harness resolver's listen address: the operator's
+// override, else the session gateway on port 53.
+func dnsListenAddr(override, gateway string) string {
+	if strings.TrimSpace(override) != "" {
+		return override
+	}
+	return netip.MustParseAddr(gateway).String() + ":53"
 }
 
 // langCommand maps a `code_exec` language onto the in-container command that

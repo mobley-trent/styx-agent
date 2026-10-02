@@ -51,9 +51,11 @@ type ManagerOptions struct {
 	Workspace          string
 	ContainerWorkspace string
 	Allowed            []netip.Prefix
+	Pins               []NamePin
 	Firewall           Firewall
 	FirewallRunner     Runner
 	ProxyAddr          string
+	DNSAddr            string
 	// OnStart is called once after the session starts, so the app can surface
 	// the isolation level (banner, status, audit).
 	OnStart func(SessionInfo)
@@ -127,9 +129,11 @@ func (m *Manager) start(ctx context.Context, opts ManagerOptions) (*Session, Run
 		Workspace:          opts.Workspace,
 		ContainerWorkspace: opts.ContainerWorkspace,
 		Allowed:            opts.Allowed,
+		Pins:               opts.Pins,
 		Firewall:           opts.Firewall,
 		FirewallRunner:     opts.FirewallRunner,
 		ProxyAddr:          opts.ProxyAddr,
+		DNSAddr:            opts.DNSAddr,
 	})
 	if err != nil {
 		return nil, rt, err

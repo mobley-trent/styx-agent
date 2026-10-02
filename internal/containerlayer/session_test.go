@@ -196,6 +196,33 @@ func TestFormatExecResultSurfacesExitCode(t *testing.T) {
 	}
 }
 
+func TestStartSessionServesPinnedNames(t *testing.T) {
+	rt := newFakeRuntime()
+	opts := enforcedOptions(rt, &fakeFirewall{})
+	opts.DNSAddr = "127.0.0.1:0"
+	opts.Pins = []NamePin{{Name: "app.acme.example", Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.44")}}}
+
+	s, err := StartSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("StartSession() = %v", err)
+	}
+	if s.DNSAddr() == "" {
+		t.Fatal("harness resolver did not start")
+	}
+	specs := rt.containerSpecs()
+	if len(specs) != 1 || len(specs[0].DNS) != 1 {
+		t.Fatalf("container specs = %+v, want the harness resolver configured as DNS", specs)
+	}
+
+	// Teardown stops the resolver and is idempotent.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("second Close() = %v, want idempotence", err)
+	}
+}
+
 func hasEnvPrefix(env []string, prefix string) bool {
 	for _, e := range env {
 		if strings.HasPrefix(e, prefix) {

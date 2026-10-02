@@ -64,6 +64,9 @@ type ContainerSpec struct {
 	// Binds are host mounts. The workspace is the only intended mount; a
 	// Docker socket bind is rejected before creation.
 	Binds []string
+	// DNS is the container's resolver, when the harness authoritative
+	// resolver is running (§5.2).
+	DNS []string
 	// WorkingDir is the in-container working directory.
 	WorkingDir string
 }

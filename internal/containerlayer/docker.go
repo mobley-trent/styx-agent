@@ -110,6 +110,7 @@ func (d *Docker) CreateContainer(ctx context.Context, spec ContainerSpec) (strin
 		&container.HostConfig{
 			NetworkMode: container.NetworkMode(spec.NetworkID),
 			Binds:       spec.Binds,
+			DNS:         spec.DNS,
 		},
 		nil, nil, spec.Name,
 	)

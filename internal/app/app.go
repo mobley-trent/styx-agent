@@ -215,6 +215,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 			Image:          cfg.Container.Image,
 			Workspace:      workDir,
 			Allowed:        allowedEgress(eng, cfg),
+			Pins:           namePins(eng),
 			Firewall:       opts.ContainerFirewall,
 			OnStart: func(info containerlayer.SessionInfo) {
 				if h != nil {
@@ -341,6 +342,21 @@ func allowedEgress(eng *engagement.Engagement, cfg *config.Config) []netip.Prefi
 		if ip, err := netip.ParseAddr(s); err == nil {
 			out = append(out, netip.PrefixFrom(ip, ip.BitLen()))
 		}
+	}
+	return out
+}
+
+// namePins maps the engagement's authorized names onto the container layer's
+// resolver pins (§5.2): the harness answers exactly these names and nothing
+// else.
+func namePins(eng *engagement.Engagement) []containerlayer.NamePin {
+	if eng == nil {
+		return nil
+	}
+	hosts := eng.Scope().HostPins()
+	out := make([]containerlayer.NamePin, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, containerlayer.NamePin{Name: h.Name, Wildcard: h.Wildcard, Addrs: h.Addrs})
 	}
 	return out
 }
