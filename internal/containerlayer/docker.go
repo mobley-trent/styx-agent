@@ -3,9 +3,11 @@ package containerlayer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -87,7 +89,7 @@ func (d *Docker) CreateNetwork(ctx context.Context, req NetworkRequest) (string,
 func (d *Docker) RemoveNetwork(ctx context.Context, id string) error {
 	if err := d.cli.NetworkRemove(ctx, id); err != nil {
 		// An already-gone network is a clean teardown.
-		if client.IsErrNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("containerlayer: remove network %s: %w", id, err)
@@ -148,7 +150,7 @@ func (d *Docker) Exec(ctx context.Context, id string, req ExecRequest) (ExecResu
 	defer attach.Close()
 
 	var stdout, stderr bytes.Buffer
-	if _, err := stdcopy.StdCopy(&stdout, &stderr, attach.Reader); err != nil && err != io.EOF {
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, attach.Reader); err != nil && !errors.Is(err, io.EOF) {
 		return ExecResult{}, fmt.Errorf("containerlayer: read exec output in %s: %w", id, err)
 	}
 	inspect, err := d.cli.ContainerExecInspect(ctx, created.ID)
@@ -165,7 +167,7 @@ func (d *Docker) Exec(ctx context.Context, id string, req ExecRequest) (ExecResu
 // RemoveContainer implements Runtime.
 func (d *Docker) RemoveContainer(ctx context.Context, id string) error {
 	if err := d.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
-		if client.IsErrNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("containerlayer: remove container %s: %w", id, err)

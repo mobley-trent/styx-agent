@@ -216,10 +216,13 @@ func (s *DNSServer) handleTCP(conn net.Conn) {
 		return
 	}
 	resp := s.answer(query)
-	if resp == nil {
+	if resp == nil || len(resp) > 65535 {
+		// A DNS message cannot exceed the TCP length prefix; oversize answers
+		// are dropped rather than truncated.
 		return
 	}
 	out := make([]byte, 2+len(resp))
+	//nolint:gosec // bounds-checked above: len(resp) <= 65535 fits the prefix.
 	binary.BigEndian.PutUint16(out[:2], uint16(len(resp)))
 	copy(out[2:], resp)
 	_, _ = conn.Write(out)

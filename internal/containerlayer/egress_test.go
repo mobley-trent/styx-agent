@@ -73,11 +73,11 @@ func TestHermeticEgressEnforcement(t *testing.T) {
 	}
 
 	// A helper listener on the same network: this is the "allowed target".
-	serverID, serverIP := startHelperListener(t, ctx, docker, image, session.NetworkID())
+	serverID, serverIP := startHelperListener(ctx, t, docker, image, session.NetworkID())
 	t.Cleanup(func() { _ = docker.RemoveContainer(ctx, serverID) })
 
 	// Allowed: the self-spun listener answers.
-	reach := runInContainer(t, ctx, session,
+	reach := runInContainer(ctx, t, session,
 		`python3 -c "import urllib.request; print(urllib.request.urlopen('http://`+serverIP+`:8000', timeout=10).status)"`)
 	if !strings.Contains(reach, "200") {
 		t.Errorf("pinned listener result = %q, want HTTP 200 from the allowed target", reach)
@@ -85,7 +85,7 @@ func TestHermeticEgressEnforcement(t *testing.T) {
 
 	// Denied: TEST-NET-1 is unroutable and not on the allowlist, so the
 	// firewall drops it.
-	denied := runInContainer(t, ctx, session,
+	denied := runInContainer(ctx, t, session,
 		`python3 -c "import socket; socket.setdefaulttimeout(5); socket.create_connection(('192.0.2.1', 80))"`)
 	if !strings.Contains(denied, "exit code") && !strings.Contains(strings.ToLower(denied), "error") && !strings.Contains(strings.ToLower(denied), "timed out") {
 		t.Errorf("TEST-NET result = %q, want a connection failure (the firewall dropped it)", denied)
@@ -109,7 +109,7 @@ func skipWithoutEgressPrivileges(t *testing.T) {
 
 // runInContainer runs a shell command in the session container and returns its
 // rendered output.
-func runInContainer(t *testing.T, ctx context.Context, session *Session, command string) string {
+func runInContainer(ctx context.Context, t *testing.T, session *Session, command string) string {
 	t.Helper()
 	out, err := session.Shell(ctx, command)
 	if err != nil {
@@ -120,7 +120,7 @@ func runInContainer(t *testing.T, ctx context.Context, session *Session, command
 
 // startHelperListener starts a container on networkID serving HTTP on port
 // 8000, and returns its container ID and in-network IP.
-func startHelperListener(t *testing.T, ctx context.Context, docker *Docker, image, networkID string) (string, string) {
+func startHelperListener(ctx context.Context, t *testing.T, docker *Docker, image, networkID string) (string, string) {
 	t.Helper()
 	id, err := docker.CreateContainer(ctx, ContainerSpec{
 		Image:     image,

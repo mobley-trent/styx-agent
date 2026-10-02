@@ -153,7 +153,7 @@ func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	s.startDNS(opts, gateway)
 
 	if err := s.startContainer(ctx, opts, image, workspace, nil); err != nil {
-		return nil, s.fail(ctx, err)
+		return nil, s.fail(err)
 	}
 	return s, nil
 }
@@ -167,7 +167,7 @@ func (s *Session) startDegraded(ctx context.Context, opts SessionOptions, image,
 		Internal: true, Subnet: subnet, Gateway: gateway,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("containerlayer: degraded isolation unavailable (firewall: %v): %w", cause, err)
+		return nil, fmt.Errorf("containerlayer: degraded isolation unavailable (firewall: %w): %w", cause, err)
 	}
 	s.networkID = networkID
 
@@ -176,10 +176,10 @@ func (s *Session) startDegraded(ctx context.Context, opts SessionOptions, image,
 		Check: prefixChecker(s.spec.Allowed),
 	})
 	if err != nil {
-		return nil, s.fail(ctx, fmt.Errorf("containerlayer: degraded isolation unavailable: %w", err))
+		return nil, s.fail(fmt.Errorf("containerlayer: degraded isolation unavailable: %w", err))
 	}
 	if err := proxy.Start(); err != nil {
-		return nil, s.fail(ctx, err)
+		return nil, s.fail(err)
 	}
 	s.proxy = proxy
 	s.isolation = IsolationDegraded
@@ -194,7 +194,7 @@ func (s *Session) startDegraded(ctx context.Context, opts SessionOptions, image,
 		"https_proxy=" + proxy.URL(),
 	}
 	if err := s.startContainer(ctx, opts, image, workspace, env); err != nil {
-		return nil, s.fail(ctx, err)
+		return nil, s.fail(err)
 	}
 	return s, nil
 }
@@ -230,7 +230,7 @@ func (s *Session) startContainer(ctx context.Context, opts SessionOptions, image
 
 // fail tears the session down and returns err, so a half-built session never
 // leaks a network, proxy, or container.
-func (s *Session) fail(ctx context.Context, err error) error {
+func (s *Session) fail(err error) error {
 	_ = s.Close()
 	return err
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"net/netip"
 	"os/exec"
 	"strings"
 )
@@ -193,25 +192,4 @@ func sessionSubnet(id string) (subnet, gateway string) {
 	// 172.30.0.0/16 carved into /24s, avoiding Docker's usual 172.17–172.29.
 	third := int(sum[0]%200) + 30 // 30..229
 	return fmt.Sprintf("172.%d.0.0/24", third), fmt.Sprintf("172.%d.0.1", third)
-}
-
-// extraAllowed parses operator-configured egress destinations. A malformed
-// entry is skipped: the allowlist is a widening, and an unparseable widening
-// must never be silently applied as something else.
-func extraAllowed(entries []string) []netip.Prefix {
-	var out []netip.Prefix
-	for _, e := range entries {
-		e = strings.TrimSpace(e)
-		if e == "" {
-			continue
-		}
-		if p, err := netip.ParsePrefix(e); err == nil {
-			out = append(out, p)
-			continue
-		}
-		if ip, err := netip.ParseAddr(e); err == nil {
-			out = append(out, netip.PrefixFrom(ip, ip.BitLen()))
-		}
-	}
-	return out
 }
