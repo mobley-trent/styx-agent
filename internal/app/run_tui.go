@@ -18,6 +18,8 @@ import (
 const helpText = `commands:
   /help          show this help
   /status        show mode, model, session, and engagement state
+  /engagement    list engagement files, or activate one with /engagement <file>
+  /mode [safe]   show the operating mode, or return to safe mode (tears the engagement down)
   /resume [id]   list past sessions, or restore one by id
   /quit          leave styx
 
@@ -81,10 +83,68 @@ func (h *Harness) command(name, arg string) (string, error) {
 		return helpText, nil
 	case "status":
 		return h.statusText(), nil
+	case "engagement":
+		return h.engagementCommand(arg)
+	case "mode":
+		return h.modeCommand(arg)
 	case "resume":
 		return h.resumeCommand(arg)
 	default:
 		return "", fmt.Errorf("unknown command %q; try /help", name)
+	}
+}
+
+// engagementCommand lists discovered engagement files, or activates one
+// through the same gate the --engagement launch flag uses (§7.2).
+func (h *Harness) engagementCommand(arg string) (string, error) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		files := h.ListEngagementFiles()
+		if len(files) == 0 {
+			return "no engagement files found (looked for *.engagement.yaml, engagement.yaml, and .styx/*.yaml)", nil
+		}
+		var b strings.Builder
+		b.WriteString("engagement files:")
+		for _, file := range files {
+			b.WriteString("\n  " + file)
+		}
+		b.WriteString("\n\nactivate one with /engagement <file> (strict validation; a refusal leaves safe mode active)")
+		return b.String(), nil
+	}
+	if _, eng := h.modeAndEngagement(); eng != nil {
+		return "", fmt.Errorf("an engagement is already active (%s); run /mode safe first", eng.Name())
+	}
+	if err := h.ActivateEngagement(context.Background(), arg); err != nil {
+		return "", err
+	}
+	_, eng := h.modeAndEngagement()
+	return fmt.Sprintf("engagement active: %s (scope summary injected; egress allowlist programmed)", eng.Name()), nil
+}
+
+// modeCommand reports the operating mode, or returns to safe mode. Returning
+// to safe mode tears the engagement down: notes are appended to STYX.md and
+// the scope summary and egress allowlist are removed (§7.3).
+func (h *Harness) modeCommand(arg string) (string, error) {
+	switch strings.TrimSpace(arg) {
+	case "":
+		if _, eng := h.modeAndEngagement(); eng != nil {
+			return fmt.Sprintf("mode: engagement (%s)\nrun /mode safe to tear it down", eng.Name()), nil
+		}
+		return "mode: safe", nil
+	case "safe":
+		_, eng := h.modeAndEngagement()
+		if eng == nil {
+			return "already in safe mode", nil
+		}
+		name := eng.Name()
+		if err := h.Deactivate(); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("returned to safe mode; engagement %s torn down (notes appended to STYX.md)", name), nil
+	case "engagement":
+		return "activate engagement mode with /engagement <file>", nil
+	default:
+		return "", fmt.Errorf("unknown mode %q; use /mode safe", arg)
 	}
 }
 

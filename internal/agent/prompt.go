@@ -44,6 +44,9 @@ type EngagementContext struct {
 	DestructiveForbidden bool
 	// Expires is the rendered expiry, empty when the file is evergreen.
 	Expires string
+	// TimeWindow is the rendered ROE time window ("08:00–18:00
+	// America/New_York"), empty when the file declares none.
+	TimeWindow string
 }
 
 // PromptInput is everything the byte-stable prefix is assembled from (§3.3,

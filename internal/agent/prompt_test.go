@@ -52,6 +52,32 @@ func promptCases() []struct {
 				Memory: "# STYX.md\n\nEngagement notes go here.\n",
 			},
 		},
+		{
+			name: "engagement-no-memory",
+			in: PromptInput{
+				Mode: policy.ModeEngagement,
+				Engagement: &EngagementContext{
+					Name:                 "acme-q4-redteam",
+					Targets:              []string{"10.0.0.0/24"},
+					ExploitAllowed:       true,
+					DestructiveForbidden: false,
+				},
+			},
+		},
+		{
+			name: "engagement-restrictive",
+			in: PromptInput{
+				Mode: policy.ModeEngagement,
+				Engagement: &EngagementContext{
+					Name:                 "acme-q4-redteam",
+					Targets:              []string{"10.0.0.0/24", "192.0.2.44"},
+					ExploitAllowed:       false,
+					DestructiveForbidden: false,
+					TimeWindow:           "08:00–18:00 America/New_York",
+				},
+				Memory: "# STYX.md\n\nEngagement notes go here.\n",
+			},
+		},
 	}
 }
 

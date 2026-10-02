@@ -8,6 +8,9 @@ Authorized targets (advisory — the harness enforces scope):
 Rules of engagement:
 - exploit-class tooling: {{if .ExploitAllowed}}allowed{{else}}forbidden{{end}}
 - destructive-tagged calls: {{if .DestructiveForbidden}}forbidden{{else}}allowed{{end}}
+{{- if .TimeWindow}}
+- time window: {{.TimeWindow}}
+{{- end}}
 {{- if .Expires}}
 - expires: {{.Expires}}
 {{- end}}
