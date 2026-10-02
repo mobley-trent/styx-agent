@@ -101,6 +101,7 @@ styx-agent/
 ├── internal/model/          # ModelClient seam; openai-go→DeepSeek client; cache layout
 ├── internal/model/repair/   # strict-schema arg validation; structured-error repair layer
 ├── internal/policy/         # policy engine: rule table, JSON-pointer globs, ROE, verdicts
+├── internal/diff/           # pure line diff for write/edit review (§9.2)
 ├── internal/engagement/     # engagement file load/validate, scope pins, DNS pinning
 ├── internal/containerlayer/ # per-session bridge, egress allowlist, fallback proxy, DNS
 ├── internal/tui/            # Bubble Tea program, stream, status bar, prompt cards, blocks

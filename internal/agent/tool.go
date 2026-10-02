@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/mobley-trent/styx-agent/internal/diff"
 	"github.com/mobley-trent/styx-agent/internal/model"
 	"github.com/mobley-trent/styx-agent/internal/policy"
 )
@@ -31,6 +32,11 @@ type Tool struct {
 	ExploitClass bool
 	// Handler runs the call.
 	Handler Handler
+	// Preview computes a diff-class tool's proposed change without applying
+	// it (§9.2). It is non-nil only on the write/edit tools; the loop renders
+	// and reviews the diff, then calls Handler only on acceptance. A nil
+	// Preview means the tool is not diff-class and Handler runs directly.
+	Preview func(args map[string]any) (*diff.FileDiff, error)
 	// Targets maps the call's arguments onto the concrete destinations it
 	// intends to touch (§7.2). Pure file tools leave it nil.
 	Targets func(args map[string]any) []policy.Target

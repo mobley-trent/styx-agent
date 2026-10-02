@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/mobley-trent/styx-agent/internal/diff"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
 )
 
@@ -191,6 +192,123 @@ func TestViewTrimsToWindowHeight(t *testing.T) {
 	got := strings.Count(h.view(), "\n")
 	if got > 11 {
 		t.Errorf("view has %d newlines for a 10-line terminal, want it trimmed", got)
+	}
+}
+
+func TestStreamRendersInlineDiff(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindDiff,
+		Tool: "write_file",
+		Path: "a.txt",
+		Diff: diff.File("a.txt", "one\ntwo\n", "one\nTWO\n"),
+	}})
+	got := h.view()
+	for _, want := range []string{"a.txt (+1 -1)", "-two", "+TWO", "one"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("inline diff is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStreamRendersPlan(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindPlan,
+		Steps: []sessions.PlanStep{
+			{Tool: "write_file", Params: map[string]any{"path": "a.txt"}},
+		},
+	}})
+	got := h.view()
+	if !strings.Contains(got, "plan") || !strings.Contains(got, "write_file") {
+		t.Errorf("plan block is not rendered:\n%s", got)
+	}
+}
+
+func TestPermissionPromptCardResolves(t *testing.T) {
+	h := newHarness(t)
+	var reply string
+	h.update(PromptMsg{
+		Prompt: Prompt{
+			Kind:   PromptPermission,
+			Tool:   "write_file",
+			Params: map[string]any{"path": "a.txt"},
+			Reason: "rule-match",
+			Risk:   "write",
+		},
+		Reply: func(choice string) { reply = choice },
+	})
+
+	got := h.view()
+	for _, want := range []string{"permission", "write_file", "a.txt", "allow-once", "allow-session", "deny"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("permission card is missing %q:\n%s", want, got)
+		}
+	}
+
+	h.update(tea.KeyPressMsg{Text: "y", Code: 'y'})
+	if reply != ChoiceAllowOnce {
+		t.Errorf("reply = %q, want %q", reply, ChoiceAllowOnce)
+	}
+	if strings.Contains(h.view(), "permission") {
+		t.Errorf("the card did not clear after resolving:\n%s", h.view())
+	}
+}
+
+func TestDiffPromptCardResolves(t *testing.T) {
+	cases := []struct {
+		name string
+		key  tea.KeyPressMsg
+		want string
+	}{
+		{name: "accept", key: tea.KeyPressMsg{Text: "a", Code: 'a'}, want: ChoiceAccept},
+		{name: "reject", key: tea.KeyPressMsg{Text: "r", Code: 'r'}, want: ChoiceReject},
+		{name: "accept rest", key: tea.KeyPressMsg{Text: "A", Code: 'A'}, want: ChoiceAcceptRest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			var reply string
+			h.update(PromptMsg{
+				Prompt: Prompt{Kind: PromptDiff, Tool: "edit_file", Path: "a.txt", Diff: diff.File("a.txt", "one\n", "two\n")},
+				Reply:  func(choice string) { reply = choice },
+			})
+			if got := h.view(); !strings.Contains(got, "accept-all-rest-of-turn") || !strings.Contains(got, "+two") {
+				t.Fatalf("diff card is missing its controls or content:\n%s", got)
+			}
+			h.update(tc.key)
+			if reply != tc.want {
+				t.Errorf("reply = %q, want %q", reply, tc.want)
+			}
+		})
+	}
+}
+
+func TestPromptCardCapturesKeyboard(t *testing.T) {
+	h := newHarness(t)
+	h.update(PromptMsg{
+		Prompt: Prompt{Kind: PromptPermission, Tool: "write_file", Params: map[string]any{}},
+		Reply:  func(string) {},
+	})
+	h.typeText("hello")
+	h.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(h.submits) != 0 {
+		t.Errorf("submits = %v, want the open card to swallow input", h.submits)
+	}
+}
+
+func TestQuitWorksWhileCardOpen(t *testing.T) {
+	h := newHarness(t)
+	h.update(PromptMsg{
+		Prompt: Prompt{Kind: PromptPermission, Tool: "write_file", Params: map[string]any{}},
+		Reply:  func(string) {},
+	})
+	_, cmd := h.model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !h.quit {
+		t.Error("ctrl+c did not quit while a card was open")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+c returned no quit command")
 	}
 }
 

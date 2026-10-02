@@ -109,16 +109,3 @@ func readConfined(path string) (string, error) {
 	}
 	return string(data), nil
 }
-
-// stringArg reads a required string argument.
-func stringArg(args map[string]any, name string) (string, error) {
-	v, ok := args[name]
-	if !ok {
-		return "", fmt.Errorf("missing required argument %q", name)
-	}
-	s, ok := v.(string)
-	if !ok {
-		return "", fmt.Errorf("argument %q must be a string", name)
-	}
-	return s, nil
-}

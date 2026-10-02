@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mobley-trent/styx-agent/internal/diff"
 )
 
 // Kind discriminates a session event (§4.3). The set is additive: readers
@@ -44,6 +46,10 @@ const (
 	KindEngagement Kind = "engagement"
 	// KindError is a turn-aborting failure (§4.4).
 	KindError Kind = "error"
+	// KindDiff is a staged write's rendered diff (§9.2).
+	KindDiff Kind = "diff"
+	// KindPlan is a proposed plan block (§9.2).
+	KindPlan Kind = "plan"
 
 	// KindTextDelta is a live streaming fragment of final-answer text. It is
 	// rendered but not persisted: the assembled KindAssistant event carries
@@ -59,6 +65,20 @@ const (
 // deltas are the only render-only events.
 func (k Kind) Preserved() bool {
 	return k != KindTextDelta && k != KindReasoningDelta
+}
+
+// PlanStep is one action a plan block proposes, and a plan's pre-authorization
+// matches against (§9.2).
+//
+// A step matches a tool call when the tool names match exactly and every
+// parameter in Params equals the call's corresponding parameter (an omitted or
+// empty Params matches any call to that tool). Matching never widens a hard
+// deny or a scope check.
+type PlanStep struct {
+	// Tool is the tool the step authorizes.
+	Tool string `json:"tool"`
+	// Params are the parameter values the step authorizes; empty means any.
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // ToolCallRef is one tool call attached to an assistant event.
@@ -112,6 +132,13 @@ type Event struct {
 	// Failure is a tool-level failure message (tool_result) or the
 	// turn-aborting error (error).
 	Failure string `json:"failure,omitempty"`
+
+	// Path is the file a diff touches (diff).
+	Path string `json:"path,omitempty"`
+	// Diff is the structured line diff (diff).
+	Diff *diff.FileDiff `json:"diff,omitempty"`
+	// Steps are the actions a plan block proposes (plan).
+	Steps []PlanStep `json:"steps,omitempty"`
 
 	// Engagement is the engagement file's label (engagement activation).
 	Engagement string `json:"engagement,omitempty"`

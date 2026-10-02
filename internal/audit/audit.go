@@ -26,6 +26,9 @@ const (
 	VerdictAllowOnce Verdict = "allow-once"
 	// VerdictAllowSession is a prompt the operator allowed for the session.
 	VerdictAllowSession Verdict = "allow-session"
+	// VerdictAllowPlan is a call an approved plan pre-authorized for the turn
+	// (§9.2): no per-step prompt was shown.
+	VerdictAllowPlan Verdict = "allow-plan"
 	// VerdictDeny is a refusal, including a prompt the operator denied.
 	VerdictDeny Verdict = "deny"
 	// VerdictHardDeny is a refusal the operator was never asked about: an ROE
