@@ -9,6 +9,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,20 @@ type Config struct {
 	// narrow defaults and widen prompts to allows, but never weakens ROE hard
 	// limits or engagement scope checks — the policy engine enforces that.
 	Rules []policy.Rule
+	// Container configures the per-session container (§5.2).
+	Container Container
+}
+
+// Container is the session-container configuration. The harness ships no
+// image; the operator pins one, plus any egress destinations beyond the
+// engagement scope (model endpoints, package mirrors) that the container may
+// reach.
+type Container struct {
+	// Image is the session image. Empty means the built-in default.
+	Image string
+	// EgressAllow is extra allowed destinations beyond the engagement scope,
+	// as IP literals or CIDRs.
+	EgressAllow []string
 }
 
 // Defaults returns the built-in configuration: the pinned DeepSeek models of
@@ -198,6 +213,13 @@ type fileDoc struct {
 	Compaction     *compactionDoc  `yaml:"compaction"`
 	UpdateNotifier *bool           `yaml:"update_notifier"`
 	Permissions    *permissionsDoc `yaml:"permissions"`
+	Container      *containerDoc   `yaml:"container"`
+}
+
+// containerDoc is the partial container block (§5.2).
+type containerDoc struct {
+	Image       *string  `yaml:"image"`
+	EgressAllow []string `yaml:"egress_allow"`
 }
 
 // compactionDoc is the partial compaction block: a file may set any subset.
@@ -255,6 +277,14 @@ func (c *Config) apply(doc *fileDoc) {
 			})
 		}
 	}
+	if doc.Container != nil {
+		if doc.Container.Image != nil {
+			c.Container.Image = *doc.Container.Image
+		}
+		if doc.Container.EgressAllow != nil {
+			c.Container.EgressAllow = append([]string(nil), doc.Container.EgressAllow...)
+		}
+	}
 }
 
 // validate rejects a merged config the harness cannot run. It runs after the
@@ -303,7 +333,28 @@ func (c *Config) validate() error {
 			return fmt.Errorf("config: permissions.rules[%d] (%s): action %q: want allow, prompt, or deny", i, r.Tool, r.Action)
 		}
 	}
+	for i, entry := range c.Container.EgressAllow {
+		if err := validateDestination(entry); err != nil {
+			return fmt.Errorf("config: container.egress_allow[%d]: %w", i, err)
+		}
+	}
 	return nil
+}
+
+// validateDestination rejects an egress entry the container layer cannot pin.
+// An unparseable widening is a config error, never silently ignored.
+func validateDestination(entry string) error {
+	s := strings.TrimSpace(entry)
+	if s == "" {
+		return errors.New("empty destination")
+	}
+	if _, err := netip.ParsePrefix(s); err == nil {
+		return nil
+	}
+	if _, err := netip.ParseAddr(s); err == nil {
+		return nil
+	}
+	return fmt.Errorf("destination %q is not an IP or CIDR", entry)
 }
 
 // ModelInfo returns the pinned model set in the model layer's shape (§3.2).

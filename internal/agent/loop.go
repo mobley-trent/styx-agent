@@ -188,6 +188,7 @@ type Loop struct {
 	reviewer    DiffReviewer
 	planner     PlanApprover
 	emit        func(sessions.Event)
+	isolation   func() audit.Isolation
 	now         func() time.Time
 
 	// reviewMu serializes operator interactions that happen during parallel
@@ -290,6 +291,18 @@ func WithClock(now func() time.Time) LoopOption {
 	}
 }
 
+// WithIsolationProvider sets the container enforcement level the loop stamps
+// into every audit record (§7.5). It is read at audit-write time, so a session
+// container that starts mid-run is reflected as soon as it is real. Nil keeps
+// an empty isolation (tests and non-container runs).
+func WithIsolationProvider(f func() audit.Isolation) LoopOption {
+	return func(l *Loop) {
+		if f != nil {
+			l.isolation = f
+		}
+	}
+}
+
 // WithModel overrides the model ID requests name. Empty keeps the client's
 // configured default.
 func WithModel(id string) LoopOption {
@@ -315,6 +328,7 @@ func NewLoop(client model.ModelClient, tools *Registry, engine *policy.Engine, a
 		prompter:    DenyPrompter{},
 		reviewer:    AutoReviewer{},
 		planner:     DenyPlanApprover{},
+		isolation:   func() audit.Isolation { return "" },
 		session:     make(map[string]bool),
 		now:         time.Now,
 	}
@@ -653,11 +667,12 @@ func (l *Loop) writeAudit(call model.ToolCall, params map[string]any, verdict au
 		return errors.New("no audit writer configured")
 	}
 	return l.audit.Append(audit.Record{
-		Mode:    audit.Mode(l.engine.Mode()),
-		Tool:    call.Name,
-		Params:  params,
-		Verdict: verdict,
-		Reason:  string(reason),
+		Mode:      audit.Mode(l.engine.Mode()),
+		Tool:      call.Name,
+		Params:    params,
+		Verdict:   verdict,
+		Reason:    string(reason),
+		Isolation: l.isolation(),
 	})
 }
 

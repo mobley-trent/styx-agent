@@ -50,6 +50,10 @@ const (
 	KindDiff Kind = "diff"
 	// KindPlan is a proposed plan block (§9.2).
 	KindPlan Kind = "plan"
+	// KindIsolation reports the session container's isolation level (§5.2,
+	// §9.5): the one-time banner when the session starts, degraded or
+	// enforced. It is never silent.
+	KindIsolation Kind = "isolation"
 
 	// KindTextDelta is a live streaming fragment of final-answer text. It is
 	// rendered but not persisted: the assembled KindAssistant event carries
@@ -147,6 +151,9 @@ type Event struct {
 	// Subagent attributes the event to a subagent run, empty for the main
 	// loop (§4.2). Reserved: subagents land in a later ticket.
 	Subagent string `json:"subagent,omitempty"`
+	// Isolation is the container enforcement level an isolation event
+	// reports (isolation): "container" or "degraded-isolation".
+	Isolation string `json:"isolation,omitempty"`
 }
 
 // DefaultRoot is the session store root (§10.1):

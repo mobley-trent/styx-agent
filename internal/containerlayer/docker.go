@@ -1,0 +1,184 @@
+package containerlayer
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
+)
+
+// Docker is the production Runtime: the official Docker SDK for Go, pointed at
+// the local daemon (or DOCKER_HOST / an injected endpoint).
+//
+// The runtime is deliberately the only place that talks to Docker, so the
+// session orchestration above it is testable against a fake and no other
+// package learns the mechanism (§2).
+type Docker struct {
+	cli *client.Client
+}
+
+// DockerOption configures a Docker runtime.
+type DockerOption func(*dockerConfig)
+
+type dockerConfig struct {
+	host string
+}
+
+// WithDockerHost overrides the daemon endpoint. Without it the SDK reads
+// DOCKER_HOST and the platform default socket.
+func WithDockerHost(host string) DockerOption {
+	return func(c *dockerConfig) { c.host = host }
+}
+
+// NewDocker builds a Docker runtime. It does not contact the daemon; call
+// Available to probe it.
+func NewDocker(opts ...DockerOption) (*Docker, error) {
+	var cfg dockerConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	clientOpts := []client.Opt{client.WithAPIVersionNegotiation()}
+	if cfg.host != "" {
+		clientOpts = append(clientOpts, client.WithHost(cfg.host))
+	} else {
+		clientOpts = append(clientOpts, client.FromEnv)
+	}
+	cli, err := client.NewClientWithOpts(clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("containerlayer: docker client: %w", err)
+	}
+	return &Docker{cli: cli}, nil
+}
+
+// Available implements Runtime.
+func (d *Docker) Available(ctx context.Context) error {
+	if _, err := d.cli.Ping(ctx); err != nil {
+		return fmt.Errorf("containerlayer: docker daemon is not reachable: %w", err)
+	}
+	return nil
+}
+
+// CreateNetwork implements Runtime.
+func (d *Docker) CreateNetwork(ctx context.Context, req NetworkRequest) (string, error) {
+	opts := network.CreateOptions{
+		Driver:   "bridge",
+		Internal: req.Internal,
+		Options:  map[string]string{"com.docker.network.bridge.name": req.Bridge},
+	}
+	if req.Subnet != "" {
+		opts.IPAM = &network.IPAM{
+			Driver: "default",
+			Config: []network.IPAMConfig{{Subnet: req.Subnet, Gateway: req.Gateway}},
+		}
+	}
+	resp, err := d.cli.NetworkCreate(ctx, req.Name, opts)
+	if err != nil {
+		return "", fmt.Errorf("containerlayer: create network %s: %w", req.Name, err)
+	}
+	return resp.ID, nil
+}
+
+// RemoveNetwork implements Runtime.
+func (d *Docker) RemoveNetwork(ctx context.Context, id string) error {
+	if err := d.cli.NetworkRemove(ctx, id); err != nil {
+		// An already-gone network is a clean teardown.
+		if client.IsErrNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("containerlayer: remove network %s: %w", id, err)
+	}
+	return nil
+}
+
+// CreateContainer implements Runtime.
+func (d *Docker) CreateContainer(ctx context.Context, spec ContainerSpec) (string, error) {
+	if err := validateContainerSpec(spec); err != nil {
+		return "", err
+	}
+	resp, err := d.cli.ContainerCreate(ctx,
+		&container.Config{
+			Image:      spec.Image,
+			Cmd:        spec.Cmd,
+			Env:        spec.Env,
+			WorkingDir: spec.WorkingDir,
+		},
+		&container.HostConfig{
+			NetworkMode: container.NetworkMode(spec.NetworkID),
+			Binds:       spec.Binds,
+		},
+		nil, nil, spec.Name,
+	)
+	if err != nil {
+		return "", fmt.Errorf("containerlayer: create container %s: %w", spec.Name, err)
+	}
+	return resp.ID, nil
+}
+
+// StartContainer implements Runtime.
+func (d *Docker) StartContainer(ctx context.Context, id string) error {
+	if err := d.cli.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
+		return fmt.Errorf("containerlayer: start container %s: %w", id, err)
+	}
+	return nil
+}
+
+// Exec implements Runtime. It demultiplexes the Docker stream into stdout and
+// stderr and reports the exec's exit code.
+func (d *Docker) Exec(ctx context.Context, id string, req ExecRequest) (ExecResult, error) {
+	created, err := d.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+		Cmd:          req.Cmd,
+		Env:          req.Env,
+		WorkingDir:   req.WorkDir,
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("containerlayer: create exec in %s: %w", id, err)
+	}
+	attach, err := d.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("containerlayer: attach exec in %s: %w", id, err)
+	}
+	defer attach.Close()
+
+	var stdout, stderr bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdout, &stderr, attach.Reader); err != nil && err != io.EOF {
+		return ExecResult{}, fmt.Errorf("containerlayer: read exec output in %s: %w", id, err)
+	}
+	inspect, err := d.cli.ContainerExecInspect(ctx, created.ID)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("containerlayer: inspect exec in %s: %w", id, err)
+	}
+	return ExecResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: inspect.ExitCode,
+	}, nil
+}
+
+// RemoveContainer implements Runtime.
+func (d *Docker) RemoveContainer(ctx context.Context, id string) error {
+	if err := d.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+		if client.IsErrNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("containerlayer: remove container %s: %w", id, err)
+	}
+	return nil
+}
+
+// Close implements Runtime.
+func (d *Docker) Close() error {
+	if err := d.cli.Close(); err != nil {
+		return fmt.Errorf("containerlayer: close docker client: %w", err)
+	}
+	return nil
+}
+
+// compile-time assertion: the SDK runtime satisfies Runtime.
+var _ Runtime = (*Docker)(nil)
