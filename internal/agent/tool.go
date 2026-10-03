@@ -30,6 +30,13 @@ type Tool struct {
 	Destructive bool
 	// ExploitClass tags the call as exploit-class tooling (§6.3).
 	ExploitClass bool
+	// Lenient marks a tool the provider must not schema-enforce. Built-in
+	// tools are always strict (§3.3), so the zero value is strict. An MCP tool
+	// is lenient: the harness validates its arguments itself (§5.5), and a
+	// third-party server's schema need not satisfy the provider's strict-mode
+	// constraints (every declared property required, every object declaring
+	// properties).
+	Lenient bool
 	// Handler runs the call.
 	Handler Handler
 	// Preview computes a diff-class tool's proposed change without applying
@@ -43,13 +50,14 @@ type Tool struct {
 }
 
 // Descriptor is the tool's descriptor as the model sees it. Built-in tools
-// are always strict (§3.3).
+// are always strict (§3.3); a lenient tool (an MCP tool) is not, because the
+// harness validates its arguments itself (§5.5).
 func (t Tool) Descriptor() model.Tool {
 	return model.Tool{
 		Name:        t.Name,
 		Description: t.Description,
 		Parameters:  t.Parameters,
-		Strict:      true,
+		Strict:      !t.Lenient,
 	}
 }
 

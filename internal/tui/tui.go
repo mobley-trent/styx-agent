@@ -62,6 +62,9 @@ type Status struct {
 	// Isolation is the container enforcement level, empty until the container
 	// layer lands (later ticket).
 	Isolation string
+	// MCP is the connected-server summary ("mcp 2/2"), empty when the project
+	// configures no MCP servers (§5.5, §9.1).
+	MCP string
 	// Busy is true while the loop is working a turn.
 	Busy bool
 }
@@ -586,6 +589,9 @@ func (m *Model) statusLine() string {
 	if status.Isolation != "" {
 		parts = append(parts, status.Isolation)
 	}
+	if status.MCP != "" {
+		parts = append(parts, status.MCP)
+	}
 	if status.Session != "" {
 		parts = append(parts, status.Session)
 	}
@@ -678,9 +684,32 @@ func (m *Model) apply(ev sessions.Event) {
 			text = ev.Isolation
 		}
 		m.append(bannerStyle.Render("⚑ " + text))
+	case sessions.KindMCP:
+		// MCP connection lifecycle is always visible: a server that failed to
+		// launch, crashed, or disconnected must never be silent (§5.5).
+		m.commitPartial()
+		m.append(mcpLine(ev))
 	case sessions.KindError:
 		m.commitPartial()
 		m.append(failStyle.Render("! " + ev.Failure))
+	}
+}
+
+// mcpLine renders one MCP server lifecycle transition.
+func mcpLine(ev sessions.Event) string {
+	server := ev.Server
+	if server == "" {
+		server = "server"
+	}
+	switch ev.Status {
+	case "ready":
+		return bannerStyle.Render("⚑ mcp "+server+": ready") + " (" + ev.Detail + ")"
+	case "failed":
+		return failStyle.Render("! mcp " + server + " unavailable: " + ev.Detail)
+	case "closed":
+		return cardStyle.Render("  mcp " + server + ": closed")
+	default:
+		return cardStyle.Render("  mcp " + server + ": " + ev.Status)
 	}
 }
 

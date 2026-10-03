@@ -93,6 +93,8 @@ type Config struct {
 	Rules []policy.Rule
 	// Container configures the per-session container (§5.2).
 	Container Container
+	// MCP configures the project's external MCP servers (§5.5).
+	MCP MCP
 }
 
 // Container is the session-container configuration. The harness ships no
@@ -105,6 +107,46 @@ type Container struct {
 	// EgressAllow is extra allowed destinations beyond the engagement scope,
 	// as IP literals or CIDRs.
 	EgressAllow []string
+}
+
+// MCP is the per-project external-capability configuration (§5.5). styx ships
+// no MCP servers; the operator pins their own, and the harness launches each
+// over stdio and exposes its tools as ordinary descriptors behind the same
+// policy gate.
+type MCP struct {
+	// Servers is the configured server set, in declaration order. An empty
+	// set means no external capabilities — the built-in tools only.
+	Servers []MCPServer
+}
+
+// MCPServer is one configured MCP server (§5.5). It is launched by the
+// harness over stdio: the harness is the client, the command is the server.
+type MCPServer struct {
+	// Name identifies the server. It namespaces the server's tools
+	// (mcp__<name>__<tool>) and keys the policy rule table.
+	Name string
+	// Command is the executable to launch.
+	Command string
+	// Args are the command's arguments.
+	Args []string
+	// Env is extra environment entries (KEY=VALUE) for the launched process.
+	// Secrets belong here only as references the operator accepts entering a
+	// project config; styx itself never reads credentials from config.
+	Env []string
+	// Disabled leaves the server configured but unlaunched. It is how an
+	// operator parks a server without deleting its block.
+	Disabled bool
+}
+
+// Enabled returns the servers that should be launched, in declaration order.
+func (m MCP) Enabled() []MCPServer {
+	out := make([]MCPServer, 0, len(m.Servers))
+	for _, s := range m.Servers {
+		if !s.Disabled {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // Defaults returns the built-in configuration: the pinned DeepSeek models of
@@ -214,6 +256,21 @@ type fileDoc struct {
 	UpdateNotifier *bool           `yaml:"update_notifier"`
 	Permissions    *permissionsDoc `yaml:"permissions"`
 	Container      *containerDoc   `yaml:"container"`
+	MCP            *mcpDoc         `yaml:"mcp"`
+}
+
+// mcpDoc is the MCP server block (§5.5).
+type mcpDoc struct {
+	Servers []mcpServerDoc `yaml:"servers"`
+}
+
+// mcpServerDoc is one configured MCP server.
+type mcpServerDoc struct {
+	Name     *string  `yaml:"name"`
+	Command  *string  `yaml:"command"`
+	Args     []string `yaml:"args"`
+	Env      []string `yaml:"env"`
+	Disabled *bool    `yaml:"disabled"`
 }
 
 // containerDoc is the partial container block (§5.2).
@@ -285,6 +342,27 @@ func (c *Config) apply(doc *fileDoc) {
 			c.Container.EgressAllow = append([]string(nil), doc.Container.EgressAllow...)
 		}
 	}
+	if doc.MCP != nil {
+		// Servers replace wholesale, like the permission overlay: the
+		// project's MCP block is a complete declaration, not an append.
+		c.MCP.Servers = make([]MCPServer, 0, len(doc.MCP.Servers))
+		for _, s := range doc.MCP.Servers {
+			server := MCPServer{
+				Args: append([]string(nil), s.Args...),
+				Env:  append([]string(nil), s.Env...),
+			}
+			if s.Name != nil {
+				server.Name = *s.Name
+			}
+			if s.Command != nil {
+				server.Command = *s.Command
+			}
+			if s.Disabled != nil {
+				server.Disabled = *s.Disabled
+			}
+			c.MCP.Servers = append(c.MCP.Servers, server)
+		}
+	}
 }
 
 // validate rejects a merged config the harness cannot run. It runs after the
@@ -336,6 +414,34 @@ func (c *Config) validate() error {
 	for i, entry := range c.Container.EgressAllow {
 		if err := validateDestination(entry); err != nil {
 			return fmt.Errorf("config: container.egress_allow[%d]: %w", i, err)
+		}
+	}
+	return c.validateMCP()
+}
+
+// validateMCP rejects an MCP block the harness cannot launch. A server with no
+// name or no command, a duplicate name, or an env entry that is not KEY=VALUE
+// is a config error, never silently ignored: a server that quietly failed to
+// launch would look like the model simply had no such tool.
+func (c *Config) validateMCP() error {
+	seen := make(map[string]bool, len(c.MCP.Servers))
+	for i, s := range c.MCP.Servers {
+		name := strings.TrimSpace(s.Name)
+		if name == "" {
+			return fmt.Errorf("config: mcp.servers[%d]: name is required", i)
+		}
+		if seen[name] {
+			return fmt.Errorf("config: mcp.servers: duplicate server name %q", name)
+		}
+		seen[name] = true
+		if strings.TrimSpace(s.Command) == "" {
+			return fmt.Errorf("config: mcp.servers[%d] (%s): command is required", i, name)
+		}
+		for j, entry := range s.Env {
+			key, _, ok := strings.Cut(entry, "=")
+			if !ok || strings.TrimSpace(key) == "" {
+				return fmt.Errorf("config: mcp.servers[%d] (%s): env[%d] %q: want KEY=VALUE", i, name, j, entry)
+			}
 		}
 	}
 	return nil

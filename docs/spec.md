@@ -100,6 +100,7 @@ styx-agent/
 ├── internal/agent/subagent/ # dispatch_subagent engine + preset registry
 ├── internal/model/          # ModelClient seam; openai-go→DeepSeek client; cache layout
 ├── internal/model/repair/   # strict-schema arg validation; structured-error repair layer
+├── internal/mcpclient/      # MCP servers over stdio: discovery, calls, lifecycle (§5.5)
 ├── internal/policy/         # policy engine: rule table, JSON-pointer globs, ROE, verdicts
 ├── internal/diff/           # pure line diff for write/edit review (§9.2)
 ├── internal/engagement/     # engagement file load/validate, scope pins, DNS pinning
@@ -317,6 +318,17 @@ None receive `dispatch_subagent`. Presets are pack-agnostic (§8.5).
 MCP servers arrive as ordinary tool descriptors and pass the same policy gate; the harness
 validates MCP tool arguments itself regardless of server-side strictness. Recommended
 servers per pack: §8.6. styx ships none.
+
+Implementation: servers are configured per project under `mcp.servers` in
+`.styx/config.yaml` (`name`, `command`, `args`, `env`, `disabled`), launched over stdio via
+the official Go SDK, and their tools registered as `mcp__<server>__<tool>`. An MCP tool
+call follows the same normative order as any built-in (§5.3) — schema validation against
+the server's own advertised input schema, then the policy engine, then the audit write,
+then dispatch — and the tool name family is addressable by the rule table (`mcp__*`,
+`mcp__<server>__*`). A malformed call is repaired or denied by the harness and never
+passed through. Connection lifecycle (connecting / ready / failed / closed) is emitted on
+the session bus and rendered in the stream and the status line; a server that fails to
+launch or disconnects mid-session is a visible tool-level error, never a loop crash.
 
 ---
 

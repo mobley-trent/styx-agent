@@ -211,6 +211,20 @@ func TestStreamRendersInlineDiff(t *testing.T) {
 	}
 }
 
+func TestStreamRendersMCPLifecycle(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindMCP, Server: "nmap", Status: "ready", Detail: "2 tool(s)"}})
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindMCP, Server: "ghidra", Status: "failed", Detail: "launch failed: executable not found"}})
+
+	view := h.view()
+	if !strings.Contains(view, "mcp nmap: ready") {
+		t.Errorf("view = %q, want the ready server rendered", view)
+	}
+	if !strings.Contains(view, "mcp ghidra unavailable") || !strings.Contains(view, "executable not found") {
+		t.Errorf("view = %q, want the failed server and its reason rendered", view)
+	}
+}
+
 func TestStreamRendersPlan(t *testing.T) {
 	h := newHarness(t)
 	h.update(EventMsg{Event: sessions.Event{
