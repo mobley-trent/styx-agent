@@ -10,10 +10,12 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/mobley-trent/styx-agent/internal/audit"
 	"github.com/mobley-trent/styx-agent/internal/mcpclient"
 	"github.com/mobley-trent/styx-agent/internal/mcpclient/fakeserver"
 	"github.com/mobley-trent/styx-agent/internal/model"
 	"github.com/mobley-trent/styx-agent/internal/model/fakemodel"
+	"github.com/mobley-trent/styx-agent/internal/policy"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
 )
 
@@ -280,6 +282,135 @@ func TestMCPNotRelaunchedOnModeSwitch(t *testing.T) {
 	// The tool is still registered after the switches.
 	if _, ok := h.Tools.Lookup("mcp__nmap__scan"); !ok {
 		t.Error("mcp__nmap__scan is missing after a mode switch")
+	}
+}
+
+// mcpEngagement scopes the session to 10.0.0.0/24 so MCP scope checks can be
+// exercised end to end (issue #27, §5.5, §6.2).
+const mcpEngagement = `apiVersion: styx.engagement/v1
+name: mcp-scope
+operator: eddy
+expires: 2026-12-31T23:59:59Z
+targets:
+  - 10.0.0.0/24
+roe:
+  exploit_allowed: false
+  destructive_forbidden: true
+`
+
+// TestMCPToolInScopeAutoAllows proves an in-scope MCP call passes the same
+// scope gate as a built-in: engagement mode auto-allows it, and the audit
+// records the in-scope reason rather than falling back to the rule table.
+func TestMCPToolInScopeAutoAllows(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, filepath.Join(".styx", "config.yaml"),
+		"mcp:\n  servers:\n    - name: nmap\n      command: nmap-mcp\n")
+	engPath := writeFile(t, dir, "engagement.yaml", mcpEngagement)
+
+	server := fakeserver.New("nmap")
+	server.AddTool("scan", "Run an nmap scan against a target.", nmapSchema)
+	server.SetHandler(func(_ context.Context, _ string, args map[string]any) (string, error) {
+		return "nmap: " + args["target"].(string) + " is up", nil
+	})
+
+	fake := fakemodel.New(fakemodel.WithTurns(
+		fakemodel.ToolCalls(fakemodel.Call("m1", "mcp__nmap__scan", `{"target":"10.0.0.5"}`)),
+		fakemodel.Text("the target is up"),
+	))
+
+	opts := buildOptions(t, dir, fake)
+	opts.Engagement = engPath
+	opts.MCPConnector = server.Connector()
+
+	h, err := Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	// No permission rule and the deny-by-default prompter: the call runs only
+	// because scope auto-allowed it.
+	if err := h.Submit(context.Background(), "scan 10.0.0.5"); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+	var result string
+	for _, m := range h.Messages() {
+		if m.Role == model.RoleTool && m.ToolCallID == "m1" {
+			result = m.Content
+		}
+	}
+	if result != "nmap: 10.0.0.5 is up" {
+		t.Errorf("tool result = %q, want the in-scope call to have run", result)
+	}
+
+	records := readAuditRecords(t, dir)
+	var sawInScope bool
+	for _, rec := range records {
+		if rec.Tool == "mcp__nmap__scan" {
+			if rec.Verdict != audit.VerdictAllow || rec.Reason != string(policy.ReasonInScope) {
+				t.Errorf("audit verdict = %q/%s, want allow/in-scope", rec.Verdict, rec.Reason)
+			}
+			sawInScope = true
+		}
+	}
+	if !sawInScope {
+		t.Error("no audit record for the in-scope MCP call")
+	}
+}
+
+// TestMCPToolOutOfScopeIsGated proves an out-of-scope MCP call never reaches
+// the server under the default deny prompter, and is not auto-allowed by an
+// MCP-family allow rule (§6.1: a project allow cannot weaken a scope check).
+func TestMCPToolOutOfScopeIsGated(t *testing.T) {
+	dir := t.TempDir()
+	// The mcp__* allow rule must not widen the scope check.
+	writeFile(t, dir, filepath.Join(".styx", "config.yaml"),
+		"permissions:\n  rules:\n    - tool: mcp__*\n      action: allow\n"+
+			"mcp:\n  servers:\n    - name: nmap\n      command: nmap-mcp\n")
+	engPath := writeFile(t, dir, "engagement.yaml", mcpEngagement)
+
+	server := fakeserver.New("nmap")
+	server.AddTool("scan", "Run an nmap scan against a target.", nmapSchema)
+	var sawCall bool
+	server.SetHandler(func(_ context.Context, _ string, _ map[string]any) (string, error) {
+		sawCall = true
+		return "should not run", nil
+	})
+
+	fake := fakemodel.New(fakemodel.WithTurns(
+		fakemodel.ToolCalls(fakemodel.Call("m1", "mcp__nmap__scan", `{"target":"203.0.113.9"}`)),
+		fakemodel.Text("that target is out of scope"),
+	))
+
+	opts := buildOptions(t, dir, fake)
+	opts.Engagement = engPath
+	opts.MCPConnector = server.Connector()
+
+	h, err := Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	if err := h.Submit(context.Background(), "scan 203.0.113.9"); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+	if sawCall {
+		t.Error("an out-of-scope MCP call reached the server; scope must gate it")
+	}
+
+	records := readAuditRecords(t, dir)
+	var sawDeny bool
+	for _, rec := range records {
+		if rec.Tool == "mcp__nmap__scan" {
+			if rec.Verdict != audit.VerdictDeny {
+				t.Errorf("audit verdict = %q/%s, want deny", rec.Verdict, rec.Reason)
+			}
+			sawDeny = true
+		}
+	}
+	if !sawDeny {
+		t.Error("no audit record for the out-of-scope MCP call")
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/mobley-trent/styx-agent/internal/policy"
 )
 
 // MCPToolSource is one MCP-provided capability in the shape the agent registry
@@ -21,6 +23,10 @@ type MCPToolSource struct {
 	// validates every call against exactly this schema, regardless of any
 	// server-side strictness.
 	Parameters json.RawMessage
+	// Targets derives the call's network destinations for the policy engine's
+	// scope check (§5.5, §7.2). Nil uses the default derivation over the
+	// call's arguments; tests and unusual servers may override it.
+	Targets func(args map[string]any) []policy.Target
 	// Call invokes the tool on its server.
 	Call func(ctx context.Context, args map[string]any) (string, error)
 }
@@ -35,6 +41,13 @@ func MCPTool(src MCPToolSource) Tool {
 	if len(schema) == 0 {
 		schema = json.RawMessage(`{"type":"object","properties":{}}`)
 	}
+	targets := src.Targets
+	if targets == nil {
+		// An MCP tool passes the same policy gate as a built-in, scope check
+		// included (§5.5). Without this the engine would see no targets and
+		// resolve every MCP call through the rule table alone.
+		targets = mcpScopeTargets
+	}
 	return Tool{
 		Name:        src.Name,
 		Description: src.Description,
@@ -43,6 +56,9 @@ func MCPTool(src MCPToolSource) Tool {
 		// not enforce a third-party server's schema, which need not satisfy
 		// strict-mode constraints.
 		Lenient: true,
+		// Targets carries the call's network destinations so the policy engine
+		// resolves scope for MCP tools exactly as it does for built-ins.
+		Targets: targets,
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			if src.Call == nil {
 				return "", errors.New("no MCP transport is configured for " + src.Name)
