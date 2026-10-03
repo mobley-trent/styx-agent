@@ -60,6 +60,11 @@ const (
 	// render one collapsible block per run and the JSONL records the whole
 	// transcript.
 	KindSubagent Kind = "subagent"
+	// KindMCP reports one MCP server's connection lifecycle (§5.5): connecting,
+	// ready with its tool count, failed with a reason, or closed. It is how a
+	// server launch, a crash, or a disconnect becomes visible rather than
+	// silent.
+	KindMCP Kind = "mcp"
 
 	// KindTextDelta is a live streaming fragment of final-answer text. It is
 	// rendered but not persisted: the assembled KindAssistant event carries
@@ -165,6 +170,11 @@ type Event struct {
 	// Isolation is the container enforcement level an isolation event
 	// reports (isolation): "container" or "degraded-isolation".
 	Isolation string `json:"isolation,omitempty"`
+	// Server is the MCP server an mcp event concerns (mcp).
+	Server string `json:"server,omitempty"`
+	// Status is an MCP server's lifecycle state (mcp): connecting, ready,
+	// failed, or closed.
+	Status string `json:"status,omitempty"`
 }
 
 // DefaultRoot is the session store root (§10.1):

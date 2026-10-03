@@ -201,6 +201,59 @@ container:
 	}
 }
 
+func TestMCPConfigLoadsAndValidates(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, "config.yaml", `
+mcp:
+  servers:
+    - name: nmap
+      command: nmap-mcp
+      args: ["--fast"]
+      env: ["NMAP_TOKEN=abc"]
+    - name: ghidra
+      command: ghidra-mcp
+      disabled: true
+`)
+	cfg, err := Load(path, "")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if len(cfg.MCP.Servers) != 2 {
+		t.Fatalf("servers = %d, want 2", len(cfg.MCP.Servers))
+	}
+	if cfg.MCP.Servers[0].Name != "nmap" || cfg.MCP.Servers[0].Command != "nmap-mcp" {
+		t.Errorf("server[0] = %+v, want nmap/nmap-mcp", cfg.MCP.Servers[0])
+	}
+	if len(cfg.MCP.Servers[0].Args) != 1 || cfg.MCP.Servers[0].Args[0] != "--fast" {
+		t.Errorf("server[0] args = %v, want [--fast]", cfg.MCP.Servers[0].Args)
+	}
+	// Enabled filters the disabled server without dropping it.
+	enabled := cfg.MCP.Enabled()
+	if len(enabled) != 1 || enabled[0].Name != "nmap" {
+		t.Errorf("Enabled() = %+v, want only nmap", enabled)
+	}
+}
+
+func TestMCPConfigRejectsInvalid(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing name", body: "mcp:\n  servers:\n    - command: nmap-mcp\n"},
+		{name: "missing command", body: "mcp:\n  servers:\n    - name: nmap\n"},
+		{name: "duplicate name", body: "mcp:\n  servers:\n    - name: nmap\n      command: a\n    - name: nmap\n      command: b\n"},
+		{name: "bad env", body: "mcp:\n  servers:\n    - name: nmap\n      command: nmap-mcp\n      env: [\"NOT_A_PAIR\"]\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "config.yaml", tt.body)
+			if _, err := Load(path, ""); err == nil {
+				t.Errorf("Load(%s) = nil error, want a validation error", tt.name)
+			}
+		})
+	}
+}
+
 func TestDefaultPaths(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/xdg")
 	if got, want := DefaultGlobalPath(), filepath.Join("/xdg", "styx", "config.yaml"); got != want {

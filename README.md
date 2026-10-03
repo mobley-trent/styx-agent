@@ -13,11 +13,15 @@ as inline keyboard-first cards (allow-once / allow-this-session / deny), and an
 approved plan pre-authorizes its listed actions for the turn — never overriding
 hard denies, ROE limits, or scope checks. Every tool call still runs the full
 normative order — schema validation → policy verdict → audit write → dispatch →
-truncated result → model. Sessions persist as append-only JSONL with `/resume`;
-global and project config merge; turn and parallel-dispatch caps are enforced.
-Containers, subagents, skills, MCP, and the full TUI land in subsequent tickets.
-See [docs/spec.md](docs/spec.md) for the buildable spec and
-[CONTEXT.md](CONTEXT.md) for the domain glossary.
+truncated result → model. External capabilities arrive through the same gate:
+per-project MCP servers are launched over stdio and their tools become ordinary
+descriptors — validated by the harness regardless of server-side strictness,
+resolved by the same policy engine, and audited like built-ins, with connection
+lifecycle (ready / failed / disconnected) surfaced in the stream and the status
+line. Sessions persist as append-only JSONL with `/resume`; global and project
+config merge; turn and parallel-dispatch caps are enforced. Skills, skill packs,
+and the full TUI land in subsequent tickets. See [docs/spec.md](docs/spec.md)
+for the buildable spec and [CONTEXT.md](CONTEXT.md) for the domain glossary.
 
 ## Build
 
@@ -47,6 +51,7 @@ comment. Headlines:
 - `internal/policy` — the pure policy engine, the safety choke point
 - `internal/diff` — the pure line diff behind write/edit review
 - `internal/model` — the single wire seam to the model provider
+- `internal/mcpclient` — MCP servers over stdio: discovery, calls, lifecycle
 - `internal/containerlayer` — the only package touching the host network stack
 
 Storage: per-session JSONL under `~/.local/share/styx/sessions/<project>/`, the

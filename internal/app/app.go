@@ -25,6 +25,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/config"
 	"github.com/mobley-trent/styx-agent/internal/containerlayer"
 	"github.com/mobley-trent/styx-agent/internal/engagement"
+	"github.com/mobley-trent/styx-agent/internal/mcpclient"
 	"github.com/mobley-trent/styx-agent/internal/memory"
 	"github.com/mobley-trent/styx-agent/internal/model"
 	"github.com/mobley-trent/styx-agent/internal/netfetch"
@@ -65,6 +66,9 @@ type Options struct {
 	// Executor overrides exec dispatch entirely (tests): when set, no
 	// container runtime is constructed.
 	Executor agent.Executor
+	// MCPConnector overrides how MCP servers are launched (tests). Nil means
+	// the stdio launcher, which runs the configured command as a subprocess.
+	MCPConnector mcpclient.Connector
 	// Fetcher overrides the harness-side web_fetch transport (tests). Nil
 	// means the scope-checked netfetch fetcher.
 	Fetcher agent.Fetcher
@@ -102,6 +106,7 @@ type Harness struct {
 	sessions  *sessions.Store
 	audit     *audit.Writer
 	container *containerlayer.Manager
+	mcp       *mcpclient.Manager
 	out       io.Writer
 	now       func() time.Time
 	warned    bool
@@ -109,6 +114,7 @@ type Harness struct {
 	// Wired once at Build and reused across mode switches.
 	client         model.ModelClient
 	memory         string
+	mcpConnector   mcpclient.Connector
 	execOverride   agent.Executor
 	runtimeFactory func() (containerlayer.Runtime, error)
 	firewall       containerlayer.Firewall
@@ -232,6 +238,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		session:        session,
 		client:         client,
 		memory:         mem,
+		mcpConnector:   opts.MCPConnector,
 		execOverride:   opts.Executor,
 		runtimeFactory: factory,
 		firewall:       opts.ContainerFirewall,
@@ -340,6 +347,19 @@ func (h *Harness) configure() error {
 		agent.SSHLogsTool(logFetcher),
 		agent.ProposePlanTool(),
 	}
+
+	// External capabilities through one gate (§5.5): MCP servers are launched
+	// per project, and their tools join the session registry as ordinary
+	// descriptors — same validation, same policy engine, same audit. A server
+	// that fails to launch is a visible lifecycle event, never a startup
+	// refusal: the built-ins keep working.
+	//
+	// The manager is created once and reused across mode switches: a server's
+	// reach is bounded per call by the policy engine, which is rebuilt here,
+	// so a mode switch need not tear the connections down and relaunch them.
+	mcpManager := h.ensureMCP()
+	baseTools = append(baseTools, h.mcpTools(mcpManager)...)
+
 	base, err := agent.NewRegistry(baseTools...)
 	if err != nil {
 		if container != nil {
@@ -390,6 +410,80 @@ func (h *Harness) configure() error {
 		_ = old.Close()
 	}
 	return nil
+}
+
+// ensureMCP returns the session's MCP manager, creating and starting it on
+// first use (§5.5). A project that configures no servers gets no manager, so a
+// session that uses none never launches a subprocess. It is created once and
+// reused: MCP servers are not mode-dependent, so a mode switch must not
+// relaunch them.
+func (h *Harness) ensureMCP() *mcpclient.Manager {
+	servers := h.Config.MCP.Enabled()
+	if len(servers) == 0 {
+		return nil
+	}
+
+	h.mu.Lock()
+	if h.mcp != nil {
+		manager := h.mcp
+		h.mu.Unlock()
+		return manager
+	}
+	h.mu.Unlock()
+
+	opts := []mcpclient.Option{mcpclient.WithEmitter(func(ev mcpclient.Event) {
+		h.emit(sessions.Event{
+			Kind:   sessions.KindMCP,
+			Server: ev.Server,
+			Status: string(ev.Status),
+			Detail: ev.Detail,
+		})
+	})}
+	if h.mcpConnector != nil {
+		opts = append(opts, mcpclient.WithConnector(h.mcpConnector))
+	}
+	manager := mcpclient.New(opts...)
+
+	configured := make([]mcpclient.Server, 0, len(servers))
+	for _, s := range servers {
+		configured = append(configured, mcpclient.Server{
+			Name:    s.Name,
+			Command: s.Command,
+			Args:    s.Args,
+			Env:     s.Env,
+		})
+	}
+	// The servers are launched against a process-lifetime context, not the
+	// build call's: a server session outlives any single request, and its
+	// lifetime is bounded by Manager.Close at session end.
+	manager.Start(context.Background(), configured)
+
+	h.mu.Lock()
+	h.mcp = manager
+	h.mu.Unlock()
+	return manager
+}
+
+// mcpTools adapts the manager's currently-connected tools into agent tools
+// (§5.5). A server that has dropped contributes no tools, so a rebuilt
+// registry never advertises a dead server's capabilities.
+func (h *Harness) mcpTools(manager *mcpclient.Manager) []agent.Tool {
+	if manager == nil {
+		return nil
+	}
+	var sources []agent.MCPToolSource
+	for _, tool := range manager.Tools() {
+		server, name := tool.Server, tool.Name
+		sources = append(sources, agent.MCPToolSource{
+			Name:        tool.Namespaced(),
+			Description: tool.Description,
+			Parameters:  tool.Schema,
+			Call: func(ctx context.Context, args map[string]any) (string, error) {
+				return manager.Call(ctx, server, name, args)
+			},
+		})
+	}
+	return agent.MCPTools(sources...)
 }
 
 // loopOptions are the loop options shared by every mode's loop.
@@ -769,10 +863,15 @@ func (h *Harness) Close() error {
 	h.session = nil
 	container := h.container
 	h.container = nil
+	mcp := h.mcp
+	h.mcp = nil
 	h.mu.Unlock()
 
 	if session != nil {
 		errs = append(errs, session.Close())
+	}
+	if mcp != nil {
+		errs = append(errs, mcp.Close())
 	}
 	if container != nil {
 		errs = append(errs, container.Close())
@@ -781,6 +880,18 @@ func (h *Harness) Close() error {
 		errs = append(errs, h.audit.Close())
 	}
 	return errors.Join(errs...)
+}
+
+// MCPServers returns the configured servers' lifecycle states, for the status
+// bar and /status (§5.5, §9.1).
+func (h *Harness) MCPServers() []mcpclient.ServerStatus {
+	h.mu.Lock()
+	mcp := h.mcp
+	h.mu.Unlock()
+	if mcp == nil {
+		return nil
+	}
+	return mcp.Statuses()
 }
 
 // setUI installs the live event sink (the TUI). Events are still persisted
@@ -939,8 +1050,25 @@ func (h *Harness) Status(busy bool) tui.Status {
 		Model:     h.Config.Model,
 		Session:   shortID(h.SessionID()),
 		Isolation: string(h.isolation()),
+		MCP:       mcpStatusText(h.MCPServers()),
 		Busy:      busy,
 	}
+}
+
+// mcpStatusText summarizes MCP server connectivity for the status bar (§5.5,
+// §9.1): "mcp 2/2" when all are ready, "mcp 1/2" when one failed. It is empty
+// when the project configures no servers.
+func mcpStatusText(statuses []mcpclient.ServerStatus) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	ready := 0
+	for _, s := range statuses {
+		if s.Status == mcpclient.StatusReady {
+			ready++
+		}
+	}
+	return fmt.Sprintf("mcp %d/%d", ready, len(statuses))
 }
 
 // shortID trims a session ID for the one-line status bar.
@@ -1016,6 +1144,9 @@ func (h *Harness) statusText() string {
 	}
 	if iso := h.isolation(); iso != "" {
 		lines = append(lines, fmt.Sprintf("isolation: %s", iso))
+	}
+	for _, s := range h.MCPServers() {
+		lines = append(lines, fmt.Sprintf("mcp:      %s %s (%s)", s.Name, s.Status, s.Detail))
 	}
 	lines = append(lines, fmt.Sprintf("messages: %d", len(h.Messages())))
 	return strings.Join(lines, "\n")
