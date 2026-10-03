@@ -25,8 +25,12 @@ type fakeRuntime struct {
 	execs             []ExecRequest
 	execResult        ExecResult
 	execErr           error
-	closed            bool
-	nextID            int
+	// ensureImageErr fails image availability; ensuredImages records what was
+	// asked for, so the StartSession wiring is assertable.
+	ensureImageErr error
+	ensuredImages  []string
+	closed         bool
+	nextID         int
 }
 
 func newFakeRuntime() *fakeRuntime {
@@ -42,6 +46,15 @@ func (r *fakeRuntime) id(prefix string) string {
 }
 
 func (r *fakeRuntime) Available(context.Context) error { return r.availableErr }
+
+// EnsureImage implements ImageEnsurer so the session's image-availability step
+// runs against the fake.
+func (r *fakeRuntime) EnsureImage(_ context.Context, image string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensuredImages = append(r.ensuredImages, image)
+	return r.ensureImageErr
+}
 
 func (r *fakeRuntime) CreateNetwork(_ context.Context, req NetworkRequest) (string, error) {
 	r.mu.Lock()

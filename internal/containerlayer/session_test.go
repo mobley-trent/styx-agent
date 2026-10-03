@@ -231,3 +231,67 @@ func hasEnvPrefix(env []string, prefix string) bool {
 	}
 	return false
 }
+
+// TestStartSessionEnsuresImage covers the fresh-host path: StartSession must
+// make the session image available (pulling it when absent) before it touches
+// the network or the container, so the default image works out of the box.
+func TestStartSessionEnsuresImage(t *testing.T) {
+	rt := newFakeRuntime()
+	s, err := StartSession(context.Background(), enforcedOptions(rt, &fakeFirewall{}))
+	if err != nil {
+		t.Fatalf("StartSession() = %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	if len(rt.ensuredImages) != 1 {
+		t.Fatalf("EnsureImage calls = %v, want exactly one", rt.ensuredImages)
+	}
+	if rt.ensuredImages[0] != DefaultImage {
+		t.Errorf("EnsureImage(%q), want the default image %q", rt.ensuredImages[0], DefaultImage)
+	}
+}
+
+// TestStartSessionUsesConfiguredImage ensures the operator's pinned image is
+// what gets made available, not the default.
+func TestStartSessionUsesConfiguredImage(t *testing.T) {
+	rt := newFakeRuntime()
+	opts := enforcedOptions(rt, &fakeFirewall{})
+	opts.Image = "registry.example/styx:1"
+
+	s, err := StartSession(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("StartSession() = %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	if len(rt.ensuredImages) != 1 || rt.ensuredImages[0] != "registry.example/styx:1" {
+		t.Errorf("EnsureImage calls = %v, want the configured image", rt.ensuredImages)
+	}
+	if specs := rt.containerSpecs(); len(specs) != 1 || specs[0].Image != "registry.example/styx:1" {
+		t.Errorf("container image = %+v, want the configured image", specs)
+	}
+}
+
+// TestStartSessionRefusesWhenImageUnavailable is the refuse-never-silent half:
+// when the image cannot be made available, the session must not start — no
+// network, no firewall rules, no container.
+func TestStartSessionRefusesWhenImageUnavailable(t *testing.T) {
+	rt := newFakeRuntime()
+	rt.ensureImageErr = errors.New("pull failed")
+	fw := &fakeFirewall{}
+
+	s, err := StartSession(context.Background(), enforcedOptions(rt, fw))
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("StartSession() = nil error, want a refusal when the image is unavailable")
+	}
+	if !strings.Contains(err.Error(), "pull failed") {
+		t.Errorf("error = %v, want the underlying cause surfaced", err)
+	}
+	if networks, containers := rt.snapshot(); networks != 0 || containers != 0 {
+		t.Errorf("side effects = %d networks, %d containers, want none", networks, containers)
+	}
+	if len(fw.applied) != 0 {
+		t.Errorf("firewall was programmed despite the image refusal: %+v", fw.applied)
+	}
+}
