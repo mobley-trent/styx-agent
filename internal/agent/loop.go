@@ -69,6 +69,10 @@ type PromptRequest struct {
 	// Reason is the engine's audit-facing reason (out-of-scope, rule-match,
 	// default-table).
 	Reason policy.Reason
+	// Subagent is the role of the subagent run that made the call, empty for
+	// the main loop (§4.2, §9.3). The TUI renders it as attribution so a
+	// nested run's prompt is never mistaken for the main stream's.
+	Subagent string
 }
 
 // Prompter resolves a *prompt* verdict. It is the harness's live ask; the
@@ -107,6 +111,9 @@ type DiffRequest struct {
 	Params map[string]any
 	// Diff is the proposed change.
 	Diff *diff.FileDiff
+	// Subagent is the role of the subagent run that staged the change, empty
+	// for the main loop (§4.2).
+	Subagent string
 }
 
 // DiffReviewer resolves a diff-class tool's staged change (§9.2). It runs only
@@ -190,6 +197,8 @@ type Loop struct {
 	emit        func(sessions.Event)
 	isolation   func() audit.Isolation
 	now         func() time.Time
+	subagent    string
+	subagentRun string
 
 	// reviewMu serializes operator interactions that happen during parallel
 	// tool execution (diff reviews and plan approvals), so at most one card
@@ -308,6 +317,25 @@ func WithIsolationProvider(f func() audit.Isolation) LoopOption {
 func WithModel(id string) LoopOption {
 	return func(l *Loop) {
 		l.model = id
+	}
+}
+
+// WithSubagent marks this as a subagent loop for the named role (§4.2). Every
+// audit record, prompt, and emitted event the loop produces is attributed to
+// that role, so a nested run's activity is never mistaken for the main
+// stream's. Empty means the main loop.
+func WithSubagent(role string) LoopOption {
+	return func(l *Loop) {
+		l.subagent = role
+	}
+}
+
+// WithSubagentRun identifies this subagent run within its role, so two
+// concurrent runs of the same preset stay distinct. Empty means the role name
+// is the only attribution.
+func WithSubagentRun(runID string) LoopOption {
+	return func(l *Loop) {
+		l.subagentRun = runID
 	}
 }
 
@@ -642,9 +670,10 @@ func (l *Loop) resolve(ctx context.Context, verdict policy.VerdictResult, call m
 	}
 
 	decision, err := l.prompter.Prompt(ctx, PromptRequest{
-		Tool:   call.Name,
-		Params: params,
-		Reason: verdict.Reason,
+		Tool:     call.Name,
+		Params:   params,
+		Reason:   verdict.Reason,
+		Subagent: l.subagent,
 	})
 	if err != nil {
 		return audit.VerdictDeny, fmt.Errorf("permission prompt for %q: %w", call.Name, err)
@@ -672,6 +701,7 @@ func (l *Loop) writeAudit(call model.ToolCall, params map[string]any, verdict au
 		Params:    params,
 		Verdict:   verdict,
 		Reason:    string(reason),
+		Subagent:  l.subagent,
 		Isolation: l.isolation(),
 	})
 }
@@ -769,7 +799,7 @@ func (l *Loop) review(ctx context.Context, adm *admission, fd *diff.FileDiff) (D
 	if l.acceptRestEnabled() {
 		return DiffAccept, nil
 	}
-	decision, err := l.reviewer.Review(ctx, DiffRequest{Tool: adm.call.Name, Params: adm.params, Diff: fd})
+	decision, err := l.reviewer.Review(ctx, DiffRequest{Tool: adm.call.Name, Params: adm.params, Diff: fd, Subagent: l.subagent})
 	if err != nil {
 		return DiffReject, fmt.Errorf("diff review for %q: %w", adm.call.Name, err)
 	}
@@ -926,6 +956,15 @@ func (l *Loop) emitEvent(ev sessions.Event) {
 	}
 	if ev.Time.IsZero() {
 		ev.Time = l.now()
+	}
+	// Every event a subagent loop emits carries the role, so the TUI can fold
+	// it into the run's block and the session JSONL records where each action
+	// came from (§4.2).
+	if ev.Subagent == "" {
+		ev.Subagent = l.subagent
+	}
+	if ev.RunID == "" {
+		ev.RunID = l.subagentRun
 	}
 	l.emit(ev)
 }

@@ -54,6 +54,12 @@ const (
 	// §9.5): the one-time banner when the session starts, degraded or
 	// enforced. It is never silent.
 	KindIsolation Kind = "isolation"
+	// KindSubagent brackets one subagent run (§4.2). The start event carries
+	// the role and task; the report event carries the run's final report. The
+	// subagent's own inner events carry the same Subagent role, so the TUI can
+	// render one collapsible block per run and the JSONL records the whole
+	// transcript.
+	KindSubagent Kind = "subagent"
 
 	// KindTextDelta is a live streaming fragment of final-answer text. It is
 	// rendered but not persisted: the assembled KindAssistant event carries
@@ -148,9 +154,14 @@ type Event struct {
 	Engagement string `json:"engagement,omitempty"`
 	// Detail is a free-form note (compaction).
 	Detail string `json:"detail,omitempty"`
-	// Subagent attributes the event to a subagent run, empty for the main
-	// loop (§4.2). Reserved: subagents land in a later ticket.
+	// Subagent attributes the event to the role of the subagent run that
+	// produced it, empty for the main loop (§4.2). On a KindSubagent event it
+	// names the run being bracketed.
 	Subagent string `json:"subagent,omitempty"`
+	// RunID identifies one subagent run within its role, so two concurrent
+	// runs of the same preset never fold together in the UI or the JSONL.
+	// Empty for the main loop.
+	RunID string `json:"run_id,omitempty"`
 	// Isolation is the container enforcement level an isolation event
 	// reports (isolation): "container" or "degraded-isolation".
 	Isolation string `json:"isolation,omitempty"`

@@ -87,6 +87,22 @@ func (r *Registry) Lookup(name string) (Tool, bool) {
 	return t, ok
 }
 
+// Subset returns a registry holding only the named tools, in the order given.
+// It is how a subagent run is handed exactly its preset's allowlist, no more:
+// an unknown name is an error rather than a silently weaker run, and a
+// duplicate name is rejected by NewRegistry.
+func (r *Registry) Subset(names ...string) (*Registry, error) {
+	tools := make([]Tool, 0, len(names))
+	for _, name := range names {
+		t, ok := r.tools[name]
+		if !ok {
+			return nil, fmt.Errorf("agent: tool %q is not in this session's tool set", name)
+		}
+		tools = append(tools, t)
+	}
+	return NewRegistry(tools...)
+}
+
 // Names returns the registered tool names in registration order.
 func (r *Registry) Names() []string { return append([]string(nil), r.order...) }
 

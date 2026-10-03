@@ -30,6 +30,13 @@ func callRefs(calls []model.ToolCall) []sessions.ToolCallRef {
 func Conversation(events []sessions.Event) []model.Message {
 	var messages []model.Message
 	for _, ev := range events {
+		// A subagent runs in an isolated context (§4.2): its messages are not
+		// part of the main conversation, only the dispatch call and its report
+		// are. Skip everything attributed to a run or the resumed session would
+		// replay a worker's transcript as the main agent's own.
+		if ev.Subagent != "" {
+			continue
+		}
 		switch ev.Kind {
 		case sessions.KindUser:
 			messages = append(messages, model.Message{Role: model.RoleUser, Content: ev.Text})

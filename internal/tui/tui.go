@@ -13,6 +13,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -29,7 +30,25 @@ const (
 	// diffViewLines is the most lines of an inline diff rendered. A large diff
 	// is summarized rather than flooding the stream.
 	diffViewLines = 40
+	// dispatchToolName is the delegation tool. Its result is the subagent
+	// block's report, so the main stream skips the duplicate result line
+	// (§4.2).
+	dispatchToolName = "dispatch_subagent"
 )
+
+// spinnerInterval is how fast a running subagent's spinner advances.
+const spinnerInterval = 120 * time.Millisecond
+
+// spinnerFrames is the running subagent block's animation.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// spinnerMsg advances the running subagent blocks' spinners.
+type spinnerMsg struct{}
+
+// spinnerTick schedules the next spinner frame.
+func spinnerTick() tea.Cmd {
+	return tea.Tick(spinnerInterval, func(time.Time) tea.Msg { return spinnerMsg{} })
+}
 
 // Status is the persistent one-line status bar (§9.1): operating mode, model,
 // and whatever else the app wants visible.
@@ -110,6 +129,9 @@ type Prompt struct {
 	Reason string
 	// Risk is the call's risk class, empty when none applies.
 	Risk string
+	// Subagent is the role of the subagent run that raised the card, empty
+	// for the main stream (§4.2, §9.3). It is rendered as attribution.
+	Subagent string
 	// Path is the file a diff review touches.
 	Path string
 	// Diff is the staged change under review.
@@ -131,16 +153,83 @@ type PromptMsg struct {
 // busy flag, for instance.
 type RefreshMsg struct{}
 
+// item is one element of the transcript: either a committed line of text or a
+// subagent block. Ordering is the stream's ordering, so a block sits exactly
+// where its run started.
+type item struct {
+	text  string
+	block *subagentBlock
+}
+
+// subagentBlock is one subagent run as the stream renders it (§9.5): a header
+// with a spinner and live preview while running, collapsible to the run's full
+// transcript and report. It is a view over the persisted subagent events — it
+// holds no state the session JSONL does not also hold.
+type subagentBlock struct {
+	runID    string
+	role     string
+	running  bool
+	expanded bool
+	frame    int
+	preview  string
+	lines    []string
+	report   string
+	failure  string
+}
+
+// toggle flips the block between collapsed and expanded.
+func (b *subagentBlock) toggle() { b.expanded = !b.expanded }
+
+// render flattens the block to stream lines: a header always, the transcript
+// and report only when expanded.
+func (b *subagentBlock) render() []string {
+	marker, status := "▸", "done"
+	if b.expanded {
+		marker = "▾"
+	}
+	if b.running {
+		status = spinnerFrames[b.frame%len(spinnerFrames)] + " running"
+	}
+	header := fmt.Sprintf("%s subagent %s · %s", marker, b.role, status)
+	if b.preview != "" {
+		header += " · " + b.preview
+	}
+	out := []string{header}
+	if !b.expanded {
+		return out
+	}
+	for _, ln := range b.lines {
+		out = append(out, "    "+ln)
+	}
+	if b.failure != "" {
+		out = append(out, "    "+failStyle.Render("✗ "+b.failure))
+		return out
+	}
+	if b.report != "" {
+		out = append(out, "    "+cardStyle.Render("─ report ─"))
+		for _, ln := range strings.Split(strings.TrimRight(b.report, "\n"), "\n") {
+			out = append(out, "    "+ln)
+		}
+	}
+	return out
+}
+
 // Model is the thin chat-stream model.
 type Model struct {
 	cfg Config
 
-	lines   []string
+	items   []item
 	partial string
 	input   []rune
 
 	prompt *Prompt
 	reply  func(string)
+
+	// subagents maps a run key to its block, so a run's inner events fold into
+	// the block its start event opened.
+	subagents map[string]*subagentBlock
+	// spinning reports whether a spinner tick is scheduled.
+	spinning bool
 
 	width  int
 	height int
@@ -149,7 +238,7 @@ type Model struct {
 
 // New builds the UI model.
 func New(cfg Config) *Model {
-	return &Model{cfg: cfg, width: 80, height: 24}
+	return &Model{cfg: cfg, width: 80, height: 24, subagents: map[string]*subagentBlock{}}
 }
 
 // Init implements tea.Model.
@@ -164,11 +253,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.key(msg)
 	case EventMsg:
 		m.apply(msg.Event)
+		return m, m.spin()
 	case PromptMsg:
 		m.prompt = &msg.Prompt
 		m.reply = msg.Reply
+	case spinnerMsg:
+		for _, b := range m.subagents {
+			if b.running {
+				b.frame++
+			}
+		}
+		if m.hasRunningSubagent() {
+			m.spinning = true
+			return m, spinnerTick()
+		}
+		m.spinning = false
 	}
 	return m, nil
+}
+
+// spin schedules the spinner tick when a run is active and none is pending.
+func (m *Model) spin() tea.Cmd {
+	if m.spinning || !m.hasRunningSubagent() {
+		return nil
+	}
+	m.spinning = true
+	return spinnerTick()
+}
+
+// hasRunningSubagent reports whether any block is still running.
+func (m *Model) hasRunningSubagent() bool {
+	for _, b := range m.subagents {
+		if b.running {
+			return true
+		}
+	}
+	return false
 }
 
 // key handles one key press.
@@ -186,6 +306,8 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch {
+	case key.Code == tea.KeyTab:
+		m.toggleLatestSubagent()
 	case key.Code == tea.KeyEnter || key.Code == tea.KeyReturn:
 		m.submit()
 	case key.Code == tea.KeyBackspace:
@@ -325,6 +447,9 @@ func (m *Model) promptBlock() []string {
 
 	if p.Kind == PromptDiff {
 		header := "╭─ diff review"
+		if p.Subagent != "" {
+			header += " · subagent " + p.Subagent
+		}
 		if p.Diff != nil {
 			header += " · " + p.Diff.Summary()
 		} else if p.Path != "" {
@@ -344,7 +469,11 @@ func (m *Model) promptBlock() []string {
 		return lines
 	}
 
-	header := "╭─ permission · " + p.Tool
+	header := "╭─ permission · "
+	if p.Subagent != "" {
+		header += "subagent " + p.Subagent + " → "
+	}
+	header += p.Tool
 	if risk := p.riskText(); risk != "" {
 		header += " (" + risk + ")"
 	}
@@ -425,9 +554,18 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// body is the rendered transcript: committed lines plus a live partial answer.
+// body is the rendered transcript: committed lines and subagent blocks in
+// stream order, plus a live partial answer.
 func (m *Model) body() []string {
-	return m.lines
+	var out []string
+	for _, it := range m.items {
+		if it.block != nil {
+			out = append(out, it.block.render()...)
+			continue
+		}
+		out = append(out, it.text)
+	}
+	return out
 }
 
 // inputLine is the prompt with the current buffer and a block cursor.
@@ -463,6 +601,18 @@ func (m *Model) statusLine() string {
 
 // apply renders one session event onto the stream.
 func (m *Model) apply(ev sessions.Event) {
+	// Subagent lifecycle events open, update, and close a collapsible block;
+	// the run's inner events fold into that block rather than the main stream
+	// (§4.2, §9.5).
+	if ev.Kind == sessions.KindSubagent {
+		m.applySubagent(ev)
+		return
+	}
+	if ev.Subagent != "" {
+		m.applySubagentEvent(ev)
+		return
+	}
+
 	switch ev.Kind {
 	case sessions.KindUser:
 		m.commitPartial()
@@ -477,16 +627,21 @@ func (m *Model) apply(ev sessions.Event) {
 		}
 	case sessions.KindToolCall:
 		m.commitPartial()
-		m.append(toolStyle.Render(fmt.Sprintf("  · %s %s → %s", ev.Tool, compactJSON(ev.Params), verdictText(ev))))
+		m.append(toolStyle.Render("  " + toolCallText(ev)))
 	case sessions.KindToolResult:
+		// The delegation result is the subagent block's report; rendering it
+		// again here would duplicate the run.
+		if ev.Tool == dispatchToolName {
+			return
+		}
 		m.commitPartial()
 		switch {
 		case ev.Failure != "":
-			m.append(failStyle.Render("    ✗ " + ev.Failure))
+			m.append(failStyle.Render("    " + toolResultText(ev)))
 		case ev.Result == "":
-			m.append("    (no output)")
+			m.append("    " + toolResultText(ev))
 		default:
-			m.append(indentLines(capLines(ev.Result, viewLines), "    "))
+			m.append(indentLines(toolResultText(ev), "    "))
 		}
 	case sessions.KindDiff:
 		m.commitPartial()
@@ -529,6 +684,119 @@ func (m *Model) apply(ev sessions.Event) {
 	}
 }
 
+// runKey identifies a run: its unique run id, falling back to the role when a
+// producer set no id.
+func runKey(ev sessions.Event) string {
+	if ev.RunID != "" {
+		return ev.RunID
+	}
+	return ev.Subagent
+}
+
+// applySubagent opens, updates, or closes a subagent run's block.
+func (m *Model) applySubagent(ev sessions.Event) {
+	key := runKey(ev)
+	if ev.Detail == "start" {
+		b := &subagentBlock{runID: key, role: ev.Subagent, running: true}
+		b.preview = firstLineText(ev.Text)
+		m.subagents[key] = b
+		m.items = append(m.items, item{block: b})
+		return
+	}
+	b := m.blockFor(key)
+	if b == nil {
+		return
+	}
+	b.running = false
+	switch {
+	case ev.Failure != "":
+		b.failure = ev.Failure
+		b.preview = firstLineText(ev.Failure)
+	case ev.Text != "":
+		b.report = ev.Text
+		b.preview = firstLineText(ev.Text)
+	}
+}
+
+// applySubagentEvent folds one of a run's inner events into its block.
+func (m *Model) applySubagentEvent(ev sessions.Event) {
+	switch ev.Kind {
+	case sessions.KindTextDelta, sessions.KindReasoningDelta:
+		// Deltas are superseded by the assembled assistant event.
+		return
+	}
+	b := m.blockFor(runKey(ev))
+	if b == nil {
+		return
+	}
+	var rendered string
+	switch ev.Kind {
+	case sessions.KindAssistant:
+		rendered = ev.Text
+	case sessions.KindToolCall:
+		rendered = toolCallText(ev)
+	case sessions.KindToolResult:
+		rendered = toolResultText(ev)
+	case sessions.KindDiff:
+		if ev.Diff != nil {
+			rendered = ev.Diff.Summary()
+		}
+	case sessions.KindError:
+		rendered = "! " + ev.Failure
+	}
+	if strings.TrimSpace(rendered) == "" {
+		return
+	}
+	b.lines = append(b.lines, strings.Split(strings.TrimRight(rendered, "\n"), "\n")...)
+	if preview := firstLineText(rendered); preview != "" {
+		b.preview = preview
+	}
+}
+
+// blockFor returns the block for a run key, nil when no run opened it.
+func (m *Model) blockFor(key string) *subagentBlock {
+	return m.subagents[key]
+}
+
+// toggleLatestSubagent expands or collapses the most recent subagent block.
+func (m *Model) toggleLatestSubagent() {
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if b := m.items[i].block; b != nil {
+			b.toggle()
+			return
+		}
+	}
+}
+
+// firstLineText returns a short one-line preview of a block of text.
+func firstLineText(s string) string {
+	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return truncate(line, 80)
+		}
+	}
+	return ""
+}
+
+// toolCallText renders a tool call line, shared by the main stream and a
+// subagent block.
+func toolCallText(ev sessions.Event) string {
+	return fmt.Sprintf("· %s %s → %s", ev.Tool, compactJSON(ev.Params), verdictText(ev))
+}
+
+// toolResultText renders a tool result body, shared by the main stream and a
+// subagent block. The caller supplies its own indentation and styling.
+func toolResultText(ev sessions.Event) string {
+	switch {
+	case ev.Failure != "":
+		return "✗ " + ev.Failure
+	case ev.Result == "":
+		return "(no output)"
+	default:
+		return capLines(ev.Result, viewLines)
+	}
+}
+
 // verdictText renders a tool call's verdict and reason.
 func verdictText(ev sessions.Event) string {
 	if ev.Reason == "" {
@@ -542,7 +810,9 @@ func (m *Model) append(text string) {
 	if strings.TrimRight(text, "\n") == "" {
 		return
 	}
-	m.lines = append(m.lines, strings.Split(strings.TrimRight(text, "\n"), "\n")...)
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		m.items = append(m.items, item{text: line})
+	}
 }
 
 // commitPartial folds a live partial answer into the transcript.

@@ -567,6 +567,27 @@ func TestConversationDropsDanglingToolCall(t *testing.T) {
 	}
 }
 
+func TestConversationIgnoresSubagentActivity(t *testing.T) {
+	events := []sessions.Event{
+		{Kind: sessions.KindUser, Text: "delegate it"},
+		{Kind: sessions.KindAssistant, Calls: []sessions.ToolCallRef{{ID: "d1", Name: "dispatch_subagent"}}},
+		// The subagent's isolated-context messages carry attribution.
+		{Kind: sessions.KindAssistant, Subagent: "coder", Text: "I will read it"},
+		{Kind: sessions.KindToolCall, Subagent: "coder", Tool: "read_file"},
+		{Kind: sessions.KindToolResult, Subagent: "coder", CallID: "s1", Result: "package main\n"},
+		{Kind: sessions.KindToolResult, CallID: "d1", Result: "the report"},
+	}
+	messages := Conversation(events)
+	if len(messages) != 3 {
+		t.Fatalf("messages = %d, want 3 (user, dispatch call, report): %+v", len(messages), messages)
+	}
+	for _, m := range messages {
+		if strings.Contains(m.Content, "I will read it") || strings.Contains(m.Content, "package main") {
+			t.Errorf("subagent activity leaked into the main conversation: %+v", m)
+		}
+	}
+}
+
 func TestConversationKeepsFailureResults(t *testing.T) {
 	events := []sessions.Event{
 		{Kind: sessions.KindUser, Text: "go"},
