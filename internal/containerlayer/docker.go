@@ -6,13 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 )
+
+// defaultImagePullTimeout bounds a missing-image pull. A registry that accepts
+// the connection but never streams would otherwise hang the first exec forever;
+// a stalled pull fails with a clear error instead. The session ctx can still
+// cancel sooner (Ctrl+C in the TUI).
+const defaultImagePullTimeout = 5 * time.Minute
 
 // Docker is the production Runtime: the official Docker SDK for Go, pointed at
 // the local daemon (or DOCKER_HOST / an injected endpoint).
@@ -61,6 +70,35 @@ func NewDocker(opts ...DockerOption) (*Docker, error) {
 func (d *Docker) Available(ctx context.Context) error {
 	if _, err := d.cli.Ping(ctx); err != nil {
 		return fmt.Errorf("containerlayer: docker daemon is not reachable: %w", err)
+	}
+	return nil
+}
+
+// EnsureImage implements ImageEnsurer. It inspects the local image and pulls it
+// only when absent, so an already-present image costs no network. The pull is
+// bounded so an unresponsive registry cannot hang the exec tools indefinitely.
+func (d *Docker) EnsureImage(ctx context.Context, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return errors.New("containerlayer: ensure image: image is required")
+	}
+	if _, err := d.cli.ImageInspect(ctx, ref); err == nil {
+		return nil
+	} else if !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("containerlayer: inspect image %s: %w", ref, err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, defaultImagePullTimeout)
+	defer cancel()
+	rc, err := d.cli.ImagePull(ctx, ref, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("containerlayer: pull image %s: %w", ref, err)
+	}
+	defer func() { _ = rc.Close() }()
+	// The pull stream is progress JSON; draining it is what completes the
+	// pull and surfaces a mid-stream error.
+	if _, err := io.Copy(io.Discard, rc); err != nil {
+		return fmt.Errorf("containerlayer: pull image %s: %w", ref, err)
 	}
 	return nil
 }
@@ -185,3 +223,6 @@ func (d *Docker) Close() error {
 
 // compile-time assertion: the SDK runtime satisfies Runtime.
 var _ Runtime = (*Docker)(nil)
+
+// and it can make the pinned session image available.
+var _ ImageEnsurer = (*Docker)(nil)

@@ -111,6 +111,18 @@ type Runtime interface {
 	Close() error
 }
 
+// ImageEnsurer is implemented by runtimes that can make the session image
+// available locally, pulling it when it is missing. StartSession calls it when
+// present, so a fresh host runs the first exec instead of failing with a bare
+// daemon "no such image" — the harness still ships no image, it only fetches
+// the one the operator pinned. Fakes that do not manage images need not
+// implement it.
+type ImageEnsurer interface {
+	// EnsureImage makes image present locally. A non-nil error means the
+	// image is not usable and the session must not start.
+	EnsureImage(ctx context.Context, image string) error
+}
+
 // NetworkRequest describes the per-session bridge network (§5.2). Internal
 // networks have no external route; the degraded fallback uses them.
 type NetworkRequest struct {

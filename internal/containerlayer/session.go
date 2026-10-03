@@ -108,6 +108,16 @@ func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 		workspace = DefaultContainerWorkspace
 	}
 
+	// Make the image available before touching the network or the firewall: a
+	// fresh host has no session image, and failing after programming rules and
+	// a network would mean tearing all of it back down. Runtimes that manage no
+	// images (fakes) skip this.
+	if ensurer, ok := opts.Runtime.(ImageEnsurer); ok {
+		if err := ensurer.EnsureImage(ctx, image); err != nil {
+			return nil, err
+		}
+	}
+
 	id := sessionID(opts.Name)
 	bridge := bridgeName(id)
 	subnet, gateway := sessionSubnet(id)
