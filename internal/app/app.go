@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mobley-trent/styx-agent/internal/agent"
+	"github.com/mobley-trent/styx-agent/internal/agent/subagent"
 	"github.com/mobley-trent/styx-agent/internal/audit"
 	"github.com/mobley-trent/styx-agent/internal/config"
 	"github.com/mobley-trent/styx-agent/internal/containerlayer"
@@ -327,7 +328,7 @@ func (h *Harness) configure() error {
 
 	fetcher, logFetcher := h.networkTooling(eng)
 
-	tools, err := agent.NewRegistry(
+	baseTools := []agent.Tool{
 		agent.ReadFileTool(h.WorkDir),
 		agent.WriteFileTool(h.WorkDir),
 		agent.EditFileTool(h.WorkDir),
@@ -338,7 +339,35 @@ func (h *Harness) configure() error {
 		agent.WebFetchTool(fetcher),
 		agent.SSHLogsTool(logFetcher),
 		agent.ProposePlanTool(),
-	)
+	}
+	base, err := agent.NewRegistry(baseTools...)
+	if err != nil {
+		if container != nil {
+			_ = container.Close()
+		}
+		return err
+	}
+
+	// Delegation is a tool (§4.2). The runner draws each subagent's allowlist
+	// from the base registry — never the delegation tool — and reuses the
+	// session's loop options, so a nested run is governed by the same policy
+	// engine, audit trail, operator, and container as the main loop.
+	dispatcher := subagent.New(subagent.Config{
+		Client:   h.client,
+		Registry: base,
+		Engine:   engine,
+		Audit:    h.audit,
+		Options:  h.loopOptions(),
+		Emit:     h.emit,
+		ExploitAllowed: func() bool {
+			_, eng := h.modeAndEngagement()
+			return eng != nil && eng.ROE().ExploitAllowed
+		},
+	})
+	dispatchTool := agent.DispatchSubagentTool(dispatcher)
+	dispatchTool.Description = subagent.ToolDescription()
+
+	tools, err := agent.NewRegistry(append(append([]agent.Tool(nil), baseTools...), dispatchTool)...)
 	if err != nil {
 		if container != nil {
 			_ = container.Close()
@@ -804,11 +833,12 @@ type operator struct{ h *Harness }
 // permission card and maps the operator's choice onto a loop decision.
 func (o operator) Prompt(ctx context.Context, req agent.PromptRequest) (agent.Decision, error) {
 	choice, err := o.h.askOperator(ctx, tui.Prompt{
-		Kind:   tui.PromptPermission,
-		Tool:   req.Tool,
-		Params: req.Params,
-		Reason: string(req.Reason),
-		Risk:   riskClass(req.Tool),
+		Kind:     tui.PromptPermission,
+		Tool:     req.Tool,
+		Params:   req.Params,
+		Reason:   string(req.Reason),
+		Risk:     riskClass(req.Tool),
+		Subagent: req.Subagent,
 	})
 	if err != nil {
 		return agent.DecisionDeny, err
@@ -827,11 +857,12 @@ func (o operator) Prompt(ctx context.Context, req agent.PromptRequest) (agent.De
 // diff and maps the operator's choice onto a review decision.
 func (o operator) Review(ctx context.Context, req agent.DiffRequest) (agent.DiffDecision, error) {
 	choice, err := o.h.askOperator(ctx, tui.Prompt{
-		Kind:   tui.PromptDiff,
-		Tool:   req.Tool,
-		Params: req.Params,
-		Path:   req.Diff.Path,
-		Diff:   req.Diff,
+		Kind:     tui.PromptDiff,
+		Tool:     req.Tool,
+		Params:   req.Params,
+		Path:     req.Diff.Path,
+		Diff:     req.Diff,
+		Subagent: req.Subagent,
 	})
 	if err != nil {
 		return agent.DiffReject, err

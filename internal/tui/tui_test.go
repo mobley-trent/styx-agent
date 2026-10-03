@@ -320,3 +320,96 @@ func TestToolResultDisplayIsCapped(t *testing.T) {
 		t.Errorf("a long tool result is not capped in the stream:\n%s", got)
 	}
 }
+
+func TestPermissionCardShowsSubagentAttribution(t *testing.T) {
+	h := newHarness(t)
+	h.update(PromptMsg{
+		Prompt: Prompt{Kind: PromptPermission, Tool: "bash", Subagent: "recon", Params: map[string]any{"command": "nmap -sV target"}},
+		Reply:  func(string) {},
+	})
+	got := h.view()
+	if !strings.Contains(got, "subagent recon") || !strings.Contains(got, "bash") {
+		t.Errorf("permission card lacks subagent attribution:\n%s", got)
+	}
+}
+
+func TestSubagentBlockCollapsesAndExpands(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "start", Text: "fix the build",
+	}})
+	got := h.view()
+	for _, want := range []string{"subagent coder", "running", "fix the build"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("running block is missing %q:\n%s", want, got)
+		}
+	}
+
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindToolCall, Subagent: "coder", Tool: "read_file",
+		Params: map[string]any{"path": "main.go"}, Verdict: "allow",
+	}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindToolResult, Subagent: "coder", Tool: "read_file", Result: "package main\n",
+	}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "report", Text: "build fixed",
+	}})
+
+	// Collapsed: the run's transcript is folded away, only its preview shows.
+	got = h.view()
+	if !strings.Contains(got, "done") || !strings.Contains(got, "build fixed") {
+		t.Fatalf("finished block header is wrong:\n%s", got)
+	}
+	if strings.Contains(got, "package main") {
+		t.Errorf("collapsed block leaked its transcript:\n%s", got)
+	}
+
+	// Expanded: the full transcript and the report become visible.
+	h.update(tea.KeyPressMsg{Code: tea.KeyTab})
+	got = h.view()
+	for _, want := range []string{"package main", "build fixed", "report"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expanded block is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSubagentBlocksSeparateSameRoleRuns(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindSubagent, Subagent: "coder", RunID: "coder-1", Detail: "start", Text: "first",
+	}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindSubagent, Subagent: "coder", RunID: "coder-2", Detail: "start", Text: "second",
+	}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindToolResult, Subagent: "coder", RunID: "coder-1", Tool: "read_file", Result: "first-output",
+	}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindToolResult, Subagent: "coder", RunID: "coder-2", Tool: "read_file", Result: "second-output",
+	}})
+
+	// Each run's transcript holds only its own events.
+	b1 := h.model.subagents["coder-1"]
+	b2 := h.model.subagents["coder-2"]
+	if b1 == nil || b2 == nil {
+		t.Fatalf("blocks = %v, want one per run", h.model.subagents)
+	}
+	if len(b1.lines) != 1 || b1.lines[0] != "first-output" {
+		t.Errorf("run coder-1 transcript = %v, want only its own output", b1.lines)
+	}
+	if len(b2.lines) != 1 || b2.lines[0] != "second-output" {
+		t.Errorf("run coder-2 transcript = %v, want only its own output", b2.lines)
+	}
+}
+
+func TestSubagentBlockSuppressesDispatchResult(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindToolResult, Tool: "dispatch_subagent", Result: "the duplicated report",
+	}})
+	if strings.Contains(h.view(), "the duplicated report") {
+		t.Errorf("the dispatch result was rendered twice:\n%s", h.view())
+	}
+}
