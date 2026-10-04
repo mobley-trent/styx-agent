@@ -26,3 +26,6 @@ build/
 
 # styx runtime artifacts (the per-session audit trail)
 styx-audit-*.jsonl
+
+# Harness-engineering teaching workspace (course artifacts, not product code)
+/learning/

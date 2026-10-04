@@ -2,6 +2,13 @@
 
 Guidance for AI coding agents working in this repository.
 
+## Learning workspace
+
+Harness-engineering teaching artifacts live in `learning/` — a self-contained workspace
+(`MISSION.md`, `RESOURCES.md`, `NOTES.md`, `lessons/`, `reference/`, `assets/`,
+`learning-records/`). It is gitignored and is not product code. When running a teaching
+session, treat `learning/` as the workspace root and read `learning/MISSION.md` first.
+
 ## Agent skills
 
 ### Issue tracker
