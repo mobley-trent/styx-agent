@@ -67,6 +67,7 @@ func runTUI(ctx context.Context, h *Harness) error {
 
 	model := tui.New(tui.Config{
 		Status:  func() tui.Status { return h.Status(busy.Load()) },
+		Version: h.Version,
 		Submit:  submit,
 		Clear:   h.ClearConversation,
 		Command: h.command,
