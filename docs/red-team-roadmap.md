@@ -112,6 +112,7 @@ the safety invariants before the next opens.
 
 ## 5. Open — designs yet to be decided
 
-Graduated as tickets on the map, or still in its fog: the findings/state schema, parser→state
-contracts, graph/path algorithm (substrate); headless severity-gating details and sandbox-image
-contents (operating surface); and the reach and provider designs.
+Graduated as tickets on the map, or still in its fog: parser→state contracts, graph/path
+algorithm (substrate; the findings/state schema is decided in
+[`docs/engagement-state.md`](engagement-state.md)); headless severity-gating details and
+sandbox-image contents (operating surface); and the reach and provider designs.

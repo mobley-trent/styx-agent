@@ -75,8 +75,9 @@ the engagement. A visible, audited downgrade — never silent, never the quiet d
 
 **Engagement state**
 The per-engagement structured record — hosts, services, findings, credentials, access, and
-network segments — that survives sessions and feeds the prompt. Bound to the engagement
-boundary; never compacted away and never model-invented.
+network segments — that survives sessions and feeds the prompt as a derived view.
+Observations only: authorization is never part of it. Never compacted away, never
+model-invented.
 
 **Finding**
 A structured result in engagement state: a vulnerability or observation with severity,
@@ -85,6 +86,15 @@ status, confidence, and its evidence.
 **Evidence**
 The verification record attached to a finding. A finding without evidence is unvalidated.
 
+**Credential**
+A captured secret — password, hash, key, or token — with its principal and where it came from.
+
+**Access**
+A foothold: an established principal operating on a target at a stated level (user, admin, system).
+
+**Segment**
+A labeled network range grouping hosts in engagement state.
+
 **Relationship graph**
 The typed entity graph over engagement state — how hosts, services, credentials, and access
 relate.
@@ -92,6 +102,12 @@ relate.
 **Attack path**
 A suggested route through the relationship graph from current access to a target, surfaced
 for the model to act on. A suggestion, never an auto-executed step.
+
+**State digest**
+The compact, derived view of engagement state appended to the conversation when state changes — a view of the record, never the record itself.
+
+**Provenance**
+The harness-stamped origin of a state mutation: tool or model, subagent attribution, session, and timestamp. Never model-supplied.
 
 **Exploitation autonomy level**
 The operator-set engagement flag that widens in-scope exploit approval within the rules of
