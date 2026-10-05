@@ -69,6 +69,10 @@ const (
 	// persisted so the session's cost is reconstructable from its own log, and
 	// it is what the status bar's spend readout is folded from.
 	KindUsage Kind = "usage"
+	// KindUpdate reports that a newer styx release is available (§12.3). It is
+	// emitted at most once per session by the opt-out notifier and carries the
+	// upgrade hint in Detail.
+	KindUpdate Kind = "update"
 
 	// KindTextDelta is a live streaming fragment of final-answer text. It is
 	// rendered but not persisted: the assembled KindAssistant event carries

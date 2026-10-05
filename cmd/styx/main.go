@@ -15,9 +15,11 @@ import (
 	"strings"
 
 	"github.com/mobley-trent/styx-agent/internal/app"
+	"github.com/mobley-trent/styx-agent/internal/update"
 )
 
 const usage = `Usage: styx [flags]
+       styx update
 
 styx-agent: a terminal agent harness for coding plus red-team, reverse-
 engineering, and blue-team work, with harness-enforced dual-mode safety.
@@ -28,6 +30,10 @@ Flags:
   --project <dir>       Project root to run in (default: the working directory)
   --version             Print the styx version
   --help, -h            Show this help
+
+Commands:
+  update                Print the latest release and the upgrade command for
+                        the detected install source (no self-updater)
 
 Environment:
   DEEPSEEK_API_KEY      DeepSeek credential (required; env-only, never persisted)
@@ -71,20 +77,52 @@ func run(argv []string, version string) (stdout, stderr string, exitCode int) {
 		return usage, "", 0
 	case opts.version:
 		return fmt.Sprintf("styx %s\n", version), "", 0
+	case opts.update:
+		return runUpdate(context.Background(), version)
 	}
 
 	if err := runApp(context.Background(), app.Options{
-		Engagement: opts.engagement,
-		ProjectDir: opts.project,
-		Version:    version,
-		Stdin:      os.Stdin,
-		Stdout:     os.Stdout,
-		Stderr:     os.Stderr,
+		Engagement:  opts.engagement,
+		ProjectDir:  opts.project,
+		Version:     version,
+		SourceBuild: isSourceBuild(),
+		Stdin:       os.Stdin,
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
 	}); err != nil {
 		return "", fmt.Sprintf("styx: %v\n", err), 1
 	}
 	return "", "", 0
 }
+
+// runUpdate implements `styx update` (§12.3): compare the running version with
+// the latest release and print the exact upgrade command for the detected
+// install source. It never rewrites the binary.
+func runUpdate(ctx context.Context, version string) (stdout, stderr string, exitCode int) {
+	source := update.Unknown
+	if exe, err := executablePath(); err == nil {
+		source = update.DetectSource(exe, os.Getenv)
+	}
+
+	rel, err := fetchLatest(ctx, version)
+	if err != nil {
+		// An unreachable endpoint must not hide the useful half of the
+		// report: the operator still gets the detected source and command.
+		return update.Report(version, update.Release{}, source) + "\n",
+			fmt.Sprintf("styx: update check failed: %v\n", err), 1
+	}
+	return update.Report(version, rel, source) + "\n", "", 0
+}
+
+// fetchLatest is the `styx update` network seam. Tests replace it so no test
+// touches the network.
+var fetchLatest = func(ctx context.Context, current string) (update.Release, error) {
+	rel, _, err := update.NewNotifier(current, nil).Check(ctx)
+	return rel, err
+}
+
+// executablePath locates the running binary; tests replace it.
+var executablePath = os.Executable
 
 // cliOptions is the parsed command line.
 type cliOptions struct {
@@ -92,6 +130,7 @@ type cliOptions struct {
 	project    string
 	help       bool
 	version    bool
+	update     bool
 }
 
 // parseArgs parses the harness's flags. It accepts both `--flag value` and
@@ -120,6 +159,9 @@ func parseArgs(args []string) (cliOptions, error) {
 		case "--version":
 			opts.version = true
 			continue
+		case "update":
+			opts.update = true
+			continue
 		case "--engagement":
 			target = &opts.engagement
 		case "--project":
@@ -144,6 +186,15 @@ func parseArgs(args []string) (cliOptions, error) {
 // (-X main.versionOverride). Empty for regular builds, which fall back to
 // VCS-stamped build info, then "dev".
 var versionOverride string
+
+// releaseBuild is stamped "1" at release build time. Its absence marks a
+// source build (go build / go install), for which the update notifier is
+// disabled (§12.1, §12.3).
+var releaseBuild string
+
+// isSourceBuild reports whether this binary was built from source rather than
+// shipped as a release artifact.
+func isSourceBuild() bool { return releaseBuild == "" }
 
 // moduleVersion reports the version for --version output. Release binaries
 // are stamped by goreleaser; unstamped builds report "dev".

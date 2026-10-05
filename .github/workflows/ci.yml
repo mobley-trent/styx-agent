@@ -30,6 +30,12 @@ jobs:
         with:
           version: v2.14
 
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
+
       - name: Test
         run: go test -race ./...
 

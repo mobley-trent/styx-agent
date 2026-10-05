@@ -741,6 +741,9 @@ func (m *Model) apply(ev sessions.Event) {
 		// launch, crashed, or disconnected must never be silent (§5.5).
 		m.commitPartial()
 		m.append(mcpLine(m.styles, ev))
+	case sessions.KindUpdate:
+		m.commitPartial()
+		m.append(m.styles.card.Render("↑ " + ev.Detail))
 	case sessions.KindError:
 		m.commitPartial()
 		m.append(m.styles.fail.Render("! " + ev.Failure))

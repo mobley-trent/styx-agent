@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mobley-trent/styx-agent/internal/app"
+	"github.com/mobley-trent/styx-agent/internal/update"
 )
 
 func TestRun(t *testing.T) {
@@ -139,6 +140,71 @@ func TestRunReportsLaunchFailure(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "refusing to start") {
 		t.Errorf("stderr = %q, want the launch failure", stderr)
+	}
+}
+
+func TestRunUpdate(t *testing.T) {
+	tests := []struct {
+		name     string
+		exe      string
+		exeErr   error
+		rel      update.Release
+		fetchErr error
+		wantOut  []string
+		wantErr  string
+		code     int
+	}{
+		{
+			name:    "homebrew source prints the tap upgrade",
+			exe:     "/opt/homebrew/Cellar/styx/0.1.0/bin/styx",
+			rel:     update.Release{Version: "v0.2.0", URL: "https://example/rel"},
+			wantOut: []string{"current: v0.1.0", "latest:  v0.2.0", "brew upgrade mobley-trent/styx/styx"},
+			code:    0,
+		},
+		{
+			name:    "unknown source points at the releases page",
+			exe:     "/usr/local/bin/styx",
+			rel:     update.Release{Version: "v0.1.0"},
+			wantOut: []string{"already up to date"},
+			code:    0,
+		},
+		{
+			name:     "fetch failure still prints the upgrade command",
+			exe:      "/home/eddy/.local/bin/styx",
+			fetchErr: errors.New("offline"),
+			wantOut:  []string{"curl -fsSL https://raw.githubusercontent.com/mobley-trent/styx-agent/main/install.sh | sh"},
+			wantErr:  "update check failed",
+			code:     1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Pin HOME/GOPATH so install-source detection is deterministic
+			// regardless of the machine running the tests.
+			t.Setenv("HOME", "/home/eddy")
+			t.Setenv("GOPATH", "")
+			t.Setenv("GOBIN", "")
+			previousExe, previousFetch := executablePath, fetchLatest
+			t.Cleanup(func() { executablePath, fetchLatest = previousExe, previousFetch })
+			executablePath = func() (string, error) { return tt.exe, tt.exeErr }
+			fetchLatest = func(context.Context, string) (update.Release, error) {
+				return tt.rel, tt.fetchErr
+			}
+
+			stdout, stderr, code := run([]string{"styx", "update"}, "v0.1.0")
+			if code != tt.code {
+				t.Fatalf("exit code = %d, want %d (stderr=%q)", code, tt.code, stderr)
+			}
+			for _, want := range tt.wantOut {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("stdout %q does not contain %q", stdout, want)
+				}
+			}
+			if tt.wantErr != "" && !strings.Contains(stderr, tt.wantErr) {
+				t.Errorf("stderr %q does not contain %q", stderr, tt.wantErr)
+			}
+		})
 	}
 }
 
