@@ -427,3 +427,24 @@ func TestSubagentBlockSuppressesDispatchResult(t *testing.T) {
 		t.Errorf("the dispatch result was rendered twice:\n%s", h.view())
 	}
 }
+
+func TestStatusBarShowsCompactionLevel(t *testing.T) {
+	m := New(Config{Status: func() Status {
+		return Status{Mode: "safe", Model: "deepseek-flash", Compaction: "ctx 42%"}
+	}})
+	if got := m.View().Content; !strings.Contains(got, "ctx 42%") {
+		t.Errorf("status bar does not surface the compaction level:\n%s", got)
+	}
+}
+
+func TestStreamRendersCompaction(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind:   sessions.KindCompaction,
+		Detail: "context 87% → 41%: evicted 2 tool result(s)",
+	}})
+	got := h.view()
+	if !strings.Contains(got, "compacted") || !strings.Contains(got, "evicted 2 tool result(s)") {
+		t.Errorf("compaction card is not rendered:\n%s", got)
+	}
+}

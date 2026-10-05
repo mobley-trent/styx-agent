@@ -21,6 +21,7 @@ const helpText = `commands:
   /engagement    list engagement files, or activate one with /engagement <file>
   /mode [safe]   show the operating mode, or return to safe mode (tears the engagement down)
   /resume [id]   list past sessions, or restore one by id
+  /compact [in]  compact context now, with an optional custom instruction
   /quit          leave styx
 
 Anything else is sent to the model.`
@@ -89,6 +90,8 @@ func (h *Harness) command(name, arg string) (string, error) {
 		return h.modeCommand(arg)
 	case "resume":
 		return h.resumeCommand(arg)
+	case "compact":
+		return h.Compact(context.Background(), strings.TrimSpace(arg))
 	default:
 		return "", fmt.Errorf("unknown command %q; try /help", name)
 	}
