@@ -13,6 +13,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/model"
 	"github.com/mobley-trent/styx-agent/internal/model/fakemodel"
 	"github.com/mobley-trent/styx-agent/internal/policy"
+	"github.com/mobley-trent/styx-agent/internal/sessions"
 )
 
 // engagementFixture is the repo's IP-only engagement fixture: it loads without
@@ -320,5 +321,91 @@ func TestMemoryLoadsIntoPrompt(t *testing.T) {
 
 	if !strings.Contains(h.Prompt, "# Project memory (STYX.md)") || !strings.Contains(h.Prompt, "Run make check.") {
 		t.Errorf("project memory did not reach the prompt:\n%s", h.Prompt)
+	}
+}
+
+func TestCompactionFiresPersistsAndSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "big.txt", strings.Repeat("noise line\n", 3000))
+	writeFile(t, dir, "small.txt", "ok\n")
+	writeFile(t, dir, filepath.Join(".styx", "config.yaml"), `model: deepseek-flash
+models:
+  - id: deepseek-flash
+    context_window: 100
+    input_per_million: 0.3
+    output_per_million: 1.2
+    cache_hit_per_million: 0.006
+compaction:
+  mode: auto
+  threshold: 0.85
+  keep_turns: 1
+`)
+
+	fake := fakemodel.New(fakemodel.WithTurns(
+		fakemodel.ToolCalls(fakemodel.Call("c1", "read_file", `{"path":"big.txt"}`)),
+		fakemodel.Text("first done"),
+		fakemodel.ToolCalls(fakemodel.Call("c2", "read_file", `{"path":"small.txt"}`)),
+		fakemodel.Text("second done"),
+	))
+	h, err := Build(context.Background(), buildOptions(t, dir, fake))
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	if err := h.Submit(context.Background(), "read the big file"); err != nil {
+		t.Fatalf("first Submit() = %v", err)
+	}
+	if err := h.Submit(context.Background(), "now read the small file"); err != nil {
+		t.Fatalf("second Submit() = %v", err)
+	}
+
+	// The old tool result was evicted and the session conversation replaced,
+	// not appended to (a compaction that the next turn replays away is a bug).
+	foundEviction := false
+	for _, m := range h.Messages() {
+		if strings.Contains(m.Content, "evicted at compaction") {
+			foundEviction = true
+		}
+	}
+	if !foundEviction {
+		t.Error("the session conversation does not reflect the compaction")
+	}
+
+	// The compaction is a persisted session event (§4.3, §10.1).
+	events, err := h.sessions.Replay(dir, h.SessionID())
+	if err != nil {
+		t.Fatalf("Replay() = %v", err)
+	}
+	var compactions []sessions.Event
+	for _, ev := range events {
+		if ev.Kind == sessions.KindCompaction {
+			compactions = append(compactions, ev)
+		}
+	}
+	if len(compactions) == 0 {
+		t.Fatal("no compaction event was persisted")
+	}
+	if compactions[0].Detail == "" {
+		t.Error("persisted compaction event carries no detail")
+	}
+
+	// The status bar surfaces the context level (§9.1).
+	if st := h.Status(false); st.Compaction == "" {
+		t.Error("status bar does not surface the compaction level")
+	}
+
+	// The manual override honors a custom instruction and reaches the
+	// summarizer.
+	fake.Append(fakemodel.Text("condensed"))
+	if _, err := h.Compact(context.Background(), "preserve every file path"); err != nil {
+		t.Fatalf("Compact() = %v", err)
+	}
+	last, ok := fake.LastRequest()
+	if !ok {
+		t.Fatal("the summarizer never called the model")
+	}
+	if len(last.Messages) < 2 || !strings.Contains(last.Messages[1].Content, "preserve every file path") {
+		t.Errorf("the custom /compact instruction did not reach the summarizer: %+v", last.Messages)
 	}
 }

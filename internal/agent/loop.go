@@ -169,8 +169,10 @@ func (DenyPlanApprover) Approve(context.Context, Plan) (bool, error) {
 type Result struct {
 	// Answer is the model's final answer text.
 	Answer string
-	// Messages are the messages the run appended after the history it was
-	// given: assistant turns and tool results, in order.
+	// Messages is the full conversation after the run, excluding the system
+	// prompt: the history the run was given, the input, and every assistant
+	// turn and tool result appended, in order. It is post-compaction, so a
+	// caller that stores conversations must replace rather than append (§4.5).
 	Messages []model.Message
 	// Turns is how many model turns the run consumed.
 	Turns int
@@ -199,6 +201,11 @@ type Loop struct {
 	now         func() time.Time
 	subagent    string
 	subagentRun string
+	compactor   *Compactor
+
+	// compactArmed is the hysteresis flag for auto-compaction (§4.5). It is
+	// per-loop, so a shared Compactor carries no per-conversation state.
+	compactArmed bool
 
 	// reviewMu serializes operator interactions that happen during parallel
 	// tool execution (diff reviews and plan approvals), so at most one card
@@ -339,26 +346,38 @@ func WithSubagentRun(runID string) LoopOption {
 	}
 }
 
+// WithCompactor installs context compaction (§4.5). Nil (the default) leaves
+// the loop uncompacted. The compactor is stateless, so one instance may be
+// shared across loops; the hysteresis flag lives on each loop.
+func WithCompactor(c *Compactor) LoopOption {
+	return func(l *Loop) {
+		if c != nil {
+			l.compactor = c
+		}
+	}
+}
+
 // NewLoop builds a loop. Then systemPrompt is the byte-stable prefix (§3.3);
 // the audit writer may be nil, in which case every call is denied — the
 // fail-closed reading of "the audit trail could not be written".
 func NewLoop(client model.ModelClient, tools *Registry, engine *policy.Engine, aud AuditWriter, systemPrompt string, opts ...LoopOption) *Loop {
 	l := &Loop{
-		client:      client,
-		tools:       tools,
-		engine:      engine,
-		audit:       aud,
-		prompt:      systemPrompt,
-		maxTurns:    DefaultMaxTurns,
-		maxParallel: DefaultMaxParallel,
-		maxRepairs:  DefaultMaxRepairs,
-		maxOutput:   DefaultMaxToolOutput,
-		prompter:    DenyPrompter{},
-		reviewer:    AutoReviewer{},
-		planner:     DenyPlanApprover{},
-		isolation:   func() audit.Isolation { return "" },
-		session:     make(map[string]bool),
-		now:         time.Now,
+		client:       client,
+		tools:        tools,
+		engine:       engine,
+		audit:        aud,
+		prompt:       systemPrompt,
+		maxTurns:     DefaultMaxTurns,
+		maxParallel:  DefaultMaxParallel,
+		maxRepairs:   DefaultMaxRepairs,
+		maxOutput:    DefaultMaxToolOutput,
+		prompter:     DenyPrompter{},
+		reviewer:     AutoReviewer{},
+		planner:      DenyPlanApprover{},
+		isolation:    func() audit.Isolation { return "" },
+		session:      make(map[string]bool),
+		now:          time.Now,
+		compactArmed: true,
 	}
 	for _, opt := range opts {
 		opt(l)
@@ -384,18 +403,23 @@ func (l *Loop) Run(ctx context.Context, history []model.Message, input string) (
 	// turns — the model is told what was wrong and calls again (§4.1).
 	repairer := repair.NewRepairer(repair.NewValidator(l.tools.Descriptors()), l.maxRepairs)
 
-	base := 1 + len(history)
 	for turn := 1; ; turn++ {
 		if turn > l.maxTurns {
 			err := fmt.Errorf("%w: %d turns without a final answer", ErrTurnCap, l.maxTurns)
 			l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: err.Error()})
-			return Result{Turns: turn - 1, Messages: messages[base:]}, err
+			return Result{Turns: turn - 1, Messages: conversation(messages)}, err
 		}
+
+		// Compaction is a between-turns concern (§4.5): it runs at the
+		// boundary before each model call — including the first, so an
+		// over-threshold history (a long resumed session) is compacted before
+		// it is sent — and never while a turn's tool calls are in flight.
+		messages = l.maybeCompact(ctx, messages, turn)
 
 		out, err := l.streamTurn(ctx, messages, turn)
 		if err != nil {
 			l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: err.Error()})
-			return Result{Turns: turn, Messages: messages[base:]}, err
+			return Result{Turns: turn, Messages: conversation(messages)}, err
 		}
 
 		messages = append(messages, model.Message{
@@ -413,16 +437,51 @@ func (l *Loop) Run(ctx context.Context, history []model.Message, input string) (
 		})
 
 		if len(out.calls) == 0 {
-			return Result{Answer: out.text, Turns: turn, Messages: messages[base:]}, nil
+			return Result{Answer: out.text, Turns: turn, Messages: conversation(messages)}, nil
 		}
 
 		results, err := l.dispatch(ctx, repairer, out.calls, turn)
 		messages = append(messages, results...)
 		if err != nil {
 			l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: err.Error()})
-			return Result{Turns: turn, Messages: messages[base:]}, err
+			return Result{Turns: turn, Messages: conversation(messages)}, err
 		}
 	}
+}
+
+// conversation returns the model conversation without its system prompt. The
+// system prompt is the byte-stable prefix and is never part of the transcript
+// (§3.3); compaction must never see it.
+func conversation(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	return messages[1:]
+}
+
+// maybeCompact runs the automatic compaction path between turns (§4.5),
+// preserving the system prompt byte-for-byte and emitting the session event.
+func (l *Loop) maybeCompact(ctx context.Context, messages []model.Message, turn int) []model.Message {
+	if l.compactor == nil || len(messages) == 0 {
+		return messages
+	}
+	out, result, armed, err := l.compactor.MaybeCompact(ctx, messages[1:], l.compactArmed)
+	l.compactArmed = armed
+	if err != nil {
+		// Compaction is best-effort: a failed summarization leaves the
+		// conversation intact and surfaces the failure rather than aborting
+		// the run.
+		l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: "compaction failed: " + err.Error()})
+		return messages
+	}
+	if result == nil {
+		return messages
+	}
+	compacted := make([]model.Message, 0, len(out)+1)
+	compacted = append(compacted, messages[0])
+	compacted = append(compacted, out...)
+	l.emitEvent(sessions.Event{Kind: sessions.KindCompaction, Turn: turn, Detail: result.Detail})
+	return compacted
 }
 
 // turnOutput is one streamed model turn, assembled.

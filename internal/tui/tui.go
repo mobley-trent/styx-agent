@@ -65,6 +65,9 @@ type Status struct {
 	// MCP is the connected-server summary ("mcp 2/2"), empty when the project
 	// configures no MCP servers (§5.5, §9.1).
 	MCP string
+	// Compaction is the context-fill readout ("ctx 42%"), empty when the
+	// model's context window is unknown (§4.5, §9.1).
+	Compaction string
 	// Busy is true while the loop is working a turn.
 	Busy bool
 }
@@ -591,6 +594,9 @@ func (m *Model) statusLine() string {
 	}
 	if status.MCP != "" {
 		parts = append(parts, status.MCP)
+	}
+	if status.Compaction != "" {
+		parts = append(parts, status.Compaction)
 	}
 	if status.Session != "" {
 		parts = append(parts, status.Session)

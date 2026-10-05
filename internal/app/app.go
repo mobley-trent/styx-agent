@@ -107,6 +107,7 @@ type Harness struct {
 	audit     *audit.Writer
 	container *containerlayer.Manager
 	mcp       *mcpclient.Manager
+	compactor *agent.Compactor
 	out       io.Writer
 	now       func() time.Time
 	warned    bool
@@ -233,6 +234,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		Version:        opts.Version,
 		sessions:       store,
 		audit:          auditWriter,
+		compactor:      newCompactor(cfg, client),
 		out:            out,
 		now:            now,
 		session:        session,
@@ -496,7 +498,24 @@ func (h *Harness) loopOptions() []agent.LoopOption {
 		agent.WithDiffReviewer(operator{h}),
 		agent.WithPlanApprover(operator{h}),
 		agent.WithIsolationProvider(func() audit.Isolation { return h.isolation() }),
+		agent.WithCompactor(h.compactor),
 	}
+}
+
+// newCompactor builds the session's context compactor from the merged config
+// and the active model's context window (§4.5, §3.1). The compactor is
+// stateless, so one instance is shared by the main and subagent loops.
+func newCompactor(cfg *config.Config, client model.ModelClient) *agent.Compactor {
+	window := 0
+	if m, ok := cfg.ModelByID(cfg.Model); ok {
+		window = m.ContextWindow
+	}
+	return agent.NewCompactor(agent.CompactionSettings{
+		Mode:          cfg.Compaction.Mode,
+		Threshold:     cfg.Compaction.Threshold,
+		KeepTurns:     cfg.Compaction.KeepTurns,
+		ContextWindow: window,
+	}, agent.NewModelSummarizer(client, cfg.Model), nil)
 }
 
 // networkTooling returns the scope-checked fetchers for the current mode. The
@@ -810,8 +829,9 @@ func engagementContext(eng *engagement.Engagement) *agent.EngagementContext {
 	return ctx
 }
 
-// Submit runs one loop turn for a user input, appending the messages it
-// produces to the session conversation.
+// Submit runs one loop turn for a user input and replaces the session
+// conversation with the run's result: the loop returns the full post-run
+// conversation, already compacted if it crossed the threshold (§4.5).
 func (h *Harness) Submit(ctx context.Context, text string) error {
 	h.mu.Lock()
 	history := append([]model.Message(nil), h.messages...)
@@ -821,10 +841,58 @@ func (h *Harness) Submit(ctx context.Context, text string) error {
 
 	result, err := loop.Run(ctx, history, text)
 
+	// The loop returns the full post-run conversation (post-compaction, §4.5):
+	// replace rather than append so a compaction is never undone by the next
+	// turn replaying the old history.
 	h.mu.Lock()
-	h.messages = append(h.messages, result.Messages...)
+	h.messages = append([]model.Message(nil), result.Messages...)
 	h.mu.Unlock()
 	return err
+}
+
+// Compact runs the manual /compact override (§4.5): it compacts the session
+// conversation now, ignoring the threshold, and honors an optional custom
+// instruction. The resulting conversation replaces the session's context and
+// the compaction is emitted as a session event.
+func (h *Harness) Compact(ctx context.Context, instruction string) (string, error) {
+	h.mu.Lock()
+	compactor := h.compactor
+	conversation := append([]model.Message(nil), h.messages...)
+	h.mu.Unlock()
+
+	if compactor == nil {
+		return "", errors.New("compaction is not configured")
+	}
+	if len(conversation) == 0 {
+		return "nothing to compact yet", nil
+	}
+
+	out, result, err := compactor.Compact(ctx, conversation, instruction)
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "nothing to compact (the recent turns are kept verbatim)", nil
+	}
+
+	h.mu.Lock()
+	h.messages = out
+	h.mu.Unlock()
+	h.emit(sessions.Event{Kind: sessions.KindCompaction, Detail: result.Detail})
+	return result.Detail, nil
+}
+
+// CompactionLevel is the current context-window fill fraction, with whether
+// the model's context window is known. It feeds the status bar (§9.1).
+func (h *Harness) CompactionLevel() (float64, bool) {
+	h.mu.Lock()
+	compactor := h.compactor
+	messages := append([]model.Message(nil), h.messages...)
+	h.mu.Unlock()
+	if compactor == nil || compactor.Settings().ContextWindow <= 0 {
+		return 0, false
+	}
+	return compactor.Level(messages), true
 }
 
 // Messages returns a copy of the session conversation.
@@ -1046,13 +1114,23 @@ func (h *Harness) emit(ev sessions.Event) {
 func (h *Harness) Status(busy bool) tui.Status {
 	mode, _ := h.modeAndEngagement()
 	return tui.Status{
-		Mode:      string(mode),
-		Model:     h.Config.Model,
-		Session:   shortID(h.SessionID()),
-		Isolation: string(h.isolation()),
-		MCP:       mcpStatusText(h.MCPServers()),
-		Busy:      busy,
+		Mode:       string(mode),
+		Model:      h.Config.Model,
+		Session:    shortID(h.SessionID()),
+		Isolation:  string(h.isolation()),
+		MCP:        mcpStatusText(h.MCPServers()),
+		Compaction: h.compactionText(),
+		Busy:       busy,
 	}
+}
+
+// compactionText is the status bar's context-fill readout (§4.5, §9.1).
+func (h *Harness) compactionText() string {
+	level, ok := h.CompactionLevel()
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("ctx %.0f%%", level*100)
 }
 
 // mcpStatusText summarizes MCP server connectivity for the status bar (§5.5,
@@ -1144,6 +1222,9 @@ func (h *Harness) statusText() string {
 	}
 	if iso := h.isolation(); iso != "" {
 		lines = append(lines, fmt.Sprintf("isolation: %s", iso))
+	}
+	if level, ok := h.CompactionLevel(); ok {
+		lines = append(lines, fmt.Sprintf("context:  %.0f%% of the model window", level*100))
 	}
 	for _, s := range h.MCPServers() {
 		lines = append(lines, fmt.Sprintf("mcp:      %s %s (%s)", s.Name, s.Status, s.Detail))
