@@ -26,6 +26,8 @@ func buildOptions(t *testing.T, workDir string, client model.ModelClient) Option
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	// Keep skill discovery hermetic: no real ~/.agents/skills leaks into a test.
+	t.Setenv("HOME", t.TempDir())
 	at, err := time.Parse(time.RFC3339, "2026-10-01T12:00:00Z")
 	if err != nil {
 		t.Fatal(err)

@@ -25,6 +25,11 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 		SSHLogsTool(nil),
 		ProposePlanTool(),
 	}
+	if skillTool, ok := SkillTool(skillCatalog(t, map[string]string{
+		"demo": skillDoc("demo", "a demonstration skill", ""),
+	})); ok {
+		tools = append(tools, skillTool)
+	}
 	for _, tool := range tools {
 		t.Run(tool.Name, func(t *testing.T) {
 			var schema map[string]any
