@@ -31,6 +31,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/netfetch"
 	"github.com/mobley-trent/styx-agent/internal/policy"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
+	"github.com/mobley-trent/styx-agent/internal/skills"
 	"github.com/mobley-trent/styx-agent/internal/tui"
 )
 
@@ -77,6 +78,10 @@ type Options struct {
 	LogFetcher agent.LogFetcher
 	// SkipModelCheck disables the startup GET /models validation (§3.1).
 	SkipModelCheck bool
+	// GlobalSkillsDirs overrides the global skill roots (§8.4). Nil uses the
+	// default roots (~/.agents/skills and its XDG data equivalent); an explicit
+	// set replaces them, which is how tests stay hermetic.
+	GlobalSkillsDirs []string
 	// Now is the harness clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -100,6 +105,9 @@ type Harness struct {
 	Prompt string
 	// WorkDir is the project root.
 	WorkDir string
+	// skillCatalog is the discovered agent-skill set (§8.4): global and
+	// project skills, project shadowing global. It is fixed at build time.
+	skillCatalog *skills.Catalog
 	// Version is the binary version.
 	Version string
 
@@ -132,6 +140,10 @@ type Harness struct {
 	// means no interactive operator is attached, and guarded actions take
 	// their safe default: deny, reject, or no plan.
 	ask func(tui.PromptMsg)
+	// submitter runs a user turn on the interactive session. The TUI wires its
+	// busy-guarded submit here, so a slash command like /<skill-name> can start
+	// a turn without blocking the UI. Nil means no interactive session.
+	submitter func(string)
 }
 
 // Run builds the harness and hands it to the runner. Every startup failure is
@@ -200,6 +212,18 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		return nil, err
 	}
 
+	// Agent skills (§8.4): global roots then the project directory, project
+	// shadowing global by name. A present-but-malformed SKILL.md refuses to
+	// start rather than silently dropping a skill the operator expects.
+	globalSkills := opts.GlobalSkillsDirs
+	if globalSkills == nil {
+		globalSkills = skills.GlobalDirs(env)
+	}
+	catalog, err := skills.Discover(globalSkills, skills.ProjectDir(workDir))
+	if err != nil {
+		return nil, err
+	}
+
 	// Resolve the model before creating any session artifacts: a launch that
 	// cannot reach a model should leave no audit trail and no empty session
 	// behind.
@@ -240,6 +264,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		session:        session,
 		client:         client,
 		memory:         mem,
+		skillCatalog:   catalog,
 		mcpConnector:   opts.MCPConnector,
 		execOverride:   opts.Executor,
 		runtimeFactory: factory,
@@ -348,6 +373,12 @@ func (h *Harness) configure() error {
 		agent.WebFetchTool(fetcher),
 		agent.SSHLogsTool(logFetcher),
 		agent.ProposePlanTool(),
+	}
+
+	// The skill tool is exposed only for skills whose frontmatter carries
+	// model-invocation metadata (§8.4). No invocable skill means no tool.
+	if skillTool, ok := agent.SkillTool(h.skillCatalog); ok {
+		baseTools = append(baseTools, skillTool)
 	}
 
 	// External capabilities through one gate (§5.5): MCP servers are launched
@@ -976,6 +1007,14 @@ func (h *Harness) setPromptUI(ask func(tui.PromptMsg)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.ask = ask
+}
+
+// setSubmitter installs the live session's turn submitter, so a slash command
+// can start a turn without blocking the UI goroutine.
+func (h *Harness) setSubmitter(submit func(string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.submitter = submit
 }
 
 // askOperator delivers one card to the TUI and waits for the operator's

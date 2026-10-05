@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/mobley-trent/styx-agent/internal/sessions"
+	"github.com/mobley-trent/styx-agent/internal/skills"
 	"github.com/mobley-trent/styx-agent/internal/tui"
 )
 
@@ -22,6 +23,8 @@ const helpText = `commands:
   /mode [safe]   show the operating mode, or return to safe mode (tears the engagement down)
   /resume [id]   list past sessions, or restore one by id
   /compact [in]  compact context now, with an optional custom instruction
+  /skills        list discovered agent skills
+  /<skill-name>  invoke an agent skill
   /quit          leave styx
 
 Anything else is sent to the model.`
@@ -39,34 +42,39 @@ func runTUI(ctx context.Context, h *Harness) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	model := tui.New(tui.Config{
-		Status: func() tui.Status { return h.Status(busy.Load()) },
-		Submit: func(text string) {
-			// One turn at a time: the loop is not reentrant.
-			if !busy.CompareAndSwap(false, true) {
-				return
-			}
-			go func() {
-				defer func() {
-					busy.Store(false)
-					if program != nil {
-						program.Send(tui.RefreshMsg{})
-					}
-				}()
-				// The loop emits its own error event (§4.4); the turn stays
-				// resumable and the UI already shows the failure.
-				_ = h.Submit(runCtx, text)
+	// submit runs one turn at a time: the loop is not reentrant. It is shared
+	// by the input line and by slash-command invocations like /<skill-name>.
+	submit := func(text string) {
+		if !busy.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			defer func() {
+				busy.Store(false)
+				if program != nil {
+					program.Send(tui.RefreshMsg{})
+				}
 			}()
-		},
+			// The loop emits its own error event (§4.4); the turn stays
+			// resumable and the UI already shows the failure.
+			_ = h.Submit(runCtx, text)
+		}()
+	}
+
+	model := tui.New(tui.Config{
+		Status:  func() tui.Status { return h.Status(busy.Load()) },
+		Submit:  submit,
 		Command: h.command,
 	})
 
 	program = tea.NewProgram(model, tea.WithContext(runCtx))
 	h.setUI(func(ev sessions.Event) { program.Send(tui.EventMsg{Event: ev}) })
 	h.setPromptUI(func(msg tui.PromptMsg) { program.Send(msg) })
+	h.setSubmitter(submit)
 	defer func() {
 		h.setUI(nil)
 		h.setPromptUI(nil)
+		h.setSubmitter(nil)
 	}()
 
 	_, err := program.Run()
@@ -92,9 +100,82 @@ func (h *Harness) command(name, arg string) (string, error) {
 		return h.resumeCommand(arg)
 	case "compact":
 		return h.Compact(context.Background(), strings.TrimSpace(arg))
+	case "skills":
+		return h.skillsText(), nil
 	default:
+		if sk, ok := h.lookupSkill(name); ok {
+			return h.invokeSkill(sk, arg), nil
+		}
 		return "", fmt.Errorf("unknown command %q; try /help", name)
 	}
+}
+
+// lookupSkill resolves a user-typed skill name against the discovered catalog.
+func (h *Harness) lookupSkill(name string) (skills.Skill, bool) {
+	if h.skillCatalog == nil {
+		return skills.Skill{}, false
+	}
+	return h.skillCatalog.Lookup(name)
+}
+
+// skillsText is the /skills picker: every discovered skill with its source and
+// whether the model may invoke it (§8.4). Project skills shadow global ones.
+func (h *Harness) skillsText() string {
+	if h.skillCatalog == nil || len(h.skillCatalog.Skills()) == 0 {
+		return "no agent skills discovered (looked for SKILL.md under ~/.agents/skills and .styx/skills)"
+	}
+	var b strings.Builder
+	b.WriteString("agent skills (project shadows global):")
+	for _, sk := range h.skillCatalog.Skills() {
+		mode := "model-invocable"
+		if !sk.ModelInvocation {
+			mode = "user-invoked"
+		}
+		fmt.Fprintf(&b, "\n  %s  [%s · %s]", sk.Name, mode, sk.Source)
+		if sk.Description != "" {
+			b.WriteString(" — " + firstLine(sk.Description))
+		}
+		if sk.Path != "" {
+			b.WriteString("\n      " + sk.Path)
+		}
+	}
+	b.WriteString("\n\ninvoke one with /<skill-name>")
+	return b.String()
+}
+
+// invokeSkill runs a user invocation of a skill. A model-invocable skill is
+// reached through the skill tool (so the model's call and its workflow result
+// appear in the stream); a user-invoked skill is not available to the model, so
+// the harness loads its workflow directly into the turn. With no interactive
+// session attached, the rendered turn is returned as text.
+func (h *Harness) invokeSkill(sk skills.Skill, arg string) string {
+	text := userSkillPrompt(sk, arg)
+	h.mu.Lock()
+	submit := h.submitter
+	h.mu.Unlock()
+	if submit == nil {
+		return text
+	}
+	submit(text)
+	return fmt.Sprintf("invoking skill %q — the model will follow its workflow", sk.Name)
+}
+
+// userSkillPrompt renders the user turn a /<skill-name> invocation submits.
+func userSkillPrompt(sk skills.Skill, arg string) string {
+	arg = strings.TrimSpace(arg)
+	if sk.ModelInvocation {
+		var b strings.Builder
+		fmt.Fprintf(&b, "Invoke the %q skill with the skill tool, then follow its workflow.", sk.Name)
+		if arg != "" {
+			fmt.Fprintf(&b, " Arguments for this invocation: %s", arg)
+		}
+		return b.String()
+	}
+	out := strings.TrimRight(sk.Invocation(nil), "\n")
+	if arg != "" {
+		out += "\n\nArguments for this invocation: " + arg
+	}
+	return out
 }
 
 // engagementCommand lists discovered engagement files, or activates one
