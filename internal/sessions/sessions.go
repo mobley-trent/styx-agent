@@ -65,6 +65,10 @@ const (
 	// server launch, a crash, or a disconnect becomes visible rather than
 	// silent.
 	KindMCP Kind = "mcp"
+	// KindUsage reports one model turn's token accounting (§3.1, §9.1). It is
+	// persisted so the session's cost is reconstructable from its own log, and
+	// it is what the status bar's spend readout is folded from.
+	KindUsage Kind = "usage"
 
 	// KindTextDelta is a live streaming fragment of final-answer text. It is
 	// rendered but not persisted: the assembled KindAssistant event carries
@@ -175,6 +179,17 @@ type Event struct {
 	// Status is an MCP server's lifecycle state (mcp): connecting, ready,
 	// failed, or closed.
 	Status string `json:"status,omitempty"`
+
+	// PromptTokens, CompletionTokens, CacheHitTokens, and CacheMissTokens are a
+	// model turn's usage (usage). The cache split drives cost tracking (§3.1).
+	PromptTokens     int `json:"prompt_tokens,omitempty"`
+	CompletionTokens int `json:"completion_tokens,omitempty"`
+	CacheHitTokens   int `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens  int `json:"cache_miss_tokens,omitempty"`
+	// Model is the pinned model ID that produced a usage event (usage). It is
+	// stamped at request time so a mid-session /model swap never misprices an
+	// in-flight turn.
+	Model string `json:"model,omitempty"`
 }
 
 // DefaultRoot is the session store root (§10.1):

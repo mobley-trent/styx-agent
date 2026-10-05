@@ -183,25 +183,29 @@ type Result struct {
 // results → repeat, bounded by the turn cap. It is safe for one Run at a time;
 // the app owns a session's loop.
 type Loop struct {
-	client      model.ModelClient
-	tools       *Registry
-	engine      *policy.Engine
-	audit       AuditWriter
-	prompt      string
-	model       string
-	maxTurns    int
-	maxParallel int
-	maxRepairs  int
-	maxOutput   int
-	prompter    Prompter
-	reviewer    DiffReviewer
-	planner     PlanApprover
-	emit        func(sessions.Event)
-	isolation   func() audit.Isolation
-	now         func() time.Time
-	subagent    string
-	subagentRun string
-	compactor   *Compactor
+	client model.ModelClient
+	tools  *Registry
+	engine *policy.Engine
+	audit  AuditWriter
+	prompt string
+	model  string
+	// modelResolver, when set, overrides model at each request: it lets an
+	// operator swap models mid-session without rebuilding the loop (§3.1). Nil
+	// keeps the fixed model.
+	modelResolver func() string
+	maxTurns      int
+	maxParallel   int
+	maxRepairs    int
+	maxOutput     int
+	prompter      Prompter
+	reviewer      DiffReviewer
+	planner       PlanApprover
+	emit          func(sessions.Event)
+	isolation     func() audit.Isolation
+	now           func() time.Time
+	subagent      string
+	subagentRun   string
+	compactor     *Compactor
 
 	// compactArmed is the hysteresis flag for auto-compaction (§4.5). It is
 	// per-loop, so a shared Compactor carries no per-conversation state.
@@ -324,6 +328,18 @@ func WithIsolationProvider(f func() audit.Isolation) LoopOption {
 func WithModel(id string) LoopOption {
 	return func(l *Loop) {
 		l.model = id
+	}
+}
+
+// WithModelResolver supplies the model ID at request time instead of
+// construction time, so an operator's /model swap applies to this loop and to
+// every subagent loop built from the same options without a rebuild (§3.1).
+// Nil keeps the fixed model.
+func WithModelResolver(resolve func() string) LoopOption {
+	return func(l *Loop) {
+		if resolve != nil {
+			l.modelResolver = resolve
+		}
 	}
 }
 
@@ -492,11 +508,23 @@ type turnOutput struct {
 	usage     *model.Usage
 }
 
+// currentModel is the model ID this loop's requests name: the dynamic
+// resolver when one is configured, else the fixed model.
+func (l *Loop) currentModel() string {
+	if l.modelResolver != nil {
+		return l.modelResolver()
+	}
+	return l.model
+}
+
 // streamTurn consumes one model stream, emitting deltas live and returning the
 // assembled turn.
 func (l *Loop) streamTurn(ctx context.Context, messages []model.Message, turn int) (turnOutput, error) {
+	// Resolve the model once per turn and reuse it for the request and the
+	// usage event, so a mid-turn /model swap cannot misprice the turn.
+	modelID := l.currentModel()
 	ch, err := l.client.StreamTurn(ctx, model.ModelRequest{
-		Model:    l.model,
+		Model:    modelID,
 		Messages: messages,
 		Tools:    l.tools.Descriptors(),
 	})
@@ -521,6 +549,20 @@ func (l *Loop) streamTurn(ctx context.Context, messages []model.Message, turn in
 		case model.EventDone:
 			out.usage = ev.Usage
 			done = true
+			if ev.Usage != nil {
+				// One usage event per completed turn: the status bar folds it
+				// into the session's cost and the JSONL can reconstruct it
+				// (§3.1, §9.1).
+				l.emitEvent(sessions.Event{
+					Kind:             sessions.KindUsage,
+					Turn:             turn,
+					Model:            modelID,
+					PromptTokens:     ev.Usage.PromptTokens,
+					CompletionTokens: ev.Usage.CompletionTokens,
+					CacheHitTokens:   ev.Usage.CacheHitTokens,
+					CacheMissTokens:  ev.Usage.CacheMissTokens,
+				})
+			}
 		case model.EventError:
 			if ev.Err != nil {
 				return out, ev.Err

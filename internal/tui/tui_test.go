@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -449,5 +450,103 @@ func TestStreamRendersCompaction(t *testing.T) {
 	got := h.view()
 	if !strings.Contains(got, "compacted") || !strings.Contains(got, "evicted 2 tool result(s)") {
 		t.Errorf("compaction card is not rendered:\n%s", got)
+	}
+}
+
+func TestThemeAutoSelectsFromBackground(t *testing.T) {
+	h := newHarness(t)
+
+	// The dark theme is the default before the terminal answers.
+	if !h.model.dark || h.model.styles.name != "dark" {
+		t.Fatalf("default theme = %q (dark=%v), want dark", h.model.styles.name, h.model.dark)
+	}
+
+	h.update(tea.BackgroundColorMsg{Color: color.White})
+	if h.model.dark || h.model.styles.name != "light" {
+		t.Errorf("light background selected %q (dark=%v), want light", h.model.styles.name, h.model.dark)
+	}
+
+	h.update(tea.BackgroundColorMsg{Color: color.Black})
+	if !h.model.dark || h.model.styles.name != "dark" {
+		t.Errorf("dark background selected %q (dark=%v), want dark", h.model.styles.name, h.model.dark)
+	}
+}
+
+func TestThemesDiffer(t *testing.T) {
+	dark, light := darkTheme(), lightTheme()
+	for _, pair := range []struct {
+		name string
+		d, l color.Color
+	}{
+		{"add", dark.addColor, light.addColor},
+		{"del", dark.delColor, light.delColor},
+		{"accent", dark.accent, light.accent},
+		{"text", dark.text, light.text},
+	} {
+		if pair.d == pair.l {
+			t.Errorf("%s color is identical in dark and light themes (%v)", pair.name, pair.d)
+		}
+	}
+}
+
+func TestStatusBarShowsTargetsAndCost(t *testing.T) {
+	m := New(Config{Status: func() Status {
+		return Status{
+			Mode:    "engagement",
+			Model:   "deepseek-flash",
+			Targets: "scope 10.0.0.0/24,192.0.2.44",
+			Cost:    "cost $0.0012",
+		}
+	}})
+	got := m.View().Content
+	for _, want := range []string{"scope 10.0.0.0/24,192.0.2.44", "cost $0.0012"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status bar is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStatusBarReflectsLiveIsolationChange(t *testing.T) {
+	isolation := ""
+	m := New(Config{Status: func() Status { return Status{Mode: "safe", Isolation: isolation} }})
+	if strings.Contains(m.View().Content, "degraded-isolation") {
+		t.Fatal("setup: isolation was already degraded")
+	}
+
+	// The isolation level samples live state, so a degradation surfacing on
+	// the event bus updates the bar without a restart (§9.5).
+	isolation = "degraded-isolation"
+	_, _ = m.Update(EventMsg{Event: sessions.Event{Kind: sessions.KindIsolation, Detail: "degraded isolation"}})
+	if !strings.Contains(m.View().Content, "degraded-isolation") {
+		t.Errorf("status bar did not reflect the degraded isolation:\n%s", m.View().Content)
+	}
+}
+
+func TestClearResetsTranscriptAndAppContext(t *testing.T) {
+	cleared := false
+	h := &harness{}
+	h.model = New(Config{
+		Status:  func() Status { return Status{Mode: "safe"} },
+		Submit:  func(string) {},
+		Clear:   func() { cleared = true },
+		Command: func(string, string) (string, error) { return "", nil },
+	})
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindUser, Text: "remember this"}})
+	if !strings.Contains(h.view(), "remember this") {
+		t.Fatal("setup: transcript did not record the turn")
+	}
+
+	h.typeText("/clear")
+	h.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if !cleared {
+		t.Error("/clear did not reset the harness conversation")
+	}
+	got := h.view()
+	if strings.Contains(got, "remember this") {
+		t.Errorf("transcript was not cleared:\n%s", got)
+	}
+	if !strings.Contains(got, "cleared") {
+		t.Errorf("no confirmation that context cleared:\n%s", got)
 	}
 }

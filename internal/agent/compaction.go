@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/mobley-trent/styx-agent/internal/model"
 )
@@ -111,8 +112,11 @@ type CompactionResult struct {
 
 // Compactor implements the §4.5 policy: tool-result eviction first, then LLM
 // summarization of the oldest segment. It holds no per-conversation state —
-// the loop owns the hysteresis flag — so one Compactor is safe to share.
+// the loop owns the hysteresis flag — so one Compactor is safe to share. Its
+// settings are guarded so an operator's /model swap can rescale the context
+// window while loops read it (§3.1).
 type Compactor struct {
+	mu         sync.RWMutex
 	settings   CompactionSettings
 	summarizer Summarizer
 	counter    TokenCounter
@@ -127,12 +131,31 @@ func NewCompactor(settings CompactionSettings, summarizer Summarizer, counter To
 	return &Compactor{settings: settings.normalized(), summarizer: summarizer, counter: counter}
 }
 
-// Settings returns the normalized settings.
-func (c *Compactor) Settings() CompactionSettings { return c.settings }
+// Settings returns a copy of the normalized settings.
+func (c *Compactor) Settings() CompactionSettings { return c.snapshot() }
+
+// SetContextWindow rescales the compaction trigger to a new model's context
+// window (§3.1, §4.5). A non-positive window is ignored: it would make every
+// conversation look over-threshold.
+func (c *Compactor) SetContextWindow(tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.settings.ContextWindow = tokens
+	c.mu.Unlock()
+}
+
+// snapshot reads the settings under the lock.
+func (c *Compactor) snapshot() CompactionSettings {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.settings
+}
 
 // Level is the current context-window fraction, in [0, ...).
 func (c *Compactor) Level(messages []model.Message) float64 {
-	return fraction(c.counter.Count(messages), c.settings.ContextWindow)
+	return fraction(c.counter.Count(messages), c.snapshot().ContextWindow)
 }
 
 // MaybeCompact applies the automatic path (§4.5). armed is the hysteresis
@@ -141,7 +164,8 @@ func (c *Compactor) Level(messages []model.Message) float64 {
 // compaction fired (nil otherwise), the updated armed flag, and any error.
 // Manual mode never fires here.
 func (c *Compactor) MaybeCompact(ctx context.Context, messages []model.Message, armed bool) ([]model.Message, *CompactionResult, bool, error) {
-	if c.settings.Mode != CompactionAuto {
+	settings := c.snapshot()
+	if settings.Mode != CompactionAuto {
 		return messages, nil, armed, nil
 	}
 	level := c.Level(messages)
@@ -151,7 +175,7 @@ func (c *Compactor) MaybeCompact(ctx context.Context, messages []model.Message, 
 		}
 		return messages, nil, armed, nil
 	}
-	if level < c.settings.Threshold {
+	if level < settings.Threshold {
 		return messages, nil, armed, nil
 	}
 
@@ -183,7 +207,8 @@ func (c *Compactor) Compact(ctx context.Context, messages []model.Message, instr
 // excluded). It evicts tool results in the eligible prefix, then summarizes
 // that prefix if eviction was not enough (auto) or when forced (manual).
 func (c *Compactor) compact(ctx context.Context, messages []model.Message, instruction string, force bool) ([]model.Message, *CompactionResult, error) {
-	eligible, kept := splitKeep(messages, c.settings.KeepTurns)
+	settings := c.snapshot()
+	eligible, kept := splitKeep(messages, settings.KeepTurns)
 	if len(eligible) == 0 {
 		return messages, nil, nil
 	}
@@ -202,7 +227,7 @@ func (c *Compactor) compact(ctx context.Context, messages []model.Message, instr
 	afterEviction := c.counter.Count(refreshed)
 
 	needSummary := len(toSummarize) > 0 && c.summarizer != nil &&
-		(force || fraction(afterEviction, c.settings.ContextWindow) > compactSummarizeLevel)
+		(force || fraction(afterEviction, settings.ContextWindow) > compactSummarizeLevel)
 
 	summarized := 0
 	final := refreshed
@@ -231,8 +256,8 @@ func (c *Compactor) compact(ctx context.Context, messages []model.Message, instr
 	result := &CompactionResult{
 		BeforeTokens: beforeTokens,
 		AfterTokens:  afterTokens,
-		BeforeLevel:  fraction(beforeTokens, c.settings.ContextWindow),
-		AfterLevel:   fraction(afterTokens, c.settings.ContextWindow),
+		BeforeLevel:  fraction(beforeTokens, settings.ContextWindow),
+		AfterLevel:   fraction(afterTokens, settings.ContextWindow),
 		Evicted:      evictCount,
 		Summarized:   summarized,
 	}

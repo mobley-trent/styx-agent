@@ -333,3 +333,27 @@ func TestCompactorNoOpKeepsTriggerArmed(t *testing.T) {
 		t.Fatalf("no-op MaybeCompact() = (result=%v, armed=%v), want no fire and still armed", result, armed)
 	}
 }
+
+func TestCompactorSetContextWindowRescalesLevel(t *testing.T) {
+	c := NewCompactor(CompactionSettings{ContextWindow: 100},
+		nil, TokenCounterFunc(func([]model.Message) int { return 50 }))
+	msgs := []model.Message{userMsg("go")}
+
+	if got := c.Level(msgs); got != 0.5 {
+		t.Fatalf("Level() = %v, want 0.5 for a 50-token context in a 100-token window", got)
+	}
+	c.SetContextWindow(200)
+	if got := c.Level(msgs); got != 0.25 {
+		t.Errorf("Level() after rescale = %v, want 0.25", got)
+	}
+	if got := c.Settings().ContextWindow; got != 200 {
+		t.Errorf("Settings().ContextWindow = %d, want 200", got)
+	}
+
+	// A non-positive window is ignored: rescaling to it would make every
+	// conversation look over-threshold.
+	c.SetContextWindow(0)
+	if got := c.Settings().ContextWindow; got != 200 {
+		t.Errorf("Settings().ContextWindow after zero = %d, want the prior 200", got)
+	}
+}

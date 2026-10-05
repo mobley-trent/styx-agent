@@ -18,7 +18,10 @@ import (
 // with the TUI completion ticket.
 const helpText = `commands:
   /help          show this help
-  /status        show mode, model, session, and engagement state
+  /status        show mode, model, session, engagement, and cost state
+  /model [id]    list the pinned models, or switch to one (rescales compaction)
+  /memory        show the project's STYX.md as loaded into the system prompt
+  /clear         forget the conversation context (keeps the system prompt)
   /pack          show the harness-selected skill packs and their state
   /engagement    list engagement files, or activate one with /engagement <file>
   /mode [safe]   show the operating mode, or return to safe mode (tears the engagement down)
@@ -65,6 +68,7 @@ func runTUI(ctx context.Context, h *Harness) error {
 	model := tui.New(tui.Config{
 		Status:  func() tui.Status { return h.Status(busy.Load()) },
 		Submit:  submit,
+		Clear:   h.ClearConversation,
 		Command: h.command,
 	})
 
@@ -93,6 +97,13 @@ func (h *Harness) command(name, arg string) (string, error) {
 		return helpText, nil
 	case "status":
 		return h.statusText(), nil
+	case "model":
+		return h.modelCommand(arg)
+	case "memory":
+		return h.memoryText(), nil
+	case "clear":
+		h.ClearConversation()
+		return "conversation context cleared", nil
 	case "pack", "packs":
 		return h.packText(), nil
 	case "engagement":
@@ -233,6 +244,54 @@ func (h *Harness) modeCommand(arg string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown mode %q; use /mode safe", arg)
 	}
+}
+
+// modelCommand lists the pinned models, or switches the session to one by ID
+// (§3.1). The pinned set was validated against the provider at startup; a swap
+// rescales the compaction trigger to the new model's context window (§4.5).
+func (h *Harness) modelCommand(arg string) (string, error) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		current := h.currentModel()
+		var b strings.Builder
+		b.WriteString("pinned models (validated at startup):")
+		for _, m := range h.Config.Models {
+			mark := " "
+			if m.ID == current {
+				mark = "*"
+			}
+			fmt.Fprintf(&b, "\n  %s %-16s %d token window", mark, m.ID, m.ContextWindow)
+		}
+		b.WriteString("\n\nswitch with /model <id>; compaction rescales to the new window")
+		return b.String(), nil
+	}
+
+	info, ok := h.Config.ModelByID(arg)
+	if !ok {
+		return "", fmt.Errorf("unknown model %q; pinned set: %s", arg, strings.Join(h.pinnedModelIDs(), ", "))
+	}
+
+	h.mu.Lock()
+	if h.model == arg {
+		h.mu.Unlock()
+		return fmt.Sprintf("already using %s", arg), nil
+	}
+	h.model = arg
+	h.mu.Unlock()
+
+	if h.compactor != nil {
+		h.compactor.SetContextWindow(info.ContextWindow)
+	}
+	return fmt.Sprintf("model: %s (compaction threshold rescaled to the %d token window)", arg, info.ContextWindow), nil
+}
+
+// pinnedModelIDs returns the configured model IDs in declaration order.
+func (h *Harness) pinnedModelIDs() []string {
+	ids := make([]string, 0, len(h.Config.Models))
+	for _, m := range h.Config.Models {
+		ids = append(ids, m.ID)
+	}
+	return ids
 }
 
 // resumeCommand lists past sessions, or restores one.
