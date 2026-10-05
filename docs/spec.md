@@ -511,11 +511,12 @@ Distinct from packs (CONTEXT.md). styx-agent reads the SKILL.md format (compatib
     "parameters": {
       "type": "object",
       "properties": {
-        "skill":  { "type": "string", "description": "Skill name (directory/SKILL.md slug)" },
-        "reason": { "type": "string", "description": "Why this skill fits the current task" },
-        "args":   { "type": "object", "description": "Free-form arguments passed to the skill's steps" }
+        "skill":     { "type": "string", "description": "Skill name (directory/SKILL.md slug)" },
+        "reason":    { "type": "string", "description": "Why this skill fits the current task" },
+        "args_json": { "type": "string", "description": "A JSON object string of arguments for the skill's steps ({} for none): strict mode rejects a free-form object, so it is carried as a string, like propose_plan's params_json" }
       },
-      "required": ["skill"]
+      "required": ["skill", "reason", "args_json"],
+      "additionalProperties": false
     }
   }
   ```

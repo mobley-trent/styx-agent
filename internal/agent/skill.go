@@ -15,7 +15,11 @@ import (
 const SkillToolName = "skill"
 
 // skillSchema is the skill tool's descriptor (strict mode: every property is
-// declared and required, and additionalProperties is false).
+// declared and required, and additionalProperties is false). Free-form
+// arguments are carried as a JSON object string (args_json), not a bare
+// object: strict mode rejects an object with no properties, so a free-form
+// object has no strict-compliant representation. This is the same encoding
+// propose_plan uses for params_json.
 const skillSchema = `{
   "type": "object",
   "properties": {
@@ -27,12 +31,12 @@ const skillSchema = `{
       "type": "string",
       "description": "Why this skill fits the current task."
     },
-    "args": {
-      "type": "object",
-      "description": "Free-form arguments passed to the skill's steps."
+    "args_json": {
+      "type": "string",
+      "description": "A JSON object string of arguments for the skill's steps, e.g. {\"env\":\"prod\"}. Use {} when the skill takes none."
     }
   },
-  "required": ["skill", "reason", "args"],
+  "required": ["skill", "reason", "args_json"],
   "additionalProperties": false
 }`
 
@@ -65,10 +69,29 @@ func SkillTool(catalog *skills.Catalog) (Tool, bool) {
 			if !sk.ModelInvocation {
 				return "", fmt.Errorf("skill %q is user-invoked only; the model may not invoke it", name)
 			}
-			given, _ := args["args"].(map[string]any)
+			given, err := skillArgs(args)
+			if err != nil {
+				return "", err
+			}
 			return sk.Invocation(given), nil
 		},
 	}, true
+}
+
+// skillArgs decodes the skill tool's free-form arguments. Strict mode cannot
+// express a free-form object, so the model passes a JSON object string ({} for
+// none); a malformed string is a structured error the repair layer can feed
+// back to the model.
+func skillArgs(args map[string]any) (map[string]any, error) {
+	raw, _ := args["args_json"].(string)
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, fmt.Errorf("args_json is not a JSON object: %w", err)
+	}
+	return decoded, nil
 }
 
 // skillToolDescription names the skills the model may actually invoke, so the
