@@ -12,6 +12,8 @@ builds:
     binary: styx
     env:
       - CGO_ENABLED=0
+      # The supported floor is macOS 13+ (§12.1).
+      - MACOSX_DEPLOYMENT_TARGET=13.0
     goos:
       - linux
       - darwin

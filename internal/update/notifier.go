@@ -79,10 +79,10 @@ type Notifier struct {
 	current string
 	fetcher Fetcher
 
-	once sync.Once
-	rel  Release
-	new  bool
-	err  error
+	once  sync.Once
+	rel   Release
+	newer bool
+	err   error
 }
 
 // NewNotifier builds a notifier for the running version. A nil fetcher uses
@@ -109,9 +109,9 @@ func (n *Notifier) Check(ctx context.Context) (Release, bool, error) {
 			return
 		}
 		n.rel = rel
-		n.new = NewerAvailable(n.current, rel)
+		n.newer = NewerAvailable(n.current, rel)
 	})
-	return n.rel, n.new, n.err
+	return n.rel, n.newer, n.err
 }
 
 // Gate decides whether the update notifier may run at all (§12.3): it is off

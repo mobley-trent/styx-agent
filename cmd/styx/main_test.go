@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -205,6 +207,32 @@ func TestRunUpdate(t *testing.T) {
 				t.Errorf("stderr %q does not contain %q", stderr, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestResolveSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "Cellar", "styx", "0.1.0", "bin", "styx")
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "bin", "styx")
+	if err := os.MkdirAll(filepath.Dir(link), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := resolveSymlinks(link); got != target {
+		t.Errorf("resolveSymlinks(symlink) = %q, want %q", got, target)
+	}
+	missing := filepath.Join(dir, "absent")
+	if got := resolveSymlinks(missing); got != missing {
+		t.Errorf("resolveSymlinks(missing) = %q, want %q", got, missing)
 	}
 }
 

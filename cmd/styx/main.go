@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 
@@ -101,7 +102,7 @@ func run(argv []string, version string) (stdout, stderr string, exitCode int) {
 func runUpdate(ctx context.Context, version string) (stdout, stderr string, exitCode int) {
 	source := update.Unknown
 	if exe, err := executablePath(); err == nil {
-		source = update.DetectSource(exe, os.Getenv)
+		source = update.DetectSource(resolveSymlinks(exe), os.Getenv)
 	}
 
 	rel, err := fetchLatest(ctx, version)
@@ -123,6 +124,17 @@ var fetchLatest = func(ctx context.Context, current string) (update.Release, err
 
 // executablePath locates the running binary; tests replace it.
 var executablePath = os.Executable
+
+// resolveSymlinks follows a Homebrew-style bin symlink back to its Cellar
+// target, so `styx update` detects the tap even when the binary is launched
+// through /opt/homebrew/bin or /usr/local/bin. A path that cannot be resolved
+// (the usual case for a plain binary) is returned unchanged.
+func resolveSymlinks(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
+}
 
 // cliOptions is the parsed command line.
 type cliOptions struct {

@@ -41,9 +41,9 @@ const (
 	InstallScript Source = "install-script"
 	// GoInstall is a `go install` build, which lives under GOBIN/GOPATH/bin.
 	GoInstall Source = "go-install"
-	// Archive is a release archive (works-but-unsupported).
-	Archive Source = "release-archive"
-	// Unknown is any other install path (manual download, distro package).
+	// Unknown is any other install path (manual download, release archive,
+	// distro package). It maps to the releases page rather than guessing at an
+	// in-place upgrade.
 	Unknown Source = "unknown"
 )
 
@@ -57,8 +57,6 @@ func (s Source) Label() string {
 		return "install script (~/.local/bin)"
 	case GoInstall:
 		return "go install"
-	case Archive:
-		return "release archive"
 	default:
 		return "unknown install path"
 	}
@@ -129,18 +127,6 @@ func UpgradeCommand(s Source) string {
 		return "go install github.com/" + Repo + "/cmd/styx@latest"
 	default:
 		return "download the latest release from " + ReleasesPage
-	}
-}
-
-// IsSourceBuild reports whether a reported version marks an unstamped build.
-// Release binaries are stamped by goreleaser; `go install`, `go build`, and
-// local builds are not, and the notifier is disabled for them (§12.1, §12.3).
-func IsSourceBuild(version string) bool {
-	switch strings.TrimSpace(version) {
-	case "", "dev", "(devel)":
-		return true
-	default:
-		return false
 	}
 }
 

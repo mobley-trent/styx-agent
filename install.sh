@@ -33,6 +33,7 @@ need tar
 need uname
 need sed
 need grep
+need awk
 
 os="$(uname -s)"
 case "$os" in

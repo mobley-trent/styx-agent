@@ -90,28 +90,10 @@ func TestUpgradeCommand(t *testing.T) {
 		{Homebrew, "brew upgrade mobley-trent/styx/styx"},
 		{InstallScript, "curl -fsSL " + InstallScriptURL + " | sh"},
 		{GoInstall, "go install github.com/mobley-trent/styx-agent/cmd/styx@latest"},
-		{Archive, "download the latest release from " + ReleasesPage},
 		{Unknown, "download the latest release from " + ReleasesPage},
 	} {
 		if got := UpgradeCommand(tt.src); got != tt.want {
 			t.Errorf("UpgradeCommand(%q) = %q, want %q", tt.src, got, tt.want)
-		}
-	}
-}
-
-func TestIsSourceBuild(t *testing.T) {
-	for _, tt := range []struct {
-		in   string
-		want bool
-	}{
-		{"", true},
-		{"dev", true},
-		{"(devel)", true},
-		{"v0.1.0", false},
-		{"v1.2.3", false},
-	} {
-		if got := IsSourceBuild(tt.in); got != tt.want {
-			t.Errorf("IsSourceBuild(%q) = %v, want %v", tt.in, got, tt.want)
 		}
 	}
 }
