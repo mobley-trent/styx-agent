@@ -30,10 +30,16 @@ jobs:
         with:
           version: v2.14
 
+      # Pinned to v2.15: goreleaser v2.16 made the `brews` deprecation a hard
+      # `check` error. styx keeps a formula tap deliberately (spec §12.1): a
+      # cask would impose the macOS quarantine bit on a notarization-less
+      # binary. The release job still uses the latest v2, which publishes the
+      # formula with a deprecation warning. Migrate to homebrew_casks together
+      # with macOS signing/notarization.
       - name: goreleaser check
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: "~> v2"
+          version: "v2.15.0"
           args: check
 
       - name: Test
