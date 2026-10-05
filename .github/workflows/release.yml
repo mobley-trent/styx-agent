@@ -31,11 +31,29 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      # The curated CHANGELOG.md is the source of truth for release notes. Pass
+      # the tag's section to goreleaser, which then skips its own commit-based
+      # generation. A tag with no section is refused rather than published with
+      # empty notes.
+      - name: Extract release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          set -eu
+          awk -v tag="${GITHUB_REF_NAME}" '
+            index($0, "## [" tag "]") == 1 { printing = 1; next }
+            printing && substr($0, 1, 4) == "## [" { exit }
+            printing { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME}; refusing to release without notes"
+            exit 1
+          fi
+
       - name: Run goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
