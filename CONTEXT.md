@@ -71,6 +71,32 @@ Container execution when the harness cannot enforce container egress at the host
 edge: the container gets no external network plus a harness-mediated egress path scoped to
 the engagement. A visible, audited downgrade — never silent, never the quiet default.
 
+## Engagement state & findings
+
+**Engagement state**
+The per-engagement structured record — hosts, services, findings, credentials, access, and
+network segments — that survives sessions and feeds the prompt. Bound to the engagement
+boundary; never compacted away and never model-invented.
+
+**Finding**
+A structured result in engagement state: a vulnerability or observation with severity,
+status, confidence, and its evidence.
+
+**Evidence**
+The verification record attached to a finding. A finding without evidence is unvalidated.
+
+**Relationship graph**
+The typed entity graph over engagement state — how hosts, services, credentials, and access
+relate.
+
+**Attack path**
+A suggested route through the relationship graph from current access to a target, surfaced
+for the model to act on. A suggestion, never an auto-executed step.
+
+**Exploitation autonomy level**
+The operator-set engagement flag that widens in-scope exploit approval within the rules of
+engagement. It never lifts ROE hard limits, and full autonomy is out of scope.
+
 ## Agents
 
 **Subagent**
