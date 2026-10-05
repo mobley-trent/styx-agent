@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mobley-trent/styx-agent/internal/model"
+	"github.com/mobley-trent/styx-agent/internal/sessions"
 )
 
 //go:embed promptdata/summarize.md
@@ -16,14 +17,42 @@ var summarizeSystemPrompt string
 // ModelSummarizer summarizes a conversation segment with the session's own
 // model (§4.5). It is the production Summarizer; tests bind a scripted one.
 type ModelSummarizer struct {
-	client  model.ModelClient
-	modelID string
+	client       model.ModelClient
+	resolveModel func() string
+	emit         func(sessions.Event)
+}
+
+// SummarizerOption configures a ModelSummarizer.
+type SummarizerOption func(*ModelSummarizer)
+
+// WithSummarizerUsageEmitter routes the summarizer's own token usage onto the
+// session bus, so compaction spend is counted in the session cost too (§3.1,
+// §4.5).
+func WithSummarizerUsageEmitter(emit func(sessions.Event)) SummarizerOption {
+	return func(s *ModelSummarizer) {
+		if emit != nil {
+			s.emit = emit
+		}
+	}
 }
 
 // NewModelSummarizer builds a summarizer over the session's model client. The
 // model ID is the pinned ID requests name; empty keeps the client default.
-func NewModelSummarizer(client model.ModelClient, modelID string) *ModelSummarizer {
-	return &ModelSummarizer{client: client, modelID: modelID}
+func NewModelSummarizer(client model.ModelClient, modelID string, opts ...SummarizerOption) *ModelSummarizer {
+	return NewDynamicModelSummarizer(client, func() string { return modelID }, opts...)
+}
+
+// NewDynamicModelSummarizer builds a summarizer whose model ID is resolved at
+// each call, so an operator's /model swap reaches compaction too (§3.1, §4.5).
+func NewDynamicModelSummarizer(client model.ModelClient, resolve func() string, opts ...SummarizerOption) *ModelSummarizer {
+	if resolve == nil {
+		resolve = func() string { return "" }
+	}
+	s := &ModelSummarizer{client: client, resolveModel: resolve}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Summarize implements Summarizer. The instruction, when non-empty, is the
@@ -42,7 +71,7 @@ func (s *ModelSummarizer) Summarize(ctx context.Context, instruction string, seg
 	}
 
 	ch, err := s.client.StreamTurn(ctx, model.ModelRequest{
-		Model: s.modelID,
+		Model: s.resolveModel(),
 		Messages: []model.Message{
 			{Role: model.RoleSystem, Content: summarizeSystemPrompt},
 			{Role: model.RoleUser, Content: ask},
@@ -63,6 +92,16 @@ func (s *ModelSummarizer) Summarize(ctx context.Context, instruction string, seg
 			}
 			return "", errors.New("summarize: stream ended without a completion event")
 		case model.EventDone:
+			if ev.Usage != nil && s.emit != nil {
+				s.emit(sessions.Event{
+					Kind:             sessions.KindUsage,
+					Model:            s.resolveModel(),
+					PromptTokens:     ev.Usage.PromptTokens,
+					CompletionTokens: ev.Usage.CompletionTokens,
+					CacheHitTokens:   ev.Usage.CacheHitTokens,
+					CacheMissTokens:  ev.Usage.CacheMissTokens,
+				})
+			}
 			if strings.TrimSpace(b.String()) == "" {
 				return "", errors.New("summarize: the model returned an empty summary")
 			}

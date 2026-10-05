@@ -8,6 +8,7 @@ import (
 
 	"github.com/mobley-trent/styx-agent/internal/model"
 	"github.com/mobley-trent/styx-agent/internal/model/fakemodel"
+	"github.com/mobley-trent/styx-agent/internal/sessions"
 )
 
 func TestModelSummarizerStreamsAndForwardsInstruction(t *testing.T) {
@@ -64,5 +65,28 @@ func TestModelSummarizerRequiresClient(t *testing.T) {
 	s := NewModelSummarizer(nil, model.DefaultModelID)
 	if _, err := s.Summarize(context.Background(), "", []model.Message{userMsg("x")}); err == nil {
 		t.Fatal("Summarize() = nil, want an error with no client")
+	}
+}
+
+func TestModelSummarizerEmitsUsage(t *testing.T) {
+	fake := fakemodel.New(fakemodel.WithTurns(fakemodel.Turn{
+		Text: []string{"condensed"},
+		Usage: &model.Usage{
+			PromptTokens: 300, CompletionTokens: 30,
+			CacheHitTokens: 200, CacheMissTokens: 100,
+		},
+	}))
+	events := &collector{}
+	s := NewModelSummarizer(fake, model.DefaultModelID, WithSummarizerUsageEmitter(events.emit))
+
+	if _, err := s.Summarize(context.Background(), "", []model.Message{userMsg("x")}); err != nil {
+		t.Fatalf("Summarize() = %v", err)
+	}
+	usage := events.byKind(sessions.KindUsage)
+	if len(usage) != 1 {
+		t.Fatalf("usage events = %d, want the summarizer's turn counted", len(usage))
+	}
+	if usage[0].Model != model.DefaultModelID || usage[0].CacheHitTokens != 200 || usage[0].CacheMissTokens != 100 {
+		t.Errorf("usage event = %+v, want the model and cache split", usage[0])
 	}
 }

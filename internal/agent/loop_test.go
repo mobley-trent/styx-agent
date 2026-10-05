@@ -602,3 +602,52 @@ func TestConversationKeepsFailureResults(t *testing.T) {
 		t.Errorf("tool message = %q, want the failure text", messages[2].Content)
 	}
 }
+
+func TestLoopEmitsUsageAndResolvesModelDynamically(t *testing.T) {
+	fake := fakemodel.New(fakemodel.WithTurns(fakemodel.Turn{
+		Text: []string{"done"},
+		Usage: &model.Usage{
+			PromptTokens: 1000, CompletionTokens: 250,
+			CacheHitTokens: 900, CacheMissTokens: 100,
+		},
+	}))
+	events := &collector{}
+
+	modelID := "deepseek-flash"
+	loop := NewLoop(
+		fake,
+		mustRegistry(t, testTool("noop", func(context.Context, map[string]any) (string, error) { return "", nil })),
+		mustEngine(t, policy.ModeSafe),
+		audit.NewWriter(&bytes.Buffer{}),
+		testSystemPrompt,
+		WithEmitter(events.emit),
+		WithModelResolver(func() string { return modelID }),
+	)
+
+	if _, err := loop.Run(context.Background(), nil, "go"); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+	if got, ok := fake.LastRequest(); !ok || got.Model != "deepseek-flash" {
+		t.Errorf("first request model = %q (ok=%v), want deepseek-flash", got.Model, ok)
+	}
+
+	usage := events.byKind(sessions.KindUsage)
+	if len(usage) != 1 {
+		t.Fatalf("usage events = %d, want 1", len(usage))
+	}
+	if usage[0].PromptTokens != 1000 || usage[0].CompletionTokens != 250 ||
+		usage[0].CacheHitTokens != 900 || usage[0].CacheMissTokens != 100 {
+		t.Errorf("usage event = %+v, want the turn's token accounting", usage[0])
+	}
+
+	// A resolver read at request time: swapping the value changes the next
+	// call without rebuilding the loop.
+	modelID = "deepseek-v4-pro"
+	fake.Append(fakemodel.Text("done again"))
+	if _, err := loop.Run(context.Background(), nil, "again"); err != nil {
+		t.Fatalf("second Run() = %v", err)
+	}
+	if got, ok := fake.LastRequest(); !ok || got.Model != "deepseek-v4-pro" {
+		t.Errorf("second request model = %q (ok=%v), want deepseek-v4-pro", got.Model, ok)
+	}
+}

@@ -142,6 +142,9 @@ func TestBuildEngagementMode(t *testing.T) {
 	if !strings.Contains(h.statusText(), "engagement: acme-q4-redteam") {
 		t.Errorf("/status does not report the engagement:\n%s", h.statusText())
 	}
+	if got := h.Status(false).Targets; !strings.Contains(got, "10.0.0.0/24") {
+		t.Errorf("status targets = %q, want the in-scope target named while engaged", got)
+	}
 }
 
 func TestBuildRefusesBadEngagement(t *testing.T) {
@@ -323,6 +326,177 @@ func TestMemoryLoadsIntoPrompt(t *testing.T) {
 
 	if !strings.Contains(h.Prompt, "# Project memory (STYX.md)") || !strings.Contains(h.Prompt, "Run make check.") {
 		t.Errorf("project memory did not reach the prompt:\n%s", h.Prompt)
+	}
+}
+
+func TestMemoryCommandSurfacesSTYXmd(t *testing.T) {
+	dir := t.TempDir()
+	memoryPath := writeFile(t, dir, "STYX.md", "# Notes\n\nRun make check.\n")
+	h, err := Build(context.Background(), buildOptions(t, dir, fakemodel.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = h.Close() }()
+
+	out, err := h.command("memory", "")
+	if err != nil {
+		t.Fatalf("memory command = %v, want nil", err)
+	}
+	if !strings.Contains(out, memoryPath) || !strings.Contains(out, "Run make check.") {
+		t.Errorf("/memory = %q, want the STYX.md path and its content", out)
+	}
+
+	// Absent memory is surfaced as where the harness looked, never an error.
+	empty, err := Build(context.Background(), buildOptions(t, t.TempDir(), fakemodel.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = empty.Close() }()
+	if out, err := empty.command("memory", ""); err != nil || !strings.Contains(out, "STYX.md") {
+		t.Errorf("/memory with no file = %q/%v, want a friendly path message", out, err)
+	}
+}
+
+func TestClearCommandForgetsConversation(t *testing.T) {
+	dir := t.TempDir()
+	h, err := Build(context.Background(), buildOptions(t, dir, fakemodel.New(fakemodel.WithTurns(fakemodel.Text("answer")))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = h.Close() }()
+
+	if err := h.Submit(context.Background(), "remember this"); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Messages()) == 0 {
+		t.Fatal("setup: the turn produced no conversation")
+	}
+	h.ClearConversation()
+	if got := h.Messages(); len(got) != 0 {
+		t.Errorf("conversation after /clear = %+v, want empty", got)
+	}
+	if out, err := h.command("clear", ""); err != nil || !strings.Contains(out, "cleared") {
+		t.Errorf("/clear = %q/%v, want a confirmation", out, err)
+	}
+}
+
+func TestModelSwitchRescalesCompaction(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, filepath.Join(".styx", "config.yaml"), `model: deepseek-flash
+models:
+  - id: deepseek-flash
+    context_window: 1000
+    input_per_million: 0.3
+    output_per_million: 1.2
+    cache_hit_per_million: 0.006
+  - id: deepseek-v4-pro
+    context_window: 4000
+    input_per_million: 1.32
+    output_per_million: 3.96
+    cache_hit_per_million: 0.044
+`)
+	fake := fakemodel.New(fakemodel.WithTurns(fakemodel.Text("ok"), fakemodel.Text("ok again")))
+	h, err := Build(context.Background(), buildOptions(t, dir, fake))
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	if got := h.compactor.Settings().ContextWindow; got != 1000 {
+		t.Fatalf("initial context window = %d, want 1000", got)
+	}
+
+	// Listing marks the current model and names the pinned set.
+	out, err := h.command("model", "")
+	if err != nil {
+		t.Fatalf("model list = %v", err)
+	}
+	if !strings.Contains(out, "* deepseek-flash") || !strings.Contains(out, "deepseek-v4-pro") {
+		t.Errorf("model list = %q, want both pinned models with the current marked", out)
+	}
+
+	if _, err := h.command("model", "nope"); err == nil {
+		t.Error("unknown model = nil error, want an error")
+	}
+
+	out, err = h.command("model", "deepseek-v4-pro")
+	if err != nil {
+		t.Fatalf("model switch = %v", err)
+	}
+	if !strings.Contains(out, "deepseek-v4-pro") {
+		t.Errorf("switch output = %q, want the new model", out)
+	}
+	if got := h.currentModel(); got != "deepseek-v4-pro" {
+		t.Errorf("current model = %q, want deepseek-v4-pro", got)
+	}
+	if got := h.compactor.Settings().ContextWindow; got != 4000 {
+		t.Errorf("context window after switch = %d, want 4000 (rescaled)", got)
+	}
+	if got := h.Status(false).Model; got != "deepseek-v4-pro" {
+		t.Errorf("status model = %q, want the switched model", got)
+	}
+
+	// The swap reaches the wire: the next model call names the new ID.
+	if err := h.Submit(context.Background(), "say something"); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+	last, ok := fake.LastRequest()
+	if !ok {
+		t.Fatal("no model request was recorded")
+	}
+	if last.Model != "deepseek-v4-pro" {
+		t.Errorf("model request named %q, want deepseek-v4-pro", last.Model)
+	}
+}
+
+func TestCostTrackingFromUsage(t *testing.T) {
+	dir := t.TempDir()
+	fake := fakemodel.New(fakemodel.WithTurns(fakemodel.Turn{
+		Text: []string{"done"},
+		Usage: &model.Usage{
+			PromptTokens: 1000, CompletionTokens: 500,
+			CacheHitTokens: 800, CacheMissTokens: 200,
+		},
+	}))
+	h, err := Build(context.Background(), buildOptions(t, dir, fake))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = h.Close() }()
+
+	if err := h.Submit(context.Background(), "do work"); err != nil {
+		t.Fatal(err)
+	}
+
+	if u := h.Usage(); u.TotalTokens != 1500 || u.CacheHitTokens != 800 || u.CacheMissTokens != 200 {
+		t.Errorf("usage totals = %+v, want prompt 1000 + completion 500 with cache 800/200", u)
+	}
+	if h.Cost() <= 0 {
+		t.Errorf("cost = %v, want a positive spend", h.Cost())
+	}
+	if got := h.Status(false).Cost; !strings.Contains(got, "$") {
+		t.Errorf("status cost = %q, want a dollar readout", got)
+	}
+	if got := h.statusText(); !strings.Contains(got, "cost:") || !strings.Contains(got, "cache 800 hit / 200 miss") {
+		t.Errorf("/status = %q, want the cost line with the cache split", got)
+	}
+
+	// The usage is persisted as its own session event.
+	events, err := h.sessions.Replay(dir, h.SessionID())
+	if err != nil {
+		t.Fatalf("Replay() = %v", err)
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Kind == sessions.KindUsage {
+			found = true
+			if ev.CacheHitTokens != 800 {
+				t.Errorf("persisted usage = %+v, want the cache split", ev)
+			}
+		}
+	}
+	if !found {
+		t.Error("no usage event was persisted to the session log")
 	}
 }
 

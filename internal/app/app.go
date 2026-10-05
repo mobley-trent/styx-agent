@@ -113,6 +113,14 @@ type Harness struct {
 	// Version is the binary version.
 	Version string
 
+	// model is the pinned model ID currently in force. /model swaps it without
+	// touching the byte-stable prompt prefix (§3.1).
+	model string
+	// usage is the session's accumulated token accounting and cost, folded
+	// from every KindUsage event emitted on the bus (§3.1, §9.1).
+	usage model.Usage
+	cost  float64
+
 	sessions  *sessions.Store
 	audit     *audit.Writer
 	container *containerlayer.Manager
@@ -264,12 +272,12 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		Version:        opts.Version,
 		sessions:       store,
 		audit:          auditWriter,
-		compactor:      newCompactor(cfg, client),
 		out:            out,
 		now:            now,
 		session:        session,
 		client:         client,
 		memory:         mem,
+		model:          cfg.Model,
 		skillCatalog:   catalog,
 		mcpConnector:   opts.MCPConnector,
 		execOverride:   opts.Executor,
@@ -278,6 +286,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		fetcher:        opts.Fetcher,
 		logFetcher:     opts.LogFetcher,
 	}
+	h.compactor = newCompactor(cfg, client, h.currentModel, h.emit)
 	if eng != nil {
 		h.engagementStart = now()
 	}
@@ -540,7 +549,7 @@ func (h *Harness) mcpTools(manager *mcpclient.Manager) []agent.Tool {
 // loopOptions are the loop options shared by every mode's loop.
 func (h *Harness) loopOptions() []agent.LoopOption {
 	return []agent.LoopOption{
-		agent.WithModel(h.Config.Model),
+		agent.WithModelResolver(h.currentModel),
 		agent.WithClock(h.now),
 		agent.WithEmitter(h.emit),
 		agent.WithPrompter(operator{h}),
@@ -553,8 +562,10 @@ func (h *Harness) loopOptions() []agent.LoopOption {
 
 // newCompactor builds the session's context compactor from the merged config
 // and the active model's context window (§4.5, §3.1). The compactor is
-// stateless, so one instance is shared by the main and subagent loops.
-func newCompactor(cfg *config.Config, client model.ModelClient) *agent.Compactor {
+// stateless, so one instance is shared by the main and subagent loops; the
+// model resolver lets a mid-session /model swap reach both compaction and its
+// summarizer, and the emitter folds compaction spend into the session cost.
+func newCompactor(cfg *config.Config, client model.ModelClient, modelID func() string, emit func(sessions.Event)) *agent.Compactor {
 	window := 0
 	if m, ok := cfg.ModelByID(cfg.Model); ok {
 		window = m.ContextWindow
@@ -564,7 +575,15 @@ func newCompactor(cfg *config.Config, client model.ModelClient) *agent.Compactor
 		Threshold:     cfg.Compaction.Threshold,
 		KeepTurns:     cfg.Compaction.KeepTurns,
 		ContextWindow: window,
-	}, agent.NewModelSummarizer(client, cfg.Model), nil)
+	}, agent.NewDynamicModelSummarizer(client, modelID, agent.WithSummarizerUsageEmitter(emit)), nil)
+}
+
+// currentModel is the pinned model ID in force, safe to read from a running
+// loop or the UI goroutine.
+func (h *Harness) currentModel() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.model
 }
 
 // networkTooling returns the scope-checked fetchers for the current mode. The
@@ -944,6 +963,25 @@ func (h *Harness) CompactionLevel() (float64, bool) {
 	return compactor.Level(messages), true
 }
 
+// ClearConversation drops the session's conversation context (§9.4 /clear).
+// The system prompt, engagement context, and audit trail are untouched:
+// /clear forgets the chat, never an authorization boundary (§4.5).
+func (h *Harness) ClearConversation() {
+	h.mu.Lock()
+	h.messages = nil
+	h.mu.Unlock()
+}
+
+// memoryText is the /memory rendering: the project's STYX.md as auto-loaded
+// into the system prompt, or where the harness looked (§10.2, §9.4).
+func (h *Harness) memoryText() string {
+	path := memory.Path(h.WorkDir)
+	if strings.TrimSpace(h.memory) == "" {
+		return fmt.Sprintf("no project memory: %s is absent (create it to auto-load notes into the system prompt)", path)
+	}
+	return "project memory (" + path + "):\n\n" + strings.TrimRight(h.memory, "\n")
+}
+
 // Messages returns a copy of the session conversation.
 func (h *Harness) Messages() []model.Message {
 	h.mu.Lock()
@@ -1152,6 +1190,10 @@ func riskClass(tool string) string {
 
 // emit is the loop's session event bus: persist, then render (§4.3).
 func (h *Harness) emit(ev sessions.Event) {
+	if ev.Kind == sessions.KindUsage {
+		h.recordUsage(ev)
+	}
+
 	h.mu.Lock()
 	session, ui := h.session, h.ui
 	h.mu.Unlock()
@@ -1165,6 +1207,72 @@ func (h *Harness) emit(ev sessions.Event) {
 	if ui != nil {
 		ui(ev)
 	}
+}
+
+// recordUsage folds one turn's token accounting into the session totals and
+// prices it at the moment it arrived (§3.1). Cost is computed per event, so a
+// turn that straddles a peak/off-peak boundary is billed correctly.
+func (h *Harness) recordUsage(ev sessions.Event) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.usage.PromptTokens += ev.PromptTokens
+	h.usage.CompletionTokens += ev.CompletionTokens
+	h.usage.TotalTokens += ev.PromptTokens + ev.CompletionTokens
+	h.usage.CacheHitTokens += ev.CacheHitTokens
+	h.usage.CacheMissTokens += ev.CacheMissTokens
+	// Price with the model that produced the turn, stamped at request time:
+	// a /model swap while the turn was in flight must not reprice it.
+	id := ev.Model
+	if id == "" {
+		id = h.model
+	}
+	if info, ok := h.Config.ModelByID(id); ok {
+		h.cost += info.Info().Pricing.Cost(model.Usage{
+			PromptTokens:     ev.PromptTokens,
+			CompletionTokens: ev.CompletionTokens,
+			CacheHitTokens:   ev.CacheHitTokens,
+			CacheMissTokens:  ev.CacheMissTokens,
+		}, h.now())
+	}
+}
+
+// Usage returns the session's accumulated token accounting.
+func (h *Harness) Usage() model.Usage {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.usage
+}
+
+// Cost returns the session's accumulated model spend in US dollars.
+func (h *Harness) Cost() float64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cost
+}
+
+// costText is the status bar's spend readout (§3.1, §9.1). It is empty until a
+// turn reports usage.
+func (h *Harness) costText() string {
+	h.mu.Lock()
+	usage, cost := h.usage, h.cost
+	h.mu.Unlock()
+	if usage.TotalTokens == 0 {
+		return ""
+	}
+	return fmt.Sprintf("cost $%.4f", cost)
+}
+
+// usageText is the /status spend line, with the cache-token split that drives
+// the pricing (§3.1).
+func (h *Harness) usageText() string {
+	h.mu.Lock()
+	usage, cost := h.usage, h.cost
+	h.mu.Unlock()
+	if usage.TotalTokens == 0 {
+		return "cost:     no model usage recorded yet"
+	}
+	return fmt.Sprintf("cost:     $%.4f (%d prompt, %d completion; cache %d hit / %d miss)",
+		cost, usage.PromptTokens, usage.CompletionTokens, usage.CacheHitTokens, usage.CacheMissTokens)
 }
 
 // packDetection is the harness-decided pack evidence for the current prefix
@@ -1303,17 +1411,40 @@ func hasLogArtifacts(root string) bool {
 
 // Status is the status-bar state for the TUI (§9.1).
 func (h *Harness) Status(busy bool) tui.Status {
-	mode, _ := h.modeAndEngagement()
+	mode, eng := h.modeAndEngagement()
 	return tui.Status{
 		Mode:       string(mode),
 		Packs:      h.packStatus(),
-		Model:      h.Config.Model,
+		Model:      h.currentModel(),
+		Targets:    scopeText(eng),
 		Session:    shortID(h.SessionID()),
 		Isolation:  string(h.isolation()),
 		MCP:        mcpStatusText(h.MCPServers()),
 		Compaction: h.compactionText(),
+		Cost:       h.costText(),
 		Busy:       busy,
 	}
+}
+
+// scopeText is the status bar's in-scope target readout when an engagement is
+// active (§9.1). It lists the first few targets and summarizes the rest so the
+// one-line bar never floods.
+func scopeText(eng *engagement.Engagement) string {
+	if eng == nil {
+		return ""
+	}
+	targets := eng.Targets()
+	if len(targets) == 0 {
+		return ""
+	}
+	const maxShown = 3
+	shown := targets
+	suffix := ""
+	if len(shown) > maxShown {
+		shown = shown[:maxShown]
+		suffix = fmt.Sprintf(" +%d", len(targets)-maxShown)
+	}
+	return "scope " + strings.Join(shown, ",") + suffix
 }
 
 // compactionText is the status bar's context-fill readout (§4.5, §9.1).
@@ -1405,7 +1536,7 @@ func (h *Harness) statusText() string {
 	lines := []string{
 		fmt.Sprintf("mode:     %s", mode),
 		fmt.Sprintf("packs:    %s", h.packStatus()),
-		fmt.Sprintf("model:    %s", h.Config.Model),
+		fmt.Sprintf("model:    %s", h.currentModel()),
 		fmt.Sprintf("session:  %s", h.SessionID()),
 		fmt.Sprintf("project:  %s", h.WorkDir),
 	}
@@ -1419,6 +1550,7 @@ func (h *Harness) statusText() string {
 	if level, ok := h.CompactionLevel(); ok {
 		lines = append(lines, fmt.Sprintf("context:  %.0f%% of the model window", level*100))
 	}
+	lines = append(lines, h.usageText())
 	for _, s := range h.MCPServers() {
 		lines = append(lines, fmt.Sprintf("mcp:      %s %s (%s)", s.Name, s.Status, s.Detail))
 	}

@@ -5,9 +5,9 @@
 // the model, executes tools, or contains policy logic — every permission
 // decision still resolves through the policy engine.
 //
-// This build is the tracer bullet's thin stream (§9.1): the chat stream, the
-// one-line status bar, and line input. Diffs, prompt cards, plan blocks, and
-// the full slash-command set land in a later ticket.
+// This build is the complete stream (§9): the chat stream, the one-line status
+// bar, line input, diffs, prompt cards, plan blocks, subagent blocks, and the
+// dark/light themes auto-selected from the terminal background.
 package tui
 
 import (
@@ -61,6 +61,9 @@ type Status struct {
 	Packs string
 	// Model is the pinned model ID in force.
 	Model string
+	// Targets is the in-scope target summary while engagement mode is active
+	// ("scope 10.0.0.0/24,…"); empty in safe mode (§9.1).
+	Targets string
 	// Session is the current session ID, short-form.
 	Session string
 	// Isolation is the container enforcement level, empty until the container
@@ -72,6 +75,9 @@ type Status struct {
 	// Compaction is the context-fill readout ("ctx 42%"), empty when the
 	// model's context window is unknown (§4.5, §9.1).
 	Compaction string
+	// Cost is the session's accumulated model spend ("cost $0.0012"), empty
+	// until a turn reports usage (§3.1, §9.1).
+	Cost string
 	// Busy is true while the loop is working a turn.
 	Busy bool
 }
@@ -86,6 +92,9 @@ type Config struct {
 	// Command handles a slash command and returns text to render. A non-nil
 	// error is rendered as an error line.
 	Command func(name, arg string) (string, error)
+	// Clear resets the harness conversation when the operator runs /clear. The
+	// TUI clears its own transcript; the app forgets the model context.
+	Clear func()
 	// Quit is called when the user asks to leave.
 	Quit func()
 }
@@ -192,7 +201,7 @@ func (b *subagentBlock) toggle() { b.expanded = !b.expanded }
 
 // render flattens the block to stream lines: a header always, the transcript
 // and report only when expanded.
-func (b *subagentBlock) render() []string {
+func (b *subagentBlock) render(th theme) []string {
 	marker, status := "▸", "done"
 	if b.expanded {
 		marker = "▾"
@@ -212,11 +221,11 @@ func (b *subagentBlock) render() []string {
 		out = append(out, "    "+ln)
 	}
 	if b.failure != "" {
-		out = append(out, "    "+failStyle.Render("✗ "+b.failure))
+		out = append(out, "    "+th.fail.Render("✗ "+b.failure))
 		return out
 	}
 	if b.report != "" {
-		out = append(out, "    "+cardStyle.Render("─ report ─"))
+		out = append(out, "    "+th.card.Render("─ report ─"))
 		for _, ln := range strings.Split(strings.TrimRight(b.report, "\n"), "\n") {
 			out = append(out, "    "+ln)
 		}
@@ -227,6 +236,11 @@ func (b *subagentBlock) render() []string {
 // Model is the thin chat-stream model.
 type Model struct {
 	cfg Config
+
+	// styles is the active theme, auto-selected from the terminal background
+	// (§9.6). dark reports which theme is in force.
+	styles theme
+	dark   bool
 
 	items   []item
 	partial string
@@ -246,19 +260,26 @@ type Model struct {
 	quit   bool
 }
 
-// New builds the UI model.
+// New builds the UI model. The dark theme is the default until the terminal
+// answers the background-color query in Init (§9.6).
 func New(cfg Config) *Model {
-	return &Model{cfg: cfg, width: 80, height: 24, subagents: map[string]*subagentBlock{}}
+	return &Model{cfg: cfg, width: 80, height: 24, dark: true, styles: themeFor(true), subagents: map[string]*subagentBlock{}}
 }
 
-// Init implements tea.Model.
-func (m *Model) Init() tea.Cmd { return nil }
+// Init implements tea.Model. It asks the terminal for its background color so
+// the theme can auto-select (§9.6).
+func (m *Model) Init() tea.Cmd {
+	return func() tea.Msg { return tea.RequestBackgroundColor() }
+}
 
 // Update implements tea.Model.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+	case tea.BackgroundColorMsg:
+		m.dark = msg.IsDark()
+		m.styles = themeFor(m.dark)
 	case tea.KeyPressMsg:
 		return m.key(msg)
 	case EventMsg:
@@ -354,6 +375,18 @@ func (m *Model) submit() {
 			m.cfg.Quit()
 		}
 		return
+	case "clear":
+		// /clear forgets the transcript and the model context, but never the
+		// chrome: the status bar, input, and any live card stay (§9.4). The
+		// app drops the conversation; the TUI drops what it rendered.
+		m.items = nil
+		m.partial = ""
+		m.subagents = map[string]*subagentBlock{}
+		if m.cfg.Clear != nil {
+			m.cfg.Clear()
+		}
+		m.append("conversation context cleared")
+		return
 	}
 	if m.cfg.Command == nil {
 		m.append("no commands are available")
@@ -444,14 +477,14 @@ func (m *Model) promptBlock() []string {
 	var lines []string
 
 	if p.Kind == PromptPlan {
-		lines = append(lines, cardStyle.Render(fmt.Sprintf("╭─ plan approval (%d step(s))", len(p.Steps))))
+		lines = append(lines, m.styles.card.Render(fmt.Sprintf("╭─ plan approval (%d step(s))", len(p.Steps))))
 		for _, step := range p.Steps {
 			lines = append(lines, "│ · "+step.Tool+" "+compactJSON(step.Params))
 		}
 		lines = append(lines, "│ "+
-			cardKeyStyle.Render("y")+" approve   "+
-			cardKeyStyle.Render("n")+" reject")
-		lines = append(lines, cardStyle.Render("╰─"))
+			m.styles.cardKey.Render("y")+" approve   "+
+			m.styles.cardKey.Render("n")+" reject")
+		lines = append(lines, m.styles.card.Render("╰─"))
 		return lines
 	}
 
@@ -465,17 +498,17 @@ func (m *Model) promptBlock() []string {
 		} else if p.Path != "" {
 			header += " · " + p.Path
 		}
-		lines = append(lines, cardStyle.Render(header))
+		lines = append(lines, m.styles.card.Render(header))
 		if p.Diff != nil {
 			for _, ln := range capDiffLines(p.Diff.Lines, diffViewLines) {
-				lines = append(lines, "│ "+renderDiffLine(ln))
+				lines = append(lines, "│ "+renderDiffLine(m.styles, ln))
 			}
 		}
 		lines = append(lines, "│ "+
-			cardKeyStyle.Render("a")+" accept   "+
-			cardKeyStyle.Render("r")+" reject   "+
-			cardKeyStyle.Render("A")+" accept-all-rest-of-turn")
-		lines = append(lines, cardStyle.Render("╰─"))
+			m.styles.cardKey.Render("a")+" accept   "+
+			m.styles.cardKey.Render("r")+" reject   "+
+			m.styles.cardKey.Render("A")+" accept-all-rest-of-turn")
+		lines = append(lines, m.styles.card.Render("╰─"))
 		return lines
 	}
 
@@ -487,13 +520,13 @@ func (m *Model) promptBlock() []string {
 	if risk := p.riskText(); risk != "" {
 		header += " (" + risk + ")"
 	}
-	lines = append(lines, cardStyle.Render(header))
+	lines = append(lines, m.styles.card.Render(header))
 	lines = append(lines, "│ params: "+compactJSON(p.Params))
 	lines = append(lines, "│ "+
-		cardKeyStyle.Render("y")+" allow-once   "+
-		cardKeyStyle.Render("a")+" allow-session   "+
-		cardKeyStyle.Render("n")+" deny")
-	lines = append(lines, cardStyle.Render("╰─"))
+		m.styles.cardKey.Render("y")+" allow-once   "+
+		m.styles.cardKey.Render("a")+" allow-session   "+
+		m.styles.cardKey.Render("n")+" deny")
+	lines = append(lines, m.styles.card.Render("╰─"))
 	return lines
 }
 
@@ -510,12 +543,12 @@ func (p Prompt) riskText() string {
 }
 
 // renderDiffLine renders one diff line with its marker and styling.
-func renderDiffLine(ln diff.Line) string {
+func renderDiffLine(th theme, ln diff.Line) string {
 	switch ln.Op {
 	case diff.OpAdd:
-		return addStyle.Render("+" + ln.Text)
+		return th.add.Render("+" + ln.Text)
 	case diff.OpRemove:
-		return delStyle.Render("-" + ln.Text)
+		return th.del.Render("-" + ln.Text)
 	default:
 		return " " + ln.Text
 	}
@@ -570,7 +603,7 @@ func (m *Model) body() []string {
 	var out []string
 	for _, it := range m.items {
 		if it.block != nil {
-			out = append(out, it.block.render()...)
+			out = append(out, it.block.render(m.styles)...)
 			continue
 		}
 		out = append(out, it.text)
@@ -580,7 +613,7 @@ func (m *Model) body() []string {
 
 // inputLine is the prompt with the current buffer and a block cursor.
 func (m *Model) inputLine() string {
-	return promptStyle.Render("> ") + string(m.input) + "█"
+	return m.styles.prompt.Render("> ") + string(m.input) + "█"
 }
 
 // statusLine is the one-line status bar (§9.1).
@@ -599,11 +632,17 @@ func (m *Model) statusLine() string {
 	if status.Isolation != "" {
 		parts = append(parts, status.Isolation)
 	}
+	if status.Targets != "" {
+		parts = append(parts, status.Targets)
+	}
 	if status.MCP != "" {
 		parts = append(parts, status.MCP)
 	}
 	if status.Compaction != "" {
 		parts = append(parts, status.Compaction)
+	}
+	if status.Cost != "" {
+		parts = append(parts, status.Cost)
 	}
 	if status.Session != "" {
 		parts = append(parts, status.Session)
@@ -615,7 +654,7 @@ func (m *Model) statusLine() string {
 	if pad := m.width - lipgloss.Width(text); pad > 0 {
 		text += strings.Repeat(" ", pad)
 	}
-	return statusStyle.Render(text)
+	return m.styles.status.Render(text)
 }
 
 // apply renders one session event onto the stream.
@@ -646,7 +685,7 @@ func (m *Model) apply(ev sessions.Event) {
 		}
 	case sessions.KindToolCall:
 		m.commitPartial()
-		m.append(toolStyle.Render("  " + toolCallText(ev)))
+		m.append(m.styles.tool.Render("  " + toolCallText(ev)))
 	case sessions.KindToolResult:
 		// The delegation result is the subagent block's report; rendering it
 		// again here would duplicate the run.
@@ -656,7 +695,7 @@ func (m *Model) apply(ev sessions.Event) {
 		m.commitPartial()
 		switch {
 		case ev.Failure != "":
-			m.append(failStyle.Render("    " + toolResultText(ev)))
+			m.append(m.styles.fail.Render("    " + toolResultText(ev)))
 		case ev.Result == "":
 			m.append("    " + toolResultText(ev))
 		default:
@@ -665,10 +704,10 @@ func (m *Model) apply(ev sessions.Event) {
 	case sessions.KindDiff:
 		m.commitPartial()
 		if ev.Diff != nil {
-			m.append("  " + diffHeaderStyle.Render(ev.Diff.Summary()))
+			m.append("  " + m.styles.diffHeader.Render(ev.Diff.Summary()))
 			lines := make([]string, 0, len(ev.Diff.Lines))
 			for _, ln := range capDiffLines(ev.Diff.Lines, diffViewLines) {
-				lines = append(lines, "    "+renderDiffLine(ln))
+				lines = append(lines, "    "+renderDiffLine(m.styles, ln))
 			}
 			m.append(strings.Join(lines, "\n"))
 		} else if ev.Path != "" {
@@ -676,19 +715,19 @@ func (m *Model) apply(ev sessions.Event) {
 		}
 	case sessions.KindPlan:
 		m.commitPartial()
-		m.append("  " + diffHeaderStyle.Render("plan"))
+		m.append("  " + m.styles.diffHeader.Render("plan"))
 		for _, step := range ev.Steps {
 			m.append("    · " + step.Tool + " " + compactJSON(step.Params))
 		}
 	case sessions.KindCompaction:
-		m.append("… compacted: " + ev.Detail)
+		m.append(m.styles.card.Render("… compacted: " + ev.Detail))
 	case sessions.KindEngagement:
 		m.commitPartial()
 		switch {
 		case ev.Engagement != "":
-			m.append("⚑ engagement active: " + ev.Engagement)
+			m.append(m.styles.banner.Render("⚑ engagement active: " + ev.Engagement))
 		case ev.Detail != "":
-			m.append("⚑ " + ev.Detail)
+			m.append(m.styles.banner.Render("⚑ " + ev.Detail))
 		}
 	case sessions.KindIsolation:
 		m.commitPartial()
@@ -696,33 +735,33 @@ func (m *Model) apply(ev sessions.Event) {
 		if text == "" {
 			text = ev.Isolation
 		}
-		m.append(bannerStyle.Render("⚑ " + text))
+		m.append(m.styles.banner.Render("⚑ " + text))
 	case sessions.KindMCP:
 		// MCP connection lifecycle is always visible: a server that failed to
 		// launch, crashed, or disconnected must never be silent (§5.5).
 		m.commitPartial()
-		m.append(mcpLine(ev))
+		m.append(mcpLine(m.styles, ev))
 	case sessions.KindError:
 		m.commitPartial()
-		m.append(failStyle.Render("! " + ev.Failure))
+		m.append(m.styles.fail.Render("! " + ev.Failure))
 	}
 }
 
 // mcpLine renders one MCP server lifecycle transition.
-func mcpLine(ev sessions.Event) string {
+func mcpLine(th theme, ev sessions.Event) string {
 	server := ev.Server
 	if server == "" {
 		server = "server"
 	}
 	switch ev.Status {
 	case "ready":
-		return bannerStyle.Render("⚑ mcp "+server+": ready") + " (" + ev.Detail + ")"
+		return th.banner.Render("⚑ mcp "+server+": ready") + " (" + ev.Detail + ")"
 	case "failed":
-		return failStyle.Render("! mcp " + server + " unavailable: " + ev.Detail)
+		return th.fail.Render("! mcp " + server + " unavailable: " + ev.Detail)
 	case "closed":
-		return cardStyle.Render("  mcp " + server + ": closed")
+		return th.card.Render("  mcp " + server + ": closed")
 	default:
-		return cardStyle.Render("  mcp " + server + ": " + ev.Status)
+		return th.card.Render("  mcp " + server + ": " + ev.Status)
 	}
 }
 
@@ -918,18 +957,3 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
-
-// Styles. One polished dark theme and a light variant land with the full TUI;
-// this build keeps the chrome minimal and legible on both.
-var (
-	statusStyle     = lipgloss.NewStyle().Bold(true)
-	promptStyle     = lipgloss.NewStyle().Bold(true)
-	toolStyle       = lipgloss.NewStyle().Faint(true)
-	failStyle       = lipgloss.NewStyle().Bold(true)
-	cardStyle       = lipgloss.NewStyle().Faint(true)
-	cardKeyStyle    = lipgloss.NewStyle().Bold(true)
-	bannerStyle     = lipgloss.NewStyle().Bold(true)
-	diffHeaderStyle = lipgloss.NewStyle().Bold(true)
-	addStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	delStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-)
