@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/netfetch"
 	"github.com/mobley-trent/styx-agent/internal/policy"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
+	"github.com/mobley-trent/styx-agent/internal/skillpacks"
 	"github.com/mobley-trent/styx-agent/internal/skills"
 	"github.com/mobley-trent/styx-agent/internal/tui"
 )
@@ -135,7 +137,11 @@ type Harness struct {
 	messages        []model.Message
 	engagementStart time.Time
 	notesWritten    bool
-	ui              func(sessions.Event)
+	// packs is the harness-decided pack selection for the current prefix. It
+	// is resolved at session start / gate activation and cached: the prefix is
+	// never swapped mid-session (§8.2), and the status bar reads it every frame.
+	packs skillpacks.Selection
+	ui    func(sessions.Event)
 	// ask is the live operator-interaction sink (the TUI's inline cards). Nil
 	// means no interactive operator is attached, and guarded actions take
 	// their safe default: deny, reject, or no plan.
@@ -312,10 +318,22 @@ func (h *Harness) configure() error {
 		mode = policy.ModeEngagement
 	}
 
+	// External capabilities through one gate (§5.5): MCP servers are launched
+	// per project, and their connected state is part of pack detection (an RE
+	// MCP server activates the RE pack, §8.2). The manager is created once and
+	// reused across mode switches; a failed launch is a visible lifecycle
+	// event, never a startup refusal.
+	mcpManager := h.ensureMCP()
+
+	// Pack detection is resolved once, here, and cached: injection happens at
+	// session start / gate activation and the byte-stable prefix is never
+	// swapped mid-session (§8.2).
+	selection := skillpacks.Select(h.packDetection(mode))
 	prompt, err := agent.BuildSystemPrompt(agent.PromptInput{
 		Mode:       mode,
 		Engagement: engagementContext(eng),
 		Memory:     h.memory,
+		Packs:      selection.Detection,
 	})
 	if err != nil {
 		return err
@@ -381,17 +399,16 @@ func (h *Harness) configure() error {
 		baseTools = append(baseTools, skillTool)
 	}
 
-	// External capabilities through one gate (§5.5): MCP servers are launched
-	// per project, and their tools join the session registry as ordinary
-	// descriptors — same validation, same policy engine, same audit. A server
-	// that fails to launch is a visible lifecycle event, never a startup
-	// refusal: the built-ins keep working.
-	//
-	// The manager is created once and reused across mode switches: a server's
-	// reach is bounded per call by the policy engine, which is rebuilt here,
-	// so a mode switch need not tear the connections down and relaunch them.
-	mcpManager := h.ensureMCP()
+	// MCP tools join the session registry as ordinary descriptors — same
+	// validation, same policy engine, same audit. The manager was created
+	// above, before prompt assembly, because its connected state feeds pack
+	// detection.
 	baseTools = append(baseTools, h.mcpTools(mcpManager)...)
+
+	// Apply the active packs' allowlist deltas (§8.1): a tool a pack's delta
+	// classifies is tagged so the ROE hard limits bind to it — red-team exploit
+	// tooling (exploit_allowed) and RE sample detonation (destructive).
+	applyPackTags(baseTools, selection)
 
 	base, err := agent.NewRegistry(baseTools...)
 	if err != nil {
@@ -435,6 +452,7 @@ func (h *Harness) configure() error {
 	h.Prompt = prompt
 	h.Engine = engine
 	h.Tools = tools
+	h.packs = selection
 	h.container = container
 	h.Loop = agent.NewLoop(h.client, tools, engine, h.audit, prompt, h.loopOptions()...)
 	h.mu.Unlock()
@@ -1149,11 +1167,143 @@ func (h *Harness) emit(ev sessions.Event) {
 	}
 }
 
+// packDetection is the harness-decided pack evidence for the current prefix
+// (§8.2): engagement active, an RE-class MCP server connected, or log/IR
+// artifacts present. It is evaluated once per configure and cached on the
+// selection; it is never consulted per call.
+func (h *Harness) packDetection(mode policy.Mode) skillpacks.Detection {
+	d := skillpacks.Detection{EngagementActive: mode == policy.ModeEngagement}
+	for _, s := range h.MCPServers() {
+		if s.Status == mcpclient.StatusReady && skillpacks.IsREMCPName(s.Name) {
+			d.REMCPConnected = true
+			break
+		}
+	}
+	d.LogArtifactsOpen = hasLogArtifacts(h.WorkDir)
+	return d
+}
+
+// packSelection returns the cached pack selection, fixed at the last configure.
+func (h *Harness) packSelection() skillpacks.Selection {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.packs
+}
+
+// packStatus is the status bar's active-pack readout (§9.1): the packs whose
+// full workflow is injected, joined for a one-line display.
+func (h *Harness) packStatus() string {
+	return strings.Join(h.packSelection().ActiveNames(), "+")
+}
+
+// packText is the /pack rendering: every pack's resolved state, its reason, its
+// presets, and (for an active domain) its recommended MCP servers.
+func (h *Harness) packText() string {
+	sel := h.packSelection()
+	var b strings.Builder
+	b.WriteString("skill packs (harness-selected; the model never chooses):")
+	for _, st := range sel.States() {
+		state := "compact"
+		if st.Full {
+			state = "full"
+		}
+		fmt.Fprintf(&b, "\n  %-9s %-7s %s", st.Pack.ID, state, st.Reason)
+		if len(st.Pack.Presets) > 0 {
+			b.WriteString("  presets: " + strings.Join(st.Pack.Presets, ", "))
+		}
+	}
+	var recs []string
+	for _, st := range sel.States() {
+		if !st.Full {
+			continue
+		}
+		for _, rec := range st.Pack.MCP {
+			line := fmt.Sprintf("\n  [%s] %s → %s", st.Pack.ID, rec.Capability, rec.Recommended)
+			if len(rec.Alternative) > 0 {
+				line += " (alternatives: " + strings.Join(rec.Alternative, ", ") + ")"
+			}
+			recs = append(recs, line)
+		}
+	}
+	if len(recs) > 0 {
+		b.WriteString("\n\nrecommended MCP servers (styx ships none):")
+		b.WriteString(strings.Join(recs, ""))
+	}
+	return b.String()
+}
+
+// applyPackTags applies the active packs' allowlist deltas to the session's
+// tools (§8.1): a tool a delta classifies carries the tag into the policy
+// engine and the audit record. Only the registry sets these tags.
+func applyPackTags(tools []agent.Tool, sel skillpacks.Selection) {
+	for i := range tools {
+		exploit, destructive := sel.Tags(tools[i].Name)
+		if exploit {
+			tools[i].ExploitClass = true
+		}
+		if destructive {
+			tools[i].Destructive = true
+		}
+	}
+}
+
+// packScanMaxDepth bounds the session-start artifact scan so a large repository
+// is never walked in full.
+const packScanMaxDepth = 3
+
+// packScanSkipDirs are directories the artifact scan does not descend into:
+// dependency and build trees, and anything hidden.
+var packScanSkipDirs = map[string]bool{
+	"node_modules": true, "vendor": true, "target": true,
+	"dist": true, "build": true, ".git": true,
+}
+
+// hasLogArtifacts reports whether the project holds a log or IR artifact
+// (§8.2: "log/IR artifacts opened → blue team"). The scan is bounded and
+// conservative: only well-known forensic/log extensions under a shallow tree
+// activate the domain.
+func hasLogArtifacts(root string) bool {
+	found := false
+	//nolint:errcheck // a best-effort detection scan: an unreadable subtree is skipped.
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if found {
+			return fs.SkipDir
+		}
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			return nil
+		}
+		depth := 0
+		if rel != "." {
+			depth = strings.Count(filepath.ToSlash(rel), "/") + 1
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if p != root && (strings.HasPrefix(name, ".") || packScanSkipDirs[name]) {
+				return fs.SkipDir
+			}
+			if depth >= packScanMaxDepth {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if skillpacks.LooksLikeLogArtifact(d.Name()) {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 // Status is the status-bar state for the TUI (§9.1).
 func (h *Harness) Status(busy bool) tui.Status {
 	mode, _ := h.modeAndEngagement()
 	return tui.Status{
 		Mode:       string(mode),
+		Packs:      h.packStatus(),
 		Model:      h.Config.Model,
 		Session:    shortID(h.SessionID()),
 		Isolation:  string(h.isolation()),
@@ -1251,6 +1401,7 @@ func (h *Harness) statusText() string {
 	mode, eng := h.modeAndEngagement()
 	lines := []string{
 		fmt.Sprintf("mode:     %s", mode),
+		fmt.Sprintf("packs:    %s", h.packStatus()),
 		fmt.Sprintf("model:    %s", h.Config.Model),
 		fmt.Sprintf("session:  %s", h.SessionID()),
 		fmt.Sprintf("project:  %s", h.WorkDir),

@@ -97,6 +97,18 @@ func TestEngineEngagementScopeSemantics(t *testing.T) {
 			call: Call{Tool: "web_fetch", ScopeTargets: []Target{{Addr: inScopeHost}, {Addr: outScopeHost}}},
 			want: VerdictPrompt, wantRsn: ReasonOutOfScope,
 		},
+		{
+			name: "destructive in-scope call prompts, never auto-allows",
+			mode: ModeEngagement, scope: scope,
+			call: Call{Tool: "mcp__cuckoo__detonate", Destructive: true, ScopeTargets: []Target{{Addr: inScopeHost}}},
+			want: VerdictPrompt, wantRsn: ReasonDestructive,
+		},
+		{
+			name: "non-destructive in-scope call still auto-allows",
+			mode: ModeEngagement, scope: scope,
+			call: Call{Tool: "mcp__ghidra__decompile", ScopeTargets: []Target{{Addr: inScopeHost}}},
+			want: VerdictAllow, wantRsn: ReasonInScope,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -111,8 +111,14 @@ func (e *Engine) Decide(call Call) VerdictResult {
 		}
 	}
 
-	// 3. Scope decides allow vs prompt (§6.2).
+	// 3. Scope decides allow vs prompt (§6.2). A destructive-tagged call is
+	// never auto-allowed even in scope: detonation is always an explicit
+	// operator decision (§8.3). This is a prompt, not a hard deny — the
+	// destructive_forbidden hard limit is the ROE check above.
 	if e.allInScope(call) {
+		if call.Destructive {
+			return VerdictResult{VerdictPrompt, ReasonDestructive}
+		}
 		return VerdictResult{VerdictAllow, ReasonInScope}
 	}
 	return VerdictResult{VerdictPrompt, ReasonOutOfScope}

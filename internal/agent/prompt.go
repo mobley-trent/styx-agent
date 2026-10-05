@@ -8,6 +8,7 @@ import (
 	"text/template"
 
 	"github.com/mobley-trent/styx-agent/internal/policy"
+	"github.com/mobley-trent/styx-agent/internal/skillpacks"
 )
 
 // Prompt sections are data, never Go string literals (§2): the prompt golden
@@ -19,9 +20,6 @@ var identitySection string
 
 //go:embed promptdata/harness.md
 var harnessSection string
-
-//go:embed promptdata/coding.md
-var codingSection string
 
 //go:embed promptdata/engagement.md.tmpl
 var engagementTemplate string
@@ -59,13 +57,19 @@ type PromptInput struct {
 	Engagement *EngagementContext
 	// Memory is the project's STYX.md contents, empty when absent.
 	Memory string
+	// Packs is the harness-decided pack detection (§8.2), resolved once at
+	// session start / gate activation. Coding is always injected; each
+	// security pack's full section replaces its compact section when its
+	// trigger fired. The model never selects packs.
+	Packs skillpacks.Detection
 }
 
 // BuildSystemPrompt renders the system prompt, the head of the byte-stable
 // prefix. Sections are separated by a blank line and appear in a fixed order:
-// identity, working rules, engagement context, project memory, coding
-// workflow. Swap nothing in place — a change to this string is a change to
-// the cache prefix and to the golden snapshot.
+// identity, working rules, engagement context, project memory, then the skill
+// pack sections (coding always, each security pack compact or full). Swap
+// nothing in place — a change to this string is a change to the cache prefix
+// and to the golden snapshot.
 func BuildSystemPrompt(in PromptInput) (string, error) {
 	sections := []string{identitySection, harnessSection}
 
@@ -84,7 +88,10 @@ func BuildSystemPrompt(in PromptInput) (string, error) {
 		sections = append(sections, rendered)
 	}
 
-	sections = append(sections, codingSection)
+	// Skill packs: coding always, then each security pack's full section when
+	// its domain is detected and its compact always-on section otherwise
+	// (§8.2). The order is fixed, so the prefix stays byte-stable.
+	sections = append(sections, skillpacks.Select(in.Packs).Sections()...)
 
 	trimmed := make([]string, 0, len(sections))
 	for _, s := range sections {

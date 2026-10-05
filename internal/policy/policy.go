@@ -30,6 +30,10 @@ const (
 	// ReasonOutOfScope is the reason when engagement is active but a target
 	// is out of scope: prompt.
 	ReasonOutOfScope Reason = "out-of-scope"
+	// ReasonDestructive is the reason when an in-scope engagement call is
+	// destructive-tagged: prompt, never auto-allow (§8.3: sample detonation is
+	// always an explicit operator decision).
+	ReasonDestructive Reason = "destructive"
 	// ReasonROE is the reason when a rules-of-engagement limit hard-denied
 	// the call.
 	ReasonROE Reason = "roe"
