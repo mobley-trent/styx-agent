@@ -58,9 +58,67 @@ Storage: per-session JSONL under `~/.local/share/styx/sessions/<project>/`, the
 audit trail (`styx-audit-<timestamp>.jsonl`) in the project directory, and
 project memory in `STYX.md`.
 
+## Install
+
+Blessed surfaces ([docs/spec.md §12](docs/spec.md)):
+
+- **macOS 13+ — Homebrew tap:**
+  ```sh
+  brew install mobley-trent/styx/styx
+  ```
+- **Linux — install script** (picks the architecture, verifies the archive
+  against the published `SHA256SUMS`, installs to `~/.local/bin`):
+  ```sh
+  curl -fsSL https://raw.githubusercontent.com/mobley-trent/styx-agent/main/install.sh | sh
+  ```
+
+Release archives carry `SHA256SUMS` signed with **keyless cosign** (`cosign
+sign-blob`, GitHub Actions OIDC). The install script verifies the checksum
+automatically; for a manual download, verify the signature first:
+
+```sh
+cosign verify-blob \
+  --certificate SHA256SUMS.pem \
+  --signature SHA256SUMS.sig \
+  --certificate-identity-regexp '^https://github.com/mobley-trent/styx-agent/.github/workflows/release.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+`go install github.com/mobley-trent/styx-agent/cmd/styx@latest`, Linuxbrew, and
+unpacking a release archive by hand all work but are unsupported.
+
+## Updates
+
+**There is no self-updater, ever** — a security harness never rewrites its own
+binary mid-flight.
+
+```sh
+styx update   # prints the latest release and your detected install source
+```
+
+The TUI update notifier makes a **single** request to the GitHub
+releases-latest endpoint per session and prints a one-line notice when a newer
+stable release exists. It never installs anything. Opt out with
+`update_notifier: false` in config or `STYX_NO_UPDATE_NOTIFIER=1` in the
+environment; it is disabled automatically for source builds and while
+engagement mode is active.
+
+## Compatibility
+
+- **Sessions and config are same-major compatible.** Session JSONL and YAML
+  config are read with unknown kinds/keys tolerated; new fields are additive.
+  Upgrading within a major version never strands history or refuses an old
+  config.
+- **The engagement file is versioned** with `apiVersion: styx.engagement/v1`,
+  validated at the engagement gate; an unknown version refuses to start rather
+  than run with an ambiguous scope.
+- Channels are **stable SemVer tags only** — no nightly or beta builds.
+
 ## License
 
-Apache-2.0.
+Apache-2.0. See [LICENSE](LICENSE).
 
 [issue #22]: https://github.com/mobley-trent/styx-agent/issues/22
 [issue #23]: https://github.com/mobley-trent/styx-agent/issues/23

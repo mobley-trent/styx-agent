@@ -1,0 +1,94 @@
+name: Release
+
+# Stable-only channel (§12.3): tags that carry a pre-release suffix ("-") are
+# skipped, so the tap and release never move on an rc/beta tag.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  goreleaser:
+    name: goreleaser / cosign
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Create the GitHub release and push the Homebrew formula to the tap.
+      contents: write
+      # Keyless cosign: the job's OIDC token is the signing identity (§12.2).
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  # Exercise the published artifacts for real on both blessed OSes: verify the
+  # checksum signature, verify the archive against SHA256SUMS, and run the
+  # binary. This proves the release path end to end (§12.1, §12.2).
+  verify:
+    name: verify (${{ matrix.os }})
+    needs: goreleaser
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            archive_os: linux
+            archive_arch: amd64
+          - os: macos-latest
+            archive_os: darwin
+            archive_arch: arm64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Download release artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern 'SHA256SUMS*' --pattern '*.tar.gz'
+
+      - name: Verify the checksum signature
+        shell: bash
+        run: |
+          cosign verify-blob \
+            --certificate SHA256SUMS.pem \
+            --signature SHA256SUMS.sig \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            SHA256SUMS
+
+      - name: Verify the archive and run the binary
+        shell: bash
+        run: |
+          set -eu
+          archive="styx_${GITHUB_REF_NAME#v}_${{ matrix.archive_os }}_${{ matrix.archive_arch }}.tar.gz"
+          grep " $archive\$" SHA256SUMS > archive.sha256
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -c archive.sha256
+          else
+            shasum -a 256 -c archive.sha256
+          fi
+          tar -xzf "$archive" styx
+          ./styx --version

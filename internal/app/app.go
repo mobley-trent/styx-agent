@@ -35,6 +35,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/skillpacks"
 	"github.com/mobley-trent/styx-agent/internal/skills"
 	"github.com/mobley-trent/styx-agent/internal/tui"
+	"github.com/mobley-trent/styx-agent/internal/update"
 )
 
 // Runner drives a built harness interactively. The default is the Bubble Tea
@@ -50,6 +51,9 @@ type Options struct {
 	ProjectDir string
 	// Version is the running binary's version, shown in the status line.
 	Version string
+	// SourceBuild marks an unstamped (go build / go install) binary. The update
+	// notifier is disabled for source builds (§12.1, §12.3).
+	SourceBuild bool
 
 	// Stdin, Stdout, and Stderr default to the process's streams.
 	Stdin  io.Reader
@@ -80,6 +84,9 @@ type Options struct {
 	LogFetcher agent.LogFetcher
 	// SkipModelCheck disables the startup GET /models validation (§3.1).
 	SkipModelCheck bool
+	// UpdateFetcher overrides the update notifier's releases fetch (tests).
+	// Nil means the default HTTP fetcher.
+	UpdateFetcher update.Fetcher
 	// GlobalSkillsDirs overrides the global skill roots (§8.4). Nil uses the
 	// default roots (~/.agents/skills and its XDG data equivalent); an explicit
 	// set replaces them, which is how tests stay hermetic.
@@ -129,6 +136,9 @@ type Harness struct {
 	out       io.Writer
 	now       func() time.Time
 	warned    bool
+	// updateNotified records that the notifier has emitted its one notice for
+	// this session, so a second CheckForUpdate never re-renders it.
+	updateNotified bool
 
 	// Wired once at Build and reused across mode switches.
 	client         model.ModelClient
@@ -139,6 +149,9 @@ type Harness struct {
 	firewall       containerlayer.Firewall
 	fetcher        agent.Fetcher
 	logFetcher     agent.LogFetcher
+	// notifier is the opt-out update notifier, or nil when it is disabled
+	// (config, env, source build, or an engagement active at startup) (§12.3).
+	notifier *update.Notifier
 
 	mu              sync.Mutex
 	session         *sessions.Session
@@ -298,6 +311,19 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 	// An engagement gate activation is a session event (§4.3, §7.2).
 	if eng != nil {
 		h.emit(sessions.Event{Kind: sessions.KindEngagement, Engagement: eng.Name()})
+	}
+
+	// The update notifier is gated at build time by config, env, source build,
+	// and engagement state (§12.3). When it is not permitted, no notifier is
+	// constructed and nothing ever fetches.
+	gate := update.Gate{
+		ConfigEnabled: cfg.UpdateNotifier,
+		SourceBuild:   opts.SourceBuild,
+		Engagement:    eng != nil,
+		Env:           env,
+	}
+	if gate.Active() {
+		h.notifier = update.NewNotifier(opts.Version, opts.UpdateFetcher)
 	}
 	return h, nil
 }
@@ -970,6 +996,32 @@ func (h *Harness) ClearConversation() {
 	h.mu.Lock()
 	h.messages = nil
 	h.mu.Unlock()
+}
+
+// CheckForUpdate makes the notifier's single releases-latest fetch and, when a
+// newer release exists, emits a KindUpdate event with the upgrade hint. It is a
+// no-op when the notifier is disabled, and it re-checks the mode so it never
+// phones home while engagement mode is active (§12.3). It is called once at
+// session start.
+func (h *Harness) CheckForUpdate(ctx context.Context) {
+	h.mu.Lock()
+	notifier, mode, version := h.notifier, h.Mode, h.Version
+	if notifier == nil || mode == policy.ModeEngagement || h.updateNotified {
+		h.mu.Unlock()
+		return
+	}
+	h.updateNotified = true
+	h.mu.Unlock()
+
+	rel, newer, err := notifier.Check(ctx)
+	if err != nil || !newer {
+		return
+	}
+	detail := fmt.Sprintf("styx %s is available (you have %s)", rel.Version, version)
+	if rel.URL != "" {
+		detail += ": " + rel.URL
+	}
+	h.emit(sessions.Event{Kind: sessions.KindUpdate, Detail: detail})
 }
 
 // memoryText is the /memory rendering: the project's STYX.md as auto-loaded

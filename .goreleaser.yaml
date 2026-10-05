@@ -12,6 +12,8 @@ builds:
     binary: styx
     env:
       - CGO_ENABLED=0
+      # The supported floor is macOS 13+ (§12.1).
+      - MACOSX_DEPLOYMENT_TARGET=13.0
     goos:
       - linux
       - darwin
@@ -19,7 +21,9 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.versionOverride={{.Version}}
+      # versionOverride drives --version; releaseBuild marks an artifact build
+      # so the update notifier stays disabled for source builds (§12.1, §12.3).
+      - -s -w -X main.versionOverride={{.Version}} -X main.releaseBuild=1
 
 archives:
   - formats: [tar.gz]
@@ -29,6 +33,39 @@ archives:
 checksum:
   name_template: SHA256SUMS
 
-# Keyless cosign signing of the checksum file lands with the release
-# pipeline (docs/spec.md §12.2); kept out of this scaffold so `goreleaser
-# check` stays green without release credentials.
+# Keyless cosign signing of SHA256SUMS via GitHub Actions OIDC (§12.2).
+# `cosign sign-blob` has no long-lived key: the release job's OIDC token is the
+# identity, so verification is `cosign verify-blob` against the workflow.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    output: true
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+
+# The blessed macOS install path: goreleaser pushes the formula to the tap on
+# every stable tag (§12.1).
+brews:
+  - repository:
+      owner: mobley-trent
+      name: homebrew-styx
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/mobley-trent/styx-agent"
+    description: "Terminal agent harness for coding plus security work, with harness-enforced dual-mode safety"
+    license: "Apache-2.0"
+    install: |-
+      bin.install "styx"
+    test: |-
+      system "#{bin}/styx", "--version"
+
+release:
+  github:
+    owner: mobley-trent
+    name: styx-agent
+  prerelease: auto

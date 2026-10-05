@@ -76,6 +76,9 @@ func runTUI(ctx context.Context, h *Harness) error {
 	h.setUI(func(ev sessions.Event) { program.Send(tui.EventMsg{Event: ev}) })
 	h.setPromptUI(func(msg tui.PromptMsg) { program.Send(msg) })
 	h.setSubmitter(submit)
+	// The opt-out update notifier makes its single releases fetch once, in the
+	// background, after the UI is attached so the notice renders live (§12.3).
+	go h.CheckForUpdate(runCtx)
 	defer func() {
 		h.setUI(nil)
 		h.setPromptUI(nil)
