@@ -105,6 +105,13 @@ stable release exists. It never installs anything. Opt out with
 environment; it is disabled automatically for source builds and while
 engagement mode is active.
 
+## Changelog & releasing
+
+User-visible changes are recorded in [CHANGELOG.md](CHANGELOG.md). The release
+process — `make release VERSION=vX.Y.Z`, which tags and publishes through the
+release workflow — is documented in [RELEASING.md](RELEASING.md). The GitHub
+Release body is taken from the changelog section for the tag.
+
 ## Compatibility
 
 - **Sessions and config are same-major compatible.** Session JSONL and YAML

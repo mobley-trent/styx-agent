@@ -27,5 +27,8 @@ build/
 # styx runtime artifacts (the per-session audit trail)
 styx-audit-*.jsonl
 
+# Release notes generated from CHANGELOG.md by the release workflow
+/release-notes.md
+
 # Harness-engineering teaching workspace (course artifacts, not product code)
 /learning/

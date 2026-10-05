@@ -1,0 +1,50 @@
+# Changelog
+
+All notable changes to styx are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Releases are cut from stable tags only; there are no nightly or beta channels.
+How a release is made — and how the GitHub Release notes are taken from this
+file — is documented in [RELEASING.md](RELEASING.md).
+
+## [Unreleased]
+
+### Fixed
+
+- The `skill` tool declared its free-form arguments as a bare object, which
+  DeepSeek strict mode rejects outright (`An object with no properties is not
+  allowed`). Because the tool is sent on every request, every turn failed with
+  `400 Bad Request` whenever any model-invocable skill was discovered. The
+  arguments are now carried as a JSON object string (`args_json`), matching
+  `propose_plan`'s `params_json`, and decoded by the handler. (#51)
+
+## [v0.1.0] - 2026-10-05
+
+Initial pre-alpha release: the tracer-bullet harness runs end to end.
+
+### Added
+
+- One hand-rolled agent loop with a byte-stable system prompt, a bounded turn
+  cap, and parallel-dispatch caps.
+- The policy engine: the single allow/prompt/deny choke point, a project rule
+  overlay, and an audit write on every call.
+- Built-in tools: `read_file`, `write_file`, `edit_file`, `glob`, `grep`,
+  `bash`, `code_exec`, `web_fetch`, `ssh_logs`, `propose_plan`,
+  `dispatch_subagent`, and the `skill` tool.
+- Dual-mode safety: safe mode by default; engagement mode unlocked through the
+  strict engagement gate (scope pins and rules of engagement).
+- Container-isolated exec with host-edge egress enforcement and a visible
+  degraded-isolation fallback.
+- MCP servers over stdio, exposed as ordinary audited tool descriptors.
+- Skill packs (coding, red team, reverse engineering, blue team) and SKILL.md
+  agent skills.
+- Streaming TUI: inline diffs with per-diff accept/reject, permission cards, plan
+  approval, a status bar, themes, sessions with `/resume`, context compaction,
+  and cost tracking.
+- Persistence: session JSONL logs, the audit trail, and STYX.md project memory.
+- Distribution: goreleaser Linux/macOS archives with keyless-cosign-signed
+  `SHA256SUMS`, a Homebrew tap, and a Linux install script.
+
+[Unreleased]: https://github.com/mobley-trent/styx-agent/compare/v0.1.0...HEAD
+[v0.1.0]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.1.0
