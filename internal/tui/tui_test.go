@@ -137,20 +137,39 @@ func TestSlashCommandDispatched(t *testing.T) {
 func TestQuitPaths(t *testing.T) {
 	h := newHarness(t)
 	h.typeText("/quit")
-	h.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, cmd := h.model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !h.quit {
 		t.Error("/quit did not ask the app to quit")
 	}
+	if cmd == nil {
+		t.Fatal("/quit returned no quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("/quit command did not produce a QuitMsg")
+	}
+
+	exit := newHarness(t)
+	exit.typeText("/exit")
+	_, exitCmd := exit.model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !exit.quit {
+		t.Error("/exit did not ask the app to quit")
+	}
+	if exitCmd == nil {
+		t.Fatal("/exit returned no quit command")
+	}
+	if _, ok := exitCmd().(tea.QuitMsg); !ok {
+		t.Error("/exit command did not produce a QuitMsg")
+	}
 
 	other := newHarness(t)
-	_, cmd := other.model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	_, ctrlCmd := other.model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !other.quit {
 		t.Error("ctrl+c did not ask the app to quit")
 	}
-	if cmd == nil {
+	if ctrlCmd == nil {
 		t.Fatal("ctrl+c returned no quit command")
 	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
+	if _, ok := ctrlCmd().(tea.QuitMsg); !ok {
 		t.Error("ctrl+c command did not produce a QuitMsg")
 	}
 }

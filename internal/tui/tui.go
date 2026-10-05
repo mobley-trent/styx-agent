@@ -340,7 +340,7 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Code == tea.KeyTab:
 		m.toggleLatestSubagent()
 	case key.Code == tea.KeyEnter || key.Code == tea.KeyReturn:
-		m.submit()
+		return m, m.submit()
 	case key.Code == tea.KeyBackspace:
 		if n := len(m.input); n > 0 {
 			m.input = m.input[:n-1]
@@ -353,28 +353,26 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// submit handles the current input line.
-func (m *Model) submit() {
+// submit handles the current input line. It returns a command when the line
+// asks the program to leave (/quit, /exit), so the caller can hand tea.Quit
+// back to the runtime exactly as ctrl-c does; otherwise it returns nil.
+func (m *Model) submit() tea.Cmd {
 	text := strings.TrimSpace(string(m.input))
 	m.input = nil
 	if text == "" {
-		return
+		return nil
 	}
 	if !strings.HasPrefix(text, "/") {
 		if m.cfg.Submit != nil {
 			m.cfg.Submit(text)
 		}
-		return
+		return nil
 	}
 
 	name, arg, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
 	switch name {
 	case "quit", "exit":
-		m.quit = true
-		if m.cfg.Quit != nil {
-			m.cfg.Quit()
-		}
-		return
+		return m.quitCmd()
 	case "clear":
 		// /clear forgets the transcript and the model context, but never the
 		// chrome: the status bar, input, and any live card stay (§9.4). The
@@ -386,20 +384,21 @@ func (m *Model) submit() {
 			m.cfg.Clear()
 		}
 		m.append("conversation context cleared")
-		return
+		return nil
 	}
 	if m.cfg.Command == nil {
 		m.append("no commands are available")
-		return
+		return nil
 	}
 	out, err := m.cfg.Command(name, arg)
 	if err != nil {
 		m.append("! " + err.Error())
-		return
+		return nil
 	}
 	if out != "" {
 		m.append(out)
 	}
+	return nil
 }
 
 // quitCmd is the command form of tea.Quit.
