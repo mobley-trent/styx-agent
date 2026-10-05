@@ -70,8 +70,9 @@ type Status struct {
 	Targets string
 	// Session is the current session ID, short-form.
 	Session string
-	// Isolation is the container enforcement level, empty until the container
-	// layer lands (later ticket).
+	// Isolation is the container enforcement level ("container" or
+	// "degraded-isolation"), empty when no container is running, so the bar
+	// never claims enforced egress it does not have (§5.2, §9.1).
 	Isolation string
 	// MCP is the connected-server summary ("mcp 2/2"), empty when the project
 	// configures no MCP servers (§5.5, §9.1).
@@ -91,6 +92,9 @@ type Status struct {
 type Config struct {
 	// Status returns the status line to render, read fresh each frame.
 	Status func() Status
+	// Version is the running binary's version, stamped beside the startup
+	// banner. Empty omits the stamp.
+	Version string
 	// Submit receives a non-slash input line.
 	Submit func(text string)
 	// Command handles a slash command and returns text to render. A non-nil
@@ -178,10 +182,12 @@ type RefreshMsg struct{}
 
 // item is one element of the transcript: either a committed line of text or a
 // subagent block. Ordering is the stream's ordering, so a block sits exactly
-// where its run started.
+// where its run started. A banner line is re-tinted each frame so it tracks the
+// live theme.
 type item struct {
-	text  string
-	block *subagentBlock
+	text   string
+	block  *subagentBlock
+	banner bool
 }
 
 // subagentBlock is one subagent run as the stream renders it (§9.5): a header
@@ -258,6 +264,10 @@ type Model struct {
 	subagents map[string]*subagentBlock
 	// spinning reports whether a spinner tick is scheduled.
 	spinning bool
+	// bannerPlaced reports whether the startup banner has been considered.
+	// Placement happens once, when the terminal width first arrives, so a
+	// later resize never re-adds a banner skipped at startup.
+	bannerPlaced bool
 
 	width  int
 	height int
@@ -281,6 +291,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.placeBanner()
 	case tea.BackgroundColorMsg:
 		m.dark = msg.IsDark()
 		m.styles = themeFor(m.dark)
@@ -324,6 +335,31 @@ func (m *Model) hasRunningSubagent() bool {
 		}
 	}
 	return false
+}
+
+// placeBanner puts the startup wordmark at the top of the transcript once, on
+// the first terminal width. A terminal narrower than the art skips it entirely
+// — never wrapped or truncated (art-direction decision, issue #56). The lines
+// are stored unstyled and tinted with theme.banner at render time. The running
+// version rides to the bottom-right of the art when the terminal is wide enough
+// for both.
+func (m *Model) placeBanner() {
+	if m.bannerPlaced {
+		return
+	}
+	m.bannerPlaced = true
+	if m.width < bannerWidth {
+		return
+	}
+	lines := bannerLines()
+	if v := strings.TrimSpace(m.cfg.Version); v != "" && m.width >= bannerWidth+versionGap+lipgloss.Width(v) {
+		lines[len(lines)-1] += strings.Repeat(" ", versionGap) + v
+	}
+	prefix := make([]item, 0, len(lines))
+	for _, ln := range lines {
+		prefix = append(prefix, item{text: ln, banner: true})
+	}
+	m.items = append(prefix, m.items...)
 }
 
 // key handles one key press.
@@ -607,6 +643,10 @@ func (m *Model) body() []string {
 	for _, it := range m.items {
 		if it.block != nil {
 			out = append(out, it.block.render(m.styles)...)
+			continue
+		}
+		if it.banner {
+			out = append(out, m.styles.banner.Render(it.text))
 			continue
 		}
 		out = append(out, it.text)

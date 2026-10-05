@@ -1,27 +1,38 @@
-# styx-agent
+```
+ .d8888b. 88888888888 Y88b   d88P Y88b   d88P            d8888  .d8888b.  8888888888 888b    888 88888888888
+d88P  Y88b    888      Y88b d88P   Y88b d88P            d88888 d88P  Y88b 888        8888b   888     888
+Y88b.         888       Y88o88P     Y88o88P            d88P888 888    888 888        88888b  888     888
+ "Y888b.      888        Y888P       Y888P            d88P 888 888        8888888    888Y88b 888     888
+    "Y88b.    888         888        d888b           d88P  888 888  88888 888        888 Y88b888     888
+      "888    888         888       d88888b  888888 d88P   888 888    888 888        888  Y88888     888
+Y88b  d88P    888         888      d88P Y88b       d8888888888 Y88b  d88P 888        888   Y8888     888
+ "Y8888P"     888         888     d88P   Y88b     d88P     888  "Y8888P88 8888888888 888    Y888     888
+```
 
 `styx` — a terminal agent harness for coding plus red-team, reverse-
 engineering, and blue-team work, with harness-enforced dual-mode safety.
 The model is untrusted; the Go harness mediates everything: one policy
 engine, one agent loop, container-isolated execution.
 
-**Status:** pre-alpha. The tracer bullet runs end to end ([issue #22]); the
-coding co-pilot interaction lands on top of it ([issue #23]): `glob` and `grep`
-orient in the repo, `write_file` and `edit_file` stage inline diffs with
-per-diff accept/reject and accept-all-rest-of-turn, permission prompts render
-as inline keyboard-first cards (allow-once / allow-this-session / deny), and an
-approved plan pre-authorizes its listed actions for the turn — never overriding
-hard denies, ROE limits, or scope checks. Every tool call still runs the full
-normative order — schema validation → policy verdict → audit write → dispatch →
-truncated result → model. External capabilities arrive through the same gate:
-per-project MCP servers are launched over stdio and their tools become ordinary
-descriptors — validated by the harness regardless of server-side strictness,
-resolved by the same policy engine, and audited like built-ins, with connection
-lifecycle (ready / failed / disconnected) surfaced in the stream and the status
-line. Sessions persist as append-only JSONL with `/resume`; global and project
-config merge; turn and parallel-dispatch caps are enforced. Skills, skill packs,
-and the full TUI land in subsequent tickets. See [docs/spec.md](docs/spec.md)
-for the buildable spec and [CONTEXT.md](CONTEXT.md) for the domain glossary.
+**Status:** pre-alpha (v0.1.1). The harness runs end to end: one hand-rolled
+agent loop with a byte-stable system prompt and bounded turn and
+parallel-dispatch caps, and one policy engine as the allow/prompt/deny choke
+point, with an audit write on every call. Built-in tools cover file
+manipulation (`read_file`, `write_file`, `edit_file`, `glob`, `grep`),
+container-isolated exec (`bash`, `code_exec`), network fetch, plan approval,
+subagent dispatch, and agent skills; external capabilities arrive through the
+same gate as per-project MCP servers over stdio, becoming ordinary audited
+descriptors regardless of server-side strictness. Dual-mode safety is enforced
+by the harness: safe mode by default, engagement mode unlocked through the
+strict engagement gate (scope pins and rules of engagement). The four built-in
+skill packs (coding, red team, reverse engineering, blue team) and `SKILL.md`
+agent skills extend the workflow surface. The streaming TUI renders inline
+diffs with per-diff accept/reject and accept-all-rest-of-turn, keyboard-first
+permission cards, plan approval, a status bar, dark/light themes, slash
+commands, and cost tracking; sessions persist as append-only JSONL with
+`/resume`, context compaction, and `STYX.md` project memory. See
+[docs/spec.md](docs/spec.md) for the buildable spec and [CONTEXT.md](CONTEXT.md)
+for the domain glossary.
 
 ## Build
 
@@ -46,13 +57,22 @@ The package layout and per-package boundary rules are specified in
 comment. Headlines:
 
 - `cmd/styx` — the CLI entry point (`styx`)
-- `internal/app` — startup wiring: config, engagement gate, TUI boot
-- `internal/agent` — the single hand-rolled agent loop
+- `internal/app` — startup wiring: config load, engagement gate, TUI boot
+- `internal/agent` — the single hand-rolled agent loop (`internal/agent/subagent` holds the dispatch engine)
+- `internal/model` — the single wire seam to the provider (`internal/model/repair` validates tool-call arguments)
 - `internal/policy` — the pure policy engine, the safety choke point
 - `internal/diff` — the pure line diff behind write/edit review
-- `internal/model` — the single wire seam to the model provider
-- `internal/mcpclient` — MCP servers over stdio: discovery, calls, lifecycle
+- `internal/engagement` — engagement file load/validate, scope pins, DNS pinning
 - `internal/containerlayer` — the only package touching the host network stack
+- `internal/mcpclient` — MCP servers over stdio: discovery, calls, lifecycle
+- `internal/tui` — the Bubble Tea program: stream, status bar, prompt cards, blocks
+- `internal/sessions` — append-only session JSONL store and resume
+- `internal/memory` — `STYX.md` project memory
+- `internal/skills` — `SKILL.md` discovery across global and project roots
+- `internal/skillpacks` — the four built-in packs: prompt sections, allowlist deltas
+- `internal/config` — global + project YAML merge, env secrets, defaults
+- `internal/audit` — the fail-closed session audit JSONL writer
+- `internal/update` — release-latest check and per-source upgrade hint
 
 Storage: per-session JSONL under `~/.local/share/styx/sessions/<project>/`, the
 audit trail (`styx-audit-<timestamp>.jsonl`) in the project directory, and
@@ -126,6 +146,3 @@ Release body is taken from the changelog section for the tag.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
-
-[issue #22]: https://github.com/mobley-trent/styx-agent/issues/22
-[issue #23]: https://github.com/mobley-trent/styx-agent/issues/23

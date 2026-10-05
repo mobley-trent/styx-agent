@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/mobley-trent/styx-agent/internal/diff"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
@@ -577,5 +578,102 @@ func TestClearResetsTranscriptAndAppContext(t *testing.T) {
 	}
 	if !strings.Contains(got, "cleared") {
 		t.Errorf("no confirmation that context cleared:\n%s", got)
+	}
+}
+
+func TestBannerRendersOnWideTerminal(t *testing.T) {
+	h := newHarness(t)
+	h.update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
+	got := h.view()
+	for _, want := range []string{"d8888b", "88888888888", `"Y8888P"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("wide terminal does not render the wordmark (%q):\n%s", want, got)
+		}
+	}
+}
+
+func TestBannerSkippedOnNarrowTerminal(t *testing.T) {
+	h := newHarness(t)
+	h.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
+	if got := h.view(); strings.Contains(got, "d8888b") {
+		t.Errorf("narrow terminal rendered the wordmark instead of skipping it:\n%s", got)
+	}
+}
+
+func TestBannerWidthMatchesArt(t *testing.T) {
+	widest := 0
+	for _, ln := range bannerLines() {
+		if w := lipgloss.Width(ln); w > widest {
+			widest = w
+		}
+	}
+	if widest != bannerWidth {
+		t.Errorf("wordmark widest row = %d columns, guard = %d", widest, bannerWidth)
+	}
+
+	// Exactly at the guard it renders; one column under it does not.
+	at := newHarness(t)
+	at.update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
+	if !strings.Contains(at.view(), "d8888b") {
+		t.Errorf("the banner was skipped at its own %d-column width:\n%s", bannerWidth, at.view())
+	}
+}
+
+func TestBannerPlacedOnce(t *testing.T) {
+	// A resize below the guard after placement keeps the banner: it belongs to
+	// the transcript, not the live layout.
+	wide := newHarness(t)
+	wide.update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
+	wide.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
+	if !strings.Contains(wide.view(), "d8888b") {
+		t.Error("banner disappeared after a resize below the guard")
+	}
+
+	// A narrow startup skips it, and widening later does not resurrect it.
+	narrow := newHarness(t)
+	narrow.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
+	narrow.update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
+	if strings.Contains(narrow.view(), "d8888b") {
+		t.Error("banner was added after a narrow startup")
+	}
+}
+
+func TestBannerStampsVersionBottomRight(t *testing.T) {
+	m := New(Config{
+		Version: "v9.9.9",
+		Status:  func() Status { return Status{Mode: "safe"} },
+	})
+	m.Update(tea.WindowSizeMsg{Width: bannerWidth + versionGap + 20, Height: 40})
+	got := m.View().Content
+	var row string
+	for _, ln := range strings.Split(got, "\n") {
+		if strings.Contains(ln, "v9.9.9") {
+			row = ln
+			break
+		}
+	}
+	if row == "" {
+		t.Fatalf("version is not stamped on any banner row:\n%s", got)
+	}
+	if !strings.Contains(row, `"Y8888P"`) {
+		t.Errorf("version is not on the bottom art row:\n%s", row)
+	}
+	if i := strings.Index(row, "v9.9.9"); i < bannerWidth {
+		t.Errorf("version at column %d, want it right of the %d-column art:\n%s", i, bannerWidth, row)
+	}
+}
+
+func TestBannerDropsVersionWhenTooNarrow(t *testing.T) {
+	m := New(Config{
+		Version: "v9.9.9",
+		Status:  func() Status { return Status{Mode: "safe"} },
+	})
+	m.Update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
+	got := m.View().Content
+	if !strings.Contains(got, "d8888b") {
+		t.Fatalf("banner skipped at its own width:\n%s", got)
+	}
+	if strings.Contains(got, "v9.9.9") {
+		t.Errorf("version stamped without room for it:\n%s", got)
 	}
 }
