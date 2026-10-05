@@ -128,6 +128,12 @@ The TUI presentation of a proposed multi-step plan before execution. Approving i
 pre-authorizes exactly the listed actions for that turn; it never overrides hard
 denies, ROE violations, or out-of-scope checks.
 
+**Live region**
+The bottom strip of the terminal UI that is re-rendered every frame: the input editor,
+the status bar, any live prompt card, and the in-flight streaming partial. Everything
+above it is committed transcript printed once into the terminal's own scrollback and
+never rewritten.
+
 ## Testing
 
 **Fake model**
