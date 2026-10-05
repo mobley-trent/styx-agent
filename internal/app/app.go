@@ -82,7 +82,7 @@ type Options struct {
 	// LogFetcher overrides the ssh_logs transport (tests). Nil means the
 	// scope-checked netfetch fetcher.
 	LogFetcher agent.LogFetcher
-	// SkipModelCheck disables the startup GET /models validation (§3.1).
+	// SkipModelCheck disables the first-use GET /models validation (§3.1).
 	SkipModelCheck bool
 	// UpdateFetcher overrides the update notifier's releases fetch (tests).
 	// Nil means the default HTTP fetcher.
@@ -140,6 +140,10 @@ type Harness struct {
 	// this session, so a second CheckForUpdate never re-renders it.
 	updateNotified bool
 
+	// provider is the deferred model client, or nil when a client was injected
+	// (tests). It reports the provider's health to the status bar (§1).
+	provider *lazyModelClient
+
 	// Wired once at Build and reused across mode switches.
 	client         model.ModelClient
 	memory         string
@@ -173,10 +177,12 @@ type Harness struct {
 	submitter func(string)
 }
 
-// Run builds the harness and hands it to the runner. Every startup failure is
-// fatal: an unparseable config, a refused engagement file, a missing API key,
-// or a pinned model the provider does not serve all refuse to start rather
-// than run degraded.
+// Run builds the harness and hands it to the runner. Safety-critical startup
+// failures are fatal: an unparseable config or a refused/stale engagement file
+// refuses to start rather than run degraded. A provider that cannot be reached
+// or a missing API key is not fatal — the harness starts, and the first action
+// that needs the provider fails on demand with an actionable, recoverable
+// error (§1 "fail on demand").
 func Run(ctx context.Context, opts Options) error {
 	h, err := Build(ctx, opts)
 	if err != nil {
@@ -251,13 +257,10 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		return nil, err
 	}
 
-	// Resolve the model before creating any session artifacts: a launch that
-	// cannot reach a model should leave no audit trail and no empty session
-	// behind.
-	client, err := modelClient(ctx, cfg, opts, env)
-	if err != nil {
-		return nil, err
-	}
+	// The model client is deferred (§1 "fail on demand"): provider resolution
+	// and its GET /models check move to the first turn, so an unreachable
+	// provider or a missing key no longer refuses to start.
+	client, provider := modelClient(cfg, opts, env)
 
 	// The audit trail is per session, in the project dir, operator-owned
 	// (§7.5). Its write failures deny calls, never run unlogged.
@@ -289,6 +292,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		now:            now,
 		session:        session,
 		client:         client,
+		provider:       provider,
 		memory:         mem,
 		model:          cfg.Model,
 		skillCatalog:   catalog,
@@ -795,31 +799,46 @@ func (h *Harness) ListEngagementFiles() []string {
 	return out
 }
 
-// modelClient builds the model client, or validates an injected one.
-func modelClient(ctx context.Context, cfg *config.Config, opts Options, env func(string) string) (model.ModelClient, error) {
+// modelClient returns the session's model client plus its deferred-provider
+// reporter. An injected client (tests) is returned as-is with no reporter.
+// Otherwise the provider is resolved lazily on the first turn (§1 "fail on
+// demand"): the API key and the GET /models served-model check are deferred,
+// so a missing key or an unreachable provider no longer refuses to start. The
+// reporter carries the degraded marker into the status bar.
+func modelClient(cfg *config.Config, opts Options, env func(string) string) (model.ModelClient, *lazyModelClient) {
 	if opts.Client != nil {
 		return opts.Client, nil
 	}
-	key := strings.TrimSpace(env("DEEPSEEK_API_KEY"))
-	if key == "" {
-		return nil, errors.New("styx: DEEPSEEK_API_KEY is not set; the harness has no model to talk to (§10.5: secrets are env-only)")
+	// A missing key is known without a network call, so surface it in the
+	// status bar before the first turn rather than waiting for a prompt to
+	// fail.
+	initial := ""
+	if strings.TrimSpace(env("DEEPSEEK_API_KEY")) == "" {
+		initial = "no api key"
 	}
-	baseURL := strings.TrimSpace(env("STYX_BASE_URL"))
-	client, err := model.NewDeepSeek(model.DeepSeekConfig{
-		APIKey:       key,
-		BaseURL:      baseURL,
-		Models:       cfg.ModelInfo(),
-		DefaultModel: cfg.Model,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if !opts.SkipModelCheck {
-		if err := client.Validate(ctx); err != nil {
-			return nil, fmt.Errorf("styx: model validation failed: %w", err)
+	lazy := newLazyModelClient(func(ctx context.Context) (model.ModelClient, error) {
+		key := strings.TrimSpace(env("DEEPSEEK_API_KEY"))
+		if key == "" {
+			return nil, fmt.Errorf("%w: DEEPSEEK_API_KEY is not set; set it and retry the prompt (§10.5: secrets are env-only)", errNoAPIKey)
 		}
-	}
-	return client, nil
+		baseURL := strings.TrimSpace(env("STYX_BASE_URL"))
+		client, err := model.NewDeepSeek(model.DeepSeekConfig{
+			APIKey:       key,
+			BaseURL:      baseURL,
+			Models:       cfg.ModelInfo(),
+			DefaultModel: cfg.Model,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !opts.SkipModelCheck {
+			if err := client.Validate(ctx); err != nil {
+				return nil, fmt.Errorf("styx: model validation failed: %w", err)
+			}
+		}
+		return client, nil
+	}, initial)
+	return lazy, lazy
 }
 
 // allowedEgress is the container egress allowlist (§5.2): the engagement's
@@ -1461,6 +1480,15 @@ func hasLogArtifacts(root string) bool {
 	return found
 }
 
+// providerText is the status bar's degraded-provider readout: empty when the
+// provider is healthy, untried, or an injected test client.
+func (h *Harness) providerText() string {
+	if h.provider == nil {
+		return ""
+	}
+	return h.provider.ProviderStatus()
+}
+
 // Status is the status-bar state for the TUI (§9.1).
 func (h *Harness) Status(busy bool) tui.Status {
 	mode, eng := h.modeAndEngagement()
@@ -1468,6 +1496,7 @@ func (h *Harness) Status(busy bool) tui.Status {
 		Mode:       string(mode),
 		Packs:      h.packStatus(),
 		Model:      h.currentModel(),
+		Provider:   h.providerText(),
 		Targets:    scopeText(eng),
 		Session:    shortID(h.SessionID()),
 		Isolation:  string(h.isolation()),

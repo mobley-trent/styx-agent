@@ -61,6 +61,10 @@ type Status struct {
 	Packs string
 	// Model is the pinned model ID in force.
 	Model string
+	// Provider is the degraded-provider marker ("no api key", "provider
+	// unavailable"), empty when the provider is healthy or untried. It warns
+	// that a prompt will fail on demand (§1 "fail on demand", §9.1).
+	Provider string
 	// Targets is the in-scope target summary while engagement mode is active
 	// ("scope 10.0.0.0/24,…"); empty in safe mode (§9.1).
 	Targets string
@@ -627,6 +631,9 @@ func (m *Model) statusLine() string {
 	}
 	if status.Model != "" {
 		parts = append(parts, status.Model)
+	}
+	if status.Provider != "" {
+		parts = append(parts, m.styles.fail.Render("⚠ provider "+status.Provider))
 	}
 	if status.Isolation != "" {
 		parts = append(parts, status.Isolation)

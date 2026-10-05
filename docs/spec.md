@@ -57,6 +57,11 @@ Design principles (each traces to a closed ticket):
   parameter checks. (#13)
 - **Fail closed.** Audit-write failure denies the call; unparseable engagement files refuse
   to start; unenforceable isolation degrades visibly, never silently. (#7, #13)
+- **Fail on demand.** The harness starts without a reachable provider: a missing API key or
+  a model the provider does not serve is not a startup refusal but fails at its point of use
+  (a prompt, a model switch) with an actionable, recoverable error, and the degraded state is
+  visible in the status bar. Safety-critical refusals — invalid config, a refused or stale
+  engagement file — stay fatal at startup. (#55)
 - **Security tooling arrives as MCP servers; styx ships none.** The spec names recommended
   community servers with capability contracts. (#8, #14)
 - **No self-updater, ever** — a security harness never rewrites its own binary. (#15)
@@ -144,7 +149,8 @@ Research: `docs/research/2026-09-28-deepseek-api.md`; decision #3. Environment f
 
 - Pin explicit model IDs — never aliases: **`deepseek-flash`** is the default;
   **`deepseek-v4-pro`** for hard reasoning. The configured IDs are validated against
-  `GET /models` at startup; an unknown ID is a startup error.
+  `GET /models` on first use, not at startup: a missing API key or an unserved model fails
+  the prompt that needs it, recoverably, instead of refusing to start (§1 fail on demand; #55).
 - Model config carries the model's context-window size — the compaction trigger (§4.5)
   rescales automatically when the operator swaps models.
 - Cost tracking uses the usage payload's `prompt_cache_hit_tokens` /
@@ -637,7 +643,9 @@ shadows global on name collision (§8.4).
 ### 10.5 Secrets
 
 **Env-only.** `DEEPSEEK_API_KEY` from the environment; never in config files, never in
-model context, never persisted by styx.
+model context, never persisted by styx. Its absence is not a startup error: the harness
+starts degraded and the first prompt that needs the provider fails with a message naming
+the missing variable (§1 fail on demand).
 
 ---
 

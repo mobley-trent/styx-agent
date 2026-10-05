@@ -460,6 +460,16 @@ func TestStatusBarShowsCompactionLevel(t *testing.T) {
 	}
 }
 
+func TestStatusBarShowsDegradedProvider(t *testing.T) {
+	m := New(Config{Status: func() Status {
+		return Status{Mode: "safe", Model: "deepseek-flash", Provider: "no api key"}
+	}})
+	got := m.View().Content
+	if !strings.Contains(got, "provider no api key") {
+		t.Errorf("status bar does not surface the degraded provider:\n%s", got)
+	}
+}
+
 func TestStreamRendersCompaction(t *testing.T) {
 	h := newHarness(t)
 	h.update(EventMsg{Event: sessions.Event{

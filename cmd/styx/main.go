@@ -37,7 +37,7 @@ Commands:
                         the detected install source (no self-updater)
 
 Environment:
-  DEEPSEEK_API_KEY      DeepSeek credential (required; env-only, never persisted)
+  DEEPSEEK_API_KEY      DeepSeek credential (required for prompts; env-only, never persisted)
   STYX_BASE_URL         Override the OpenAI-compatible model base URL
 
 Configuration:

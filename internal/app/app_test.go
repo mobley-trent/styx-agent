@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -213,17 +214,44 @@ func TestProjectRulesReachThePolicyEngine(t *testing.T) {
 	}
 }
 
-func TestBuildRequiresAPIKey(t *testing.T) {
+// TestBuildWithoutAPIKeyStartsDegradedThenFailsOnDemand pins the §1 "fail on
+// demand" contract (map ticket "Startup survives an unreachable provider"):
+// Build no longer refuses without a credential; the degraded state shows in the
+// status bar, and the prompt that needs the provider fails recoverably.
+func TestBuildWithoutAPIKeyStartsDegradedThenFailsOnDemand(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "")
-	opts := buildOptions(t, t.TempDir(), nil)
-	opts.SkipModelCheck = true
+	dir := t.TempDir()
+	writeFile(t, dir, "main.go", "package main\n")
+	opts := buildOptions(t, dir, nil)
 
-	_, err := Build(context.Background(), opts)
+	h, err := Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build(no API key) = %v, want the harness to start degraded", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	if got := h.Status(false).Provider; got != "no api key" {
+		t.Errorf("status provider before any turn = %q, want %q", got, "no api key")
+	}
+
+	err = h.Submit(context.Background(), "hello")
 	if err == nil {
-		t.Fatal("Build(no API key, no client) = nil error, want an error")
+		t.Fatal("Submit(no API key) = nil error, want a point-of-use failure")
+	}
+	if !errors.Is(err, errNoAPIKey) {
+		t.Errorf("Submit() error = %v, want errNoAPIKey", err)
 	}
 	if !strings.Contains(err.Error(), "DEEPSEEK_API_KEY") {
 		t.Errorf("error = %v, want it to name the missing secret", err)
+	}
+	if got := h.Status(false).Provider; got != "no api key" {
+		t.Errorf("status provider after the failed turn = %q, want %q", got, "no api key")
+	}
+
+	// The failed turn is recoverable: the harness survives it and stays
+	// usable, retrying the provider on the next turn.
+	if err := h.Submit(context.Background(), "again"); !errors.Is(err, errNoAPIKey) {
+		t.Errorf("Submit() after a failed turn = %v, want the same recoverable failure", err)
 	}
 }
 
