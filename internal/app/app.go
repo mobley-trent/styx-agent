@@ -1211,6 +1211,9 @@ func (h *Harness) packText() string {
 		if len(st.Pack.Presets) > 0 {
 			b.WriteString("  presets: " + strings.Join(st.Pack.Presets, ", "))
 		}
+		if len(st.Pack.Delta.Add) > 0 {
+			b.WriteString("  tools: " + strings.Join(st.Pack.Delta.Add, ", "))
+		}
 	}
 	var recs []string
 	for _, st := range sel.States() {

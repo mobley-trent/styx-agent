@@ -98,6 +98,18 @@ func promptCases() []struct {
 			},
 		},
 		{
+			name: "engagement-blue",
+			in: PromptInput{
+				Mode: policy.ModeEngagement,
+				Engagement: &EngagementContext{
+					Name:           "acme-q4-redteam",
+					Targets:        []string{"10.0.0.0/24"},
+					ExploitAllowed: true,
+				},
+				Packs: skillpacks.Detection{EngagementActive: true, LogArtifactsOpen: true},
+			},
+		},
+		{
 			name: "engagement-re",
 			in: PromptInput{
 				Mode: policy.ModeEngagement,

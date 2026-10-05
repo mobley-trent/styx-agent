@@ -93,8 +93,15 @@ func (e *Engine) Decide(call Call) VerdictResult {
 	engaged := e.mode == ModeEngagement && e.scope != nil
 	if !engaged || len(call.ScopeTargets) == 0 {
 		// Not a scope question: resolve through the full rule table (mode
-		// defaults + project overlay). Safe mode's floor is prompt.
-		return e.full.resolve(call, VerdictPrompt)
+		// defaults + project overlay). Safe mode's floor is prompt. A
+		// destructive-tagged call is never auto-allowed, even where a project
+		// rule would widen it to allow (§8.3: detonation is always an explicit
+		// operator decision).
+		res := e.full.resolve(call, VerdictPrompt)
+		if call.Destructive && res.Verdict == VerdictAllow {
+			return VerdictResult{VerdictPrompt, ReasonDestructive}
+		}
+		return res
 	}
 
 	// 2. Engagement mode with targets: project rules may narrow; the mode

@@ -3,6 +3,8 @@ package skillpacks
 import (
 	"path"
 	"strings"
+
+	"github.com/mobley-trent/styx-agent/internal/naming"
 )
 
 // ID identifies one of the four built-in packs.
@@ -254,10 +256,12 @@ var packs = []Pack{
 			Add: []string{"bash", "read_file", "glob", "grep", "mcp__*ghidra*", "mcp__*radare*"},
 			// Dynamic execution of an analyzed sample is destructive-tagged: it
 			// requires engagement mode and an explicit prompt, never
-			// auto-allowed even in-scope (§8.3). code_exec is the harness's
-			// arbitrary in-container execution surface; dynamic-analysis MCP
-			// families ride alongside it.
+			// auto-allowed even in-scope (§8.3). The harness cannot tell a
+			// detonation from any other command, so while the RE domain is
+			// active its execution surfaces — `bash` and `code_exec` — are
+			// tagged destructive, alongside dynamic-analysis MCP families.
 			Destructive: []string{
+				"bash",
 				"code_exec",
 				"mcp__*cuckoo*",
 				"mcp__*sandbox*",
@@ -316,7 +320,7 @@ var reMCPTokens = map[string]bool{
 // IsREMCPName reports whether an MCP server name identifies a reverse
 // engineering capability (§8.2: "RE MCP server connected → RE").
 func IsREMCPName(name string) bool {
-	for _, tok := range splitName(name) {
+	for _, tok := range naming.Tokens(name) {
 		if reMCPTokens[tok] {
 			return true
 		}
@@ -348,39 +352,4 @@ func LooksLikeLogArtifact(name string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	ext := path.Ext(lower)
 	return logArtifactExts[ext]
-}
-
-// splitName splits an identifier into lowercase tokens at separators (_, -, .,
-// space) and camelCase boundaries, reusing the algorithm the tool-parameter
-// matcher uses.
-func splitName(name string) []string {
-	runes := []rune(name)
-	var tokens []string
-	var cur []rune
-	flush := func() {
-		if len(cur) > 0 {
-			tokens = append(tokens, strings.ToLower(string(cur)))
-			cur = cur[:0]
-		}
-	}
-	isUpper := func(r rune) bool { return r >= 'A' && r <= 'Z' }
-	isLower := func(r rune) bool { return r >= 'a' && r <= 'z' }
-	isDigit := func(r rune) bool { return r >= '0' && r <= '9' }
-
-	for i, r := range runes {
-		switch {
-		case r == '_' || r == '-' || r == '.' || r == '/' || r == ' ':
-			flush()
-			continue
-		case isUpper(r):
-			prevBoundary := i > 0 && (isLower(runes[i-1]) || isDigit(runes[i-1]))
-			acronymEnd := i > 0 && isUpper(runes[i-1]) && i+1 < len(runes) && isLower(runes[i+1])
-			if len(cur) > 0 && (prevBoundary || acronymEnd) {
-				flush()
-			}
-		}
-		cur = append(cur, r)
-	}
-	flush()
-	return tokens
 }

@@ -94,12 +94,13 @@ func TestEachTriggerInjectsItsFullSection(t *testing.T) {
 func TestSelectionAlwaysRendersFourSections(t *testing.T) {
 	// Coding full plus the three security packs, compact or full: the prefix is
 	// never empty of guidance.
+	want := len(All())
 	for _, d := range []Detection{
 		{},
 		{EngagementActive: true, REMCPConnected: true, LogArtifactsOpen: true},
 	} {
-		if got := len(Select(d).Sections()); got != 4 {
-			t.Errorf("Select(%+v).Sections() = %d sections, want 4", d, got)
+		if got := len(Select(d).Sections()); got != want {
+			t.Errorf("Select(%+v).Sections() = %d sections, want %d", d, got, want)
 		}
 	}
 }
@@ -129,7 +130,7 @@ func TestSelectionTagsDetonationDestructive(t *testing.T) {
 	}
 
 	re := Select(Detection{REMCPConnected: true})
-	for _, tool := range []string{"code_exec", "mcp__cuckoo__detonate", "mcp__sandbox__run"} {
+	for _, tool := range []string{"bash", "code_exec", "mcp__cuckoo__detonate", "mcp__sandbox__run"} {
 		if _, destructive := re.Tags(tool); !destructive {
 			t.Errorf("RE did not tag %q destructive", tool)
 		}

@@ -252,6 +252,28 @@ func TestEngineTimeWindowViaInjectedClock(t *testing.T) {
 	}
 }
 
+func TestEngineDestructiveNeverAutoAllowed(t *testing.T) {
+	// A project allow rule widens a prompt to an allow, but it must never
+	// auto-allow a destructive-tagged call: detonation is always an explicit
+	// operator decision (§8.3).
+	e, err := NewEngine(ModeSafe, WithProjectRules([]Rule{
+		{Tool: "code_exec", Action: VerdictAllow, Source: "project"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{"lang": "python", "code": "print(1)"}
+
+	got := e.Decide(Call{Tool: "code_exec", Params: params, Destructive: true})
+	if got.Verdict != VerdictPrompt || got.Reason != ReasonDestructive {
+		t.Errorf("destructive call under a project allow = %v/%s, want prompt/%s", got.Verdict, got.Reason, ReasonDestructive)
+	}
+	// The same call without the tag still resolves through the widened rule.
+	if got := e.Decide(Call{Tool: "code_exec", Params: params}); got.Verdict != VerdictAllow {
+		t.Errorf("non-destructive call under a project allow = %v/%s, want allow", got.Verdict, got.Reason)
+	}
+}
+
 func TestNewEngineValidation(t *testing.T) {
 	if _, err := NewEngine(Mode("bogus")); err == nil {
 		t.Errorf("NewEngine(bogus mode) = nil error, want error")

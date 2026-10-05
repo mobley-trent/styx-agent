@@ -86,13 +86,15 @@ func TestPackInjectionFromREMCP(t *testing.T) {
 		t.Errorf("status packs = %q, want coding+re", got)
 	}
 	// The RE pack's allowlist delta rides the detected domain: the harness's
-	// arbitrary execution surface is destructive-tagged end to end.
-	tool, ok := h.Tools.Lookup("code_exec")
-	if !ok {
-		t.Fatal("code_exec is not registered")
-	}
-	if !tool.Destructive {
-		t.Error("code_exec is not destructive-tagged with the RE pack active")
+	// execution surfaces are destructive-tagged end to end.
+	for _, name := range []string{"bash", "code_exec"} {
+		tool, ok := h.Tools.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		if !tool.Destructive {
+			t.Errorf("%s is not destructive-tagged with the RE pack active", name)
+		}
 	}
 }
 
