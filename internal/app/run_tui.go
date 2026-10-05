@@ -250,14 +250,16 @@ func (h *Harness) modeCommand(arg string) (string, error) {
 }
 
 // modelCommand lists the pinned models, or switches the session to one by ID
-// (§3.1). The pinned set was validated against the provider at startup; a swap
-// rescales the compaction trigger to the new model's context window (§4.5).
+// (§3.1). The pinned set is validated against the provider on first use (§1
+// "fail on demand"), so a swap is local and never fails here: it rescales the
+// compaction trigger to the new model's context window (§4.5), and the next
+// prompt carries the provider check.
 func (h *Harness) modelCommand(arg string) (string, error) {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
 		current := h.currentModel()
 		var b strings.Builder
-		b.WriteString("pinned models (validated at startup):")
+		b.WriteString("pinned models (validated against the provider on first use):")
 		for _, m := range h.Config.Models {
 			mark := " "
 			if m.ID == current {
