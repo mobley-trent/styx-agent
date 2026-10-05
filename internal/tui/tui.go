@@ -55,6 +55,10 @@ func spinnerTick() tea.Cmd {
 type Status struct {
 	// Mode is "safe" or "engagement".
 	Mode string
+	// Packs is the active-pack readout — the packs whose full workflow is
+	// injected ("coding+red-team"), or just "coding" when none are active
+	// (§8.2, §9.1).
+	Packs string
 	// Model is the pinned model ID in force.
 	Model string
 	// Session is the current session ID, short-form.
@@ -586,6 +590,9 @@ func (m *Model) statusLine() string {
 		status = m.cfg.Status()
 	}
 	parts := []string{status.Mode}
+	if status.Packs != "" {
+		parts = append(parts, status.Packs)
+	}
 	if status.Model != "" {
 		parts = append(parts, status.Model)
 	}

@@ -97,6 +97,18 @@ func TestEngineEngagementScopeSemantics(t *testing.T) {
 			call: Call{Tool: "web_fetch", ScopeTargets: []Target{{Addr: inScopeHost}, {Addr: outScopeHost}}},
 			want: VerdictPrompt, wantRsn: ReasonOutOfScope,
 		},
+		{
+			name: "destructive in-scope call prompts, never auto-allows",
+			mode: ModeEngagement, scope: scope,
+			call: Call{Tool: "mcp__cuckoo__detonate", Destructive: true, ScopeTargets: []Target{{Addr: inScopeHost}}},
+			want: VerdictPrompt, wantRsn: ReasonDestructive,
+		},
+		{
+			name: "non-destructive in-scope call still auto-allows",
+			mode: ModeEngagement, scope: scope,
+			call: Call{Tool: "mcp__ghidra__decompile", ScopeTargets: []Target{{Addr: inScopeHost}}},
+			want: VerdictAllow, wantRsn: ReasonInScope,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -237,6 +249,28 @@ func TestEngineTimeWindowViaInjectedClock(t *testing.T) {
 	got = night.Decide(netCall(outScopeHost))
 	if got.Verdict != VerdictDeny || got.Reason != ReasonROE {
 		t.Errorf("out-of-window out-of-scope call = %v/%s, want deny/roe (never prompt)", got.Verdict, got.Reason)
+	}
+}
+
+func TestEngineDestructiveNeverAutoAllowed(t *testing.T) {
+	// A project allow rule widens a prompt to an allow, but it must never
+	// auto-allow a destructive-tagged call: detonation is always an explicit
+	// operator decision (§8.3).
+	e, err := NewEngine(ModeSafe, WithProjectRules([]Rule{
+		{Tool: "code_exec", Action: VerdictAllow, Source: "project"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{"lang": "python", "code": "print(1)"}
+
+	got := e.Decide(Call{Tool: "code_exec", Params: params, Destructive: true})
+	if got.Verdict != VerdictPrompt || got.Reason != ReasonDestructive {
+		t.Errorf("destructive call under a project allow = %v/%s, want prompt/%s", got.Verdict, got.Reason, ReasonDestructive)
+	}
+	// The same call without the tag still resolves through the widened rule.
+	if got := e.Decide(Call{Tool: "code_exec", Params: params}); got.Verdict != VerdictAllow {
+		t.Errorf("non-destructive call under a project allow = %v/%s, want allow", got.Verdict, got.Reason)
 	}
 }
 

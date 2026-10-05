@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mobley-trent/styx-agent/internal/policy"
+	"github.com/mobley-trent/styx-agent/internal/skillpacks"
 )
 
 var update = flag.Bool("update", false, "rewrite the prompt golden snapshots")
@@ -17,8 +18,9 @@ var update = flag.Bool("update", false, "rewrite the prompt golden snapshots")
 // data, alongside transcripts.
 var promptGoldenDir = filepath.Join("..", "testdata", "prompts")
 
-// promptCases are the (mode × engagement-state) combinations the byte-stable
-// prefix is locked for. Skill packs join the matrix in a later ticket.
+// promptCases are the (mode × pack × engagement-state) combinations the
+// byte-stable prefix is locked for (§11.1: "per (mode × skill pack ×
+// engagement-state) combination").
 func promptCases() []struct {
 	name string
 	in   PromptInput
@@ -39,6 +41,20 @@ func promptCases() []struct {
 			},
 		},
 		{
+			name: "safe-re",
+			in: PromptInput{
+				Mode:  policy.ModeSafe,
+				Packs: skillpacks.Detection{REMCPConnected: true},
+			},
+		},
+		{
+			name: "safe-blue",
+			in: PromptInput{
+				Mode:  policy.ModeSafe,
+				Packs: skillpacks.Detection{LogArtifactsOpen: true},
+			},
+		},
+		{
 			name: "engagement",
 			in: PromptInput{
 				Mode: policy.ModeEngagement,
@@ -50,6 +66,7 @@ func promptCases() []struct {
 					Expires:              "2026-10-15T23:59:59Z",
 				},
 				Memory: "# STYX.md\n\nEngagement notes go here.\n",
+				Packs:  skillpacks.Detection{EngagementActive: true},
 			},
 		},
 		{
@@ -62,6 +79,7 @@ func promptCases() []struct {
 					ExploitAllowed:       true,
 					DestructiveForbidden: false,
 				},
+				Packs: skillpacks.Detection{EngagementActive: true},
 			},
 		},
 		{
@@ -76,6 +94,47 @@ func promptCases() []struct {
 					TimeWindow:           "08:00–18:00 America/New_York",
 				},
 				Memory: "# STYX.md\n\nEngagement notes go here.\n",
+				Packs:  skillpacks.Detection{EngagementActive: true},
+			},
+		},
+		{
+			name: "engagement-blue",
+			in: PromptInput{
+				Mode: policy.ModeEngagement,
+				Engagement: &EngagementContext{
+					Name:           "acme-q4-redteam",
+					Targets:        []string{"10.0.0.0/24"},
+					ExploitAllowed: true,
+				},
+				Packs: skillpacks.Detection{EngagementActive: true, LogArtifactsOpen: true},
+			},
+		},
+		{
+			name: "engagement-re",
+			in: PromptInput{
+				Mode: policy.ModeEngagement,
+				Engagement: &EngagementContext{
+					Name:           "acme-q4-redteam",
+					Targets:        []string{"10.0.0.0/24"},
+					ExploitAllowed: true,
+				},
+				Packs: skillpacks.Detection{EngagementActive: true, REMCPConnected: true},
+			},
+		},
+		{
+			name: "engagement-all-packs",
+			in: PromptInput{
+				Mode: policy.ModeEngagement,
+				Engagement: &EngagementContext{
+					Name:           "acme-q4-redteam",
+					Targets:        []string{"10.0.0.0/24"},
+					ExploitAllowed: true,
+				},
+				Packs: skillpacks.Detection{
+					EngagementActive: true,
+					REMCPConnected:   true,
+					LogArtifactsOpen: true,
+				},
 			},
 		},
 	}
@@ -207,6 +266,106 @@ func TestEngagementContextRendersROE(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("engagement prompt is missing %q", want)
+		}
+	}
+}
+
+// TestSystemPromptPackInjection is the injection-trigger table at the prompt
+// seam: each detection trigger swaps the matching pack's compact section for
+// its full workflow section, and nothing else moves.
+func TestSystemPromptPackInjection(t *testing.T) {
+	tests := []struct {
+		name          string
+		packs         skillpacks.Detection
+		fullMarker    string
+		compactMarker string
+	}{
+		{
+			name:          "engagement injects the red team full workflow",
+			packs:         skillpacks.Detection{EngagementActive: true},
+			fullMarker:    "# Red team workflow (four phases)",
+			compactMarker: "# Red team (guidance)",
+		},
+		{
+			name:          "RE MCP injects the RE full workflow",
+			packs:         skillpacks.Detection{REMCPConnected: true},
+			fullMarker:    "# Reverse engineering & malware workflow",
+			compactMarker: "# Reverse engineering (guidance)",
+		},
+		{
+			name:          "log artifacts inject the blue team full workflow",
+			packs:         skillpacks.Detection{LogArtifactsOpen: true},
+			fullMarker:    "# Blue team workflow (log triage & incident response)",
+			compactMarker: "# Blue team (guidance)",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prompt, err := BuildSystemPrompt(PromptInput{Packs: tc.packs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(prompt, tc.fullMarker) {
+				t.Errorf("prompt is missing the injected full section %q", tc.fullMarker)
+			}
+			if strings.Contains(prompt, tc.compactMarker) {
+				t.Errorf("prompt still contains the compact section %q", tc.compactMarker)
+			}
+		})
+	}
+}
+
+// TestSystemPromptPacksStayCompactWhenNotDetected pins the other half of the
+// trigger table: with no detection, every security pack contributes its compact
+// always-on section, never its full workflow.
+func TestSystemPromptPacksStayCompactWhenNotDetected(t *testing.T) {
+	prompt, err := BuildSystemPrompt(PromptInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, compact := range []string{
+		"# Red team (guidance)",
+		"# Reverse engineering (guidance)",
+		"# Blue team (guidance)",
+	} {
+		if !strings.Contains(prompt, compact) {
+			t.Errorf("prompt is missing the compact section %q", compact)
+		}
+	}
+	for _, full := range []string{
+		"# Red team workflow (four phases)",
+		"# Reverse engineering & malware workflow",
+		"# Blue team workflow (log triage & incident response)",
+	} {
+		if strings.Contains(prompt, full) {
+			t.Errorf("prompt contains the un-triggered full section %q", full)
+		}
+	}
+}
+
+// TestSystemPromptPackInjectionIsByteStable guards the cache prefix: the pack
+// decision is resolved into the prompt once and renders identically every time
+// for the same detection.
+func TestSystemPromptPackInjectionIsByteStable(t *testing.T) {
+	in := PromptInput{
+		Mode: policy.ModeEngagement,
+		Engagement: &EngagementContext{
+			Name:    "acme-q4-redteam",
+			Targets: []string{"10.0.0.0/24"},
+		},
+		Packs: skillpacks.Detection{EngagementActive: true, REMCPConnected: true},
+	}
+	first, err := BuildSystemPrompt(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		again, err := BuildSystemPrompt(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again != first {
+			t.Fatalf("BuildSystemPrompt with packs is not deterministic on call %d", i+2)
 		}
 	}
 }

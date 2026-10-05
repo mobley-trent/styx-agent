@@ -19,6 +19,7 @@ import (
 const helpText = `commands:
   /help          show this help
   /status        show mode, model, session, and engagement state
+  /pack          show the harness-selected skill packs and their state
   /engagement    list engagement files, or activate one with /engagement <file>
   /mode [safe]   show the operating mode, or return to safe mode (tears the engagement down)
   /resume [id]   list past sessions, or restore one by id
@@ -92,6 +93,8 @@ func (h *Harness) command(name, arg string) (string, error) {
 		return helpText, nil
 	case "status":
 		return h.statusText(), nil
+	case "pack", "packs":
+		return h.packText(), nil
 	case "engagement":
 		return h.engagementCommand(arg)
 	case "mode":

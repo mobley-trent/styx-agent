@@ -24,7 +24,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{}
 	h.model = New(Config{
 		Status: func() Status {
-			return Status{Mode: "safe", Model: "deepseek-flash", Session: "abc123", Busy: true}
+			return Status{Mode: "safe", Packs: "coding+red-team", Model: "deepseek-flash", Session: "abc123", Busy: true}
 		},
 		Submit: func(text string) { h.submits = append(h.submits, text) },
 		Command: func(name, arg string) (string, error) {
@@ -177,6 +177,9 @@ func TestStatusBarShowsModeAndModel(t *testing.T) {
 	got := h.view()
 	if !strings.Contains(got, "safe") || !strings.Contains(got, "deepseek-flash") {
 		t.Errorf("status bar is missing mode/model:\n%s", got)
+	}
+	if !strings.Contains(got, "coding+red-team") {
+		t.Errorf("status bar is missing the active pack:\n%s", got)
 	}
 	if !strings.Contains(got, "working…") {
 		t.Errorf("status bar does not show the busy indicator:\n%s", got)

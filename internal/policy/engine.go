@@ -93,8 +93,15 @@ func (e *Engine) Decide(call Call) VerdictResult {
 	engaged := e.mode == ModeEngagement && e.scope != nil
 	if !engaged || len(call.ScopeTargets) == 0 {
 		// Not a scope question: resolve through the full rule table (mode
-		// defaults + project overlay). Safe mode's floor is prompt.
-		return e.full.resolve(call, VerdictPrompt)
+		// defaults + project overlay). Safe mode's floor is prompt. A
+		// destructive-tagged call is never auto-allowed, even where a project
+		// rule would widen it to allow (§8.3: detonation is always an explicit
+		// operator decision).
+		res := e.full.resolve(call, VerdictPrompt)
+		if call.Destructive && res.Verdict == VerdictAllow {
+			return VerdictResult{VerdictPrompt, ReasonDestructive}
+		}
+		return res
 	}
 
 	// 2. Engagement mode with targets: project rules may narrow; the mode
@@ -111,8 +118,14 @@ func (e *Engine) Decide(call Call) VerdictResult {
 		}
 	}
 
-	// 3. Scope decides allow vs prompt (§6.2).
+	// 3. Scope decides allow vs prompt (§6.2). A destructive-tagged call is
+	// never auto-allowed even in scope: detonation is always an explicit
+	// operator decision (§8.3). This is a prompt, not a hard deny — the
+	// destructive_forbidden hard limit is the ROE check above.
 	if e.allInScope(call) {
+		if call.Destructive {
+			return VerdictResult{VerdictPrompt, ReasonDestructive}
+		}
 		return VerdictResult{VerdictAllow, ReasonInScope}
 	}
 	return VerdictResult{VerdictPrompt, ReasonOutOfScope}
