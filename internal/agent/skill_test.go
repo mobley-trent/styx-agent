@@ -57,7 +57,7 @@ func TestSkillToolReturnsWorkflowText(t *testing.T) {
 	}
 
 	got, err := tool.Handler(context.Background(), map[string]any{
-		"skill": "deploy", "reason": "asked", "args": map[string]any{"env": "prod"},
+		"skill": "deploy", "reason": "asked", "args_json": `{"env": "prod"}`,
 	})
 	if err != nil {
 		t.Fatalf("Handler() = %v", err)
@@ -81,10 +81,10 @@ func TestSkillToolRefusesUserInvokedSkill(t *testing.T) {
 	if strings.Contains(tool.Description, "- manual") {
 		t.Errorf("description advertises a user-invoked skill:\n%s", tool.Description)
 	}
-	if _, err := tool.Handler(context.Background(), map[string]any{"skill": "manual", "reason": "x", "args": map[string]any{}}); err == nil {
+	if _, err := tool.Handler(context.Background(), map[string]any{"skill": "manual", "reason": "x", "args_json": "{}"}); err == nil {
 		t.Fatal("Handler() allowed the model to invoke a user-invoked skill")
 	}
-	if _, err := tool.Handler(context.Background(), map[string]any{"skill": "nope", "reason": "x", "args": map[string]any{}}); err == nil {
+	if _, err := tool.Handler(context.Background(), map[string]any{"skill": "nope", "reason": "x", "args_json": "{}"}); err == nil {
 		t.Fatal("Handler() accepted an unknown skill")
 	}
 }
@@ -136,7 +136,7 @@ func TestSkillCannotAddToolsOrAlterVerdicts(t *testing.T) {
 	var auditBuf bytes.Buffer
 	loop := NewLoop(
 		fakemodel.New(fakemodel.WithTurns(
-			fakemodel.ToolCalls(fakemodel.Call("c1", SkillToolName, `{"skill":"deploy","reason":"task","args":{}}`)),
+			fakemodel.ToolCalls(fakemodel.Call("c1", SkillToolName, `{"skill":"deploy","reason":"task","args_json":"{}"}`)),
 			fakemodel.ToolCalls(callWrite("a.txt", "changed\n")),
 			fakemodel.Text("done"),
 		)),

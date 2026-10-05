@@ -32,7 +32,7 @@ func TestBuildDiscoversProjectSkill(t *testing.T) {
 	writeSkill(t, filepath.Join(dir, ".styx", "skills"), "deploy", skillBody("deploy", "ship the app", ""))
 
 	fake := fakemodel.New(fakemodel.WithTurns(
-		fakemodel.ToolCalls(fakemodel.Call("c1", "skill", `{"skill":"deploy","reason":"task","args":{}}`)),
+		fakemodel.ToolCalls(fakemodel.Call("c1", "skill", `{"skill":"deploy","reason":"task","args_json":"{}"}`)),
 		fakemodel.Text("following the deploy workflow"),
 	))
 	h, err := Build(context.Background(), buildOptions(t, dir, fake))

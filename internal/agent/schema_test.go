@@ -46,7 +46,15 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 // array items, and nested schema fields.
 func checkStrictObject(t *testing.T, path string, schema map[string]any) {
 	t.Helper()
-	if props, ok := schema["properties"].(map[string]any); ok && len(props) > 0 {
+	props, hasProps := schema["properties"].(map[string]any)
+	// The provider rejects a declared object with no properties outright
+	// ("An object with no properties is not allowed"), independent of the
+	// required/properties match below. A free-form map must be encoded as a
+	// JSON string instead.
+	if schema["type"] == "object" && (!hasProps || len(props) == 0) {
+		t.Errorf("%s: object declares no properties; strict mode rejects it (encode free-form maps as a JSON string)", path)
+	}
+	if hasProps && len(props) > 0 {
 		required, _ := schema["required"].([]any)
 		if len(required) != len(props) {
 			t.Errorf("%s: %d required entr(ies) for %d properties; strict mode requires them to match", path, len(required), len(props))
