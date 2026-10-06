@@ -8,6 +8,7 @@ Y88b.         888       Y88o88P     Y88o88P            d88P888 888    888 888   
 Y88b  d88P    888         888      d88P Y88b       d8888888888 Y88b  d88P 888        888   Y8888     888
  "Y8888P"     888         888     d88P   Y88b     d88P     888  "Y8888P88 8888888888 888    Y888     888
 ```
+# styx-agent
 
 `styx` — a terminal agent harness for coding plus red-team, reverse-
 engineering, and blue-team work, with harness-enforced dual-mode safety.
