@@ -103,6 +103,15 @@ relate.
 A suggested route through the relationship graph from current access to a target, surfaced
 for the model to act on. A suggestion, never an auto-executed step.
 
+**Capability step**
+A derived, actionable projection of a relationship-graph edge into a directed, costed action —
+pivot, harvest a credential, use one, become admin, or exploit. Derived on read; never a stored
+record.
+
+**Path cost**
+The cost of an attack path: the sum of its capability steps' costs, each a base cost modified by
+the confidence, verification, and OPSEC-noise enums. A ranking, never a probability.
+
 **State digest**
 The compact, derived view of engagement state appended to the conversation when state changes — a view of the record, never the record itself.
 
