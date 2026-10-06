@@ -113,6 +113,24 @@ The harness-stamped origin of a state mutation: tool or model, subagent attribut
 The operator-set engagement flag that widens in-scope exploit approval within the rules of
 engagement. It never lifts ROE hard limits, and full autonomy is out of scope.
 
+## Parsers & artifacts
+
+**Parser tool**
+A harness-owned tool that turns one scanner's raw output into typed engagement-state writes,
+one per scanner (nmap, nuclei, sqlmap, gobuster, cme, bloodhound). The only path from scanner
+output into state.
+
+**Artifact**
+A preserved raw tool output file that a parser reads and a finding cites as evidence.
+
+**Parse receipt**
+The compact summary a parser returns after a parse — what it wrote and what it skipped — so
+the model sees the result without re-reading the raw output.
+
+**Pending-parse obligation**
+The harness-tracked record that a scanner artifact has not yet been parsed, surfaced in the
+state digest. Advisory, never a block.
+
 ## Agents
 
 **Subagent**
