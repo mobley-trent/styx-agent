@@ -10,6 +10,29 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+
+- The STYX AGENT startup wordmark, tinted with the active theme and stamped with
+  the running version, rendered once at the top of the initial transcript on
+  terminals at least 109 columns wide (narrower terminals skip it rather than
+  wrap or truncate). (#64)
+
+### Changed
+
+- The harness now starts without a reachable model provider. A missing
+  `DEEPSEEK_API_KEY` or a model the provider does not serve no longer refuses
+  startup: the failure surfaces at its point of use as a recoverable turn error,
+  the status bar shows a degraded marker, and a later prompt retries — so a
+  transient outage or a corrected credential recovers without a restart.
+  Safety-critical refusals (invalid config, a refused or stale engagement file)
+  stay fatal at startup. (#55)
+
+### Fixed
+
+- `/quit` and `/exit` were a no-op in the TUI: they set the quit flag but never
+  emitted the Bubble Tea quit message, so the program ran on. Both now exit
+  exactly as ctrl-c does. (#62)
+
 ## [v0.1.1] - 2026-10-05
 
 ### Fixed
