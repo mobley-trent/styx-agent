@@ -24,7 +24,7 @@ Per `docs/engagement-state.md` §3, AD domain/user/group entities are **deferred
 `bloodhound_parse` writes through the identity subset it can express: `access`, `credential`,
 and the `ADMIN_OF` / `PIVOT_TO` / `EXPLOITED_VIA` edges. Everything else in Pentestcode's
 18-tool set (`xss_detect`, `jwt_analyze`, `cred_spray`, `ensure_tools`, …) is **out of this
-ticket**; `state_query` / `state_update` / `attack_path_suggest` are owned by #74 / #76.
+ticket**; `state_query` / `state_update` are owned by [#74](https://github.com/mobley-trent/styx-agent/issues/74) ([`docs/engagement-state.md`](engagement-state.md)), and `attack_path_suggest` by [#76](https://github.com/mobley-trent/styx-agent/issues/76) ([`docs/attack-paths.md`](attack-paths.md)).
 
 They share an internal `internal/parsers` framework: a per-format **extractor** (bytes →
 typed candidate records) and a common **write pipeline** (records → §6 ops → atomic commit →
