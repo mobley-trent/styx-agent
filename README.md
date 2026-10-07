@@ -32,7 +32,7 @@ diffs with per-diff accept/reject and accept-all-rest-of-turn, keyboard-first
 permission cards, plan approval, a status bar, dark/light themes, slash
 commands, and cost tracking; sessions persist as append-only JSONL with
 `/resume`, context compaction, and `STYX.md` project memory. See
-[docs/spec.md](docs/spec.md) for the buildable spec and [CONTEXT.md](CONTEXT.md)
+[docs/spec.md](docs/spec.md) for the buildable spec and [GLOSSARY.md](GLOSSARY.md)
 for the domain glossary.
 
 ## Build

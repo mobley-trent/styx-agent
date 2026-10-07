@@ -9,7 +9,7 @@ blue-team work — with harness-enforced dual-mode safety for an untrusted model
 holding the rationale. Nothing here is open for re-litigation in the implementation effort —
 new requirements go through the issue tracker, not silent deviation.
 
-**Glossary:** [CONTEXT.md](../CONTEXT.md) is the canonical domain language. This spec uses
+**Glossary:** [GLOSSARY.md](../GLOSSARY.md) is the canonical domain language. This spec uses
 those terms without redefining them. (Per the map's Notes, ticket links below render as
 `issues/N`.)
 
@@ -501,7 +501,7 @@ ship in v1 and are **always available**; there is no persona or mode switching.
 
 ### 8.4 Agent skills (SKILL.md) — and the skill tool
 
-Distinct from packs (CONTEXT.md). styx-agent reads the SKILL.md format (compatible with
+Distinct from packs (GLOSSARY.md). styx-agent reads the SKILL.md format (compatible with
 `~/.agents/skills`):
 
 - **Discovery:** global (`~/.agents/skills`, XDG-equivalents honored) + project
@@ -693,7 +693,7 @@ Decision #16. CI gate: GitHub Actions, every push/PR to `main`.
 
 - A repo script copies a session JSONL → **scrubs** it (secrets, real engagement targets —
   engagement data never enters the repo) → normalizes into a **versioned transcript
-  format** (CONTEXT.md: transcript fixture).
+  format** (GLOSSARY.md: transcript fixture).
 - Fixtures live in the shared `internal/testdata/transcripts/`; stub-replay and driver
   tests consume the same files.
 - No shipped record mode in the harness — capture is "run a session, run the script".

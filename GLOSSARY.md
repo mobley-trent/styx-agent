@@ -1,4 +1,4 @@
-# CONTEXT.md — styx-agent
+# GLOSSARY.md — styx-agent
 
 Glossary for the styx-agent domain. Deliberately free of implementation detail: this is
 the shared language, not the spec.
