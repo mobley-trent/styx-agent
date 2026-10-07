@@ -18,7 +18,7 @@ engineering, and blue-team work, with harness-enforced dual-mode safety.
 The model is untrusted; the Go harness mediates everything: one policy
 engine, one agent loop, container-isolated execution.
 
-**Status:** pre-alpha (v0.2.0). The harness runs end to end: one hand-rolled
+**Status:** pre-alpha (v0.2.1). The harness runs end to end: one hand-rolled
 agent loop with a byte-stable system prompt and bounded turn and
 parallel-dispatch caps, and one policy engine as the allow/prompt/deny choke
 point, with an audit write on every call. It starts without a reachable model
