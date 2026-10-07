@@ -23,6 +23,26 @@ tag whose version has no CHANGELOG section fails the release.
 
 Internal-only changes (refactors, tests, CI, tooling docs) do not need an entry.
 
+The `changelog entry` job in [.github/workflows/ci.yml](.github/workflows/ci.yml)
+enforces the rule with [scripts/check-changelog.sh](scripts/check-changelog.sh),
+because missing the rule is silent: PRs #84 and #85 merged without entries and
+v0.2.1's release notes recorded neither. A pull request that changes a product
+path — `cmd/**`, `internal/**` except `*_test.go` and `internal/testdata/**`, or
+`install.sh` — must add at least one new entry line under `## [Unreleased]`.
+Entries that were already unreleased before the branch do not count: the check
+diffs the section against the pull request's base. Docs, CI, scripts, the
+Makefile, and dependency bumps are exempt, and a product change with no
+user-visible effect is excused by the `no-changelog` label on the pull request.
+
+Mark the job a **required status check** in branch protection. Without that, a
+red `changelog entry` reports a gap without blocking the merge.
+
+Check a range locally (it reads commits, so uncommitted work is not seen):
+
+```sh
+scripts/check-changelog.sh v0.2.0 v0.2.1     # any BASE and HEAD
+```
+
 ## Cutting a release
 
 From a clean, up-to-date `main`:

@@ -45,6 +45,27 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+  # RELEASING.md: the changelog is the source of truth, and an entry ships in
+  # the same change that needs it. Only meaningful for a pull request — there
+  # is no base revision to compare against on a push to main.
+  changelog:
+    name: changelog entry
+    if: >-
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'no-changelog')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The check diffs the pull request's base against its head, so both
+          # revisions have to be present: the default shallow clone has neither.
+          fetch-depth: 0
+
+      - name: "Require an [Unreleased] entry for product changes"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: scripts/check-changelog.sh "$BASE_SHA"
+
   egress:
     name: container egress (root docker)
     runs-on: ubuntu-latest
