@@ -251,6 +251,54 @@ func TestTranscriptPrintsInFull(t *testing.T) {
 	}
 }
 
+// A tall committed payload is printed in chunks no taller than the terminal:
+// Bubble Tea's print-above path cannot insert more lines than the screen
+// height and leaves the overflow as blank scrollback otherwise.
+func TestFlushChunksCommittedLinesToTerminalHeight(t *testing.T) {
+	m := New(Config{Status: func() Status { return Status{Mode: "safe"} }})
+	var batches [][]string
+	m.print = func(lines ...string) tea.Cmd {
+		batches = append(batches, append([]string(nil), lines...))
+		return nil
+	}
+	// Width below the banner guard, so the banner is skipped and the transcript
+	// is exactly the lines appended below.
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+
+	lines := make([]string, 0, 25)
+	for i := 0; i < 24; i++ {
+		lines = append(lines, "line")
+	}
+	lines = append(lines, strings.Repeat("x", 100)) // wraps to 3 rows at width 40
+	for _, ln := range lines {
+		m.append(ln)
+	}
+	m.flush()
+
+	if len(batches) < 2 {
+		t.Fatalf("print calls = %d, want the payload split across chunks", len(batches))
+	}
+	var got []string
+	for _, b := range batches {
+		if rows := renderedHeight(b, 40); rows > 9 {
+			t.Errorf("a chunk renders %d rows, want at most the 10-row terminal minus one", rows)
+		}
+		got = append(got, b...)
+	}
+	if strings.Join(got, "\n") != strings.Join(lines, "\n") {
+		t.Errorf("chunks changed the transcript order or content:\n%v", got)
+	}
+}
+
+// renderedHeight sums the wrapped row height of a batch of lines.
+func renderedHeight(lines []string, width int) int {
+	rows := 0
+	for _, ln := range lines {
+		rows += renderedRows(ln, width)
+	}
+	return rows
+}
+
 // The view is the fixed live region only; AltScreen must stay off so the
 // terminal, not styx, owns scrollback (ADR-0001).
 func TestViewIsLiveRegionWithoutAltScreen(t *testing.T) {

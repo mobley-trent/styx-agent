@@ -28,7 +28,6 @@ const helpText = `commands:
   /resume [id]   list past sessions, or restore one by id
   /compact [in]  compact context now, with an optional custom instruction
   /skills        list discovered agent skills
-  /<skill-name>  invoke an agent skill
   /quit          leave styx
 
 Anything else is sent to the model.`
@@ -136,8 +135,10 @@ func (h *Harness) lookupSkill(name string) (skills.Skill, bool) {
 	return h.skillCatalog.Lookup(name)
 }
 
-// skillsText is the /skills picker: every discovered skill with its source and
-// whether the model may invoke it (§8.4). Project skills shadow global ones.
+// skillsText is the /skills listing: every discovered skill with its source and
+// whether the model may invoke it (§8.4). It only lists — invocation is the
+// operator's own /<skill-name> call, so the listing never advertises it.
+// Project skills shadow global ones.
 func (h *Harness) skillsText() string {
 	if h.skillCatalog == nil || len(h.skillCatalog.Skills()) == 0 {
 		return "no agent skills discovered (looked for SKILL.md under ~/.agents/skills and .styx/skills)"
@@ -157,8 +158,7 @@ func (h *Harness) skillsText() string {
 			b.WriteString("\n      " + sk.Path)
 		}
 	}
-	b.WriteString("\n\ninvoke one with /<skill-name>")
-	return b.String()
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // invokeSkill runs a user invocation of a skill. A model-invocable skill is

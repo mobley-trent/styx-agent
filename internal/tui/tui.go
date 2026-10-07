@@ -30,6 +30,10 @@ const (
 	// diffViewLines is the most lines of an inline diff rendered. A large diff
 	// is summarized rather than flooding the stream.
 	diffViewLines = 40
+	// defaultWidth and defaultHeight are the terminal dimensions assumed until
+	// the first WindowSizeMsg arrives.
+	defaultWidth  = 80
+	defaultHeight = 24
 	// dispatchToolName is the delegation tool. Its result is the subagent
 	// block's report, so the main stream skips the duplicate result line
 	// (§4.2).
@@ -129,8 +133,8 @@ const (
 const (
 	// ChoiceAllowOnce runs the call once.
 	ChoiceAllowOnce = "allow-once"
-	// ChoiceAllowSession runs this call and matching ones for the rest of the
-	// session.
+	// ChoiceAllowSession runs this call and, for the rest of the session,
+	// every call of the same tool that would otherwise prompt.
 	ChoiceAllowSession = "allow-session"
 	// ChoiceDeny refuses the call.
 	ChoiceDeny = "deny"
@@ -267,8 +271,9 @@ type Model struct {
 	// later resize never re-adds a banner skipped at startup.
 	bannerPlaced bool
 
-	width int
-	quit  bool
+	width  int
+	height int
+	quit   bool
 }
 
 // New builds the UI model. The dark theme is the default until the terminal
@@ -276,7 +281,8 @@ type Model struct {
 func New(cfg Config) *Model {
 	return &Model{
 		cfg:       cfg,
-		width:     80,
+		width:     defaultWidth,
+		height:    defaultHeight,
 		dark:      true,
 		styles:    themeFor(true),
 		subagents: map[string]*subagentBlock{},
@@ -295,6 +301,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
 		m.placeBanner()
 		return m, m.flush()
 	case tea.BackgroundColorMsg:
@@ -952,13 +959,68 @@ func (m *Model) append(text string) {
 
 // flush returns the command that prints the pending transcript lines above the
 // live region, or nil when nothing is pending.
+//
+// The lines are printed in chunks no taller than the terminal. Bubble Tea
+// prints committed lines with one cursor-relative insert-above operation whose
+// length is bounded by the screen height; a taller payload cannot be inserted
+// and leaves its overflow as blank lines in the scrollback. Splitting the
+// payload keeps each insertion within that bound, and tea.Sequence preserves
+// the line order across the chunks.
 func (m *Model) flush() tea.Cmd {
 	if len(m.pending) == 0 {
 		return nil
 	}
 	lines := m.pending
 	m.pending = nil
-	return m.print(lines...)
+	chunks := chunkLines(lines, m.width, m.height)
+	cmds := make([]tea.Cmd, 0, len(chunks))
+	for _, chunk := range chunks {
+		cmds = append(cmds, m.print(chunk...))
+	}
+	return tea.Sequence(cmds...)
+}
+
+// chunkLines groups lines so no group renders taller than the terminal. A line
+// is measured at the terminal width, so a wrapped line counts for its full
+// rendered height. A single line taller than the terminal is emitted alone: it
+// cannot be split further without altering the transcript.
+func chunkLines(lines []string, width, height int) [][]string {
+	if width < 1 {
+		width = defaultWidth
+	}
+	if height < 1 {
+		height = defaultHeight
+	}
+	limit := height - 1
+	if limit < 1 {
+		limit = 1
+	}
+	var chunks [][]string
+	start := 0
+	rows := 0
+	for i, line := range lines {
+		lineRows := renderedRows(line, width)
+		if rows > 0 && rows+lineRows > limit {
+			chunks = append(chunks, lines[start:i])
+			start = i
+			rows = 0
+		}
+		rows += lineRows
+	}
+	if start < len(lines) {
+		chunks = append(chunks, lines[start:])
+	}
+	return chunks
+}
+
+// renderedRows is the number of terminal rows a line occupies at the given
+// width, accounting for wrapping.
+func renderedRows(line string, width int) int {
+	w := lipgloss.Width(line)
+	if w <= width {
+		return 1
+	}
+	return (w + width - 1) / width
 }
 
 // commitPartial folds a live partial answer into the transcript.

@@ -242,32 +242,45 @@ func TestLoopAcceptRestOfTurnSkipsLaterReviews(t *testing.T) {
 	}
 }
 
-func TestLoopAllowSessionIsSessionScoped(t *testing.T) {
+// A session allow is a decision about the tool, not about one set of
+// parameters: once the operator allows write_file for the session, later
+// write prompts are skipped whatever the path — while a different tool still
+// prompts, and a new session starts clean.
+func TestLoopAllowSessionIsToolWide(t *testing.T) {
 	dir := workspace(t, map[string]string{"a.txt": "one\n", "b.txt": "two\n"})
-	prompter := &scriptedPrompter{decide: func(PromptRequest) Decision { return DecisionAllowSession }}
+	prompter := &scriptedPrompter{decide: func(req PromptRequest) Decision {
+		if req.Tool == "write_file" {
+			return DecisionAllowSession
+		}
+		return DecisionDeny
+	}}
+	exec := &fakeExecutor{result: "ok\n"}
 
 	fake := fakemodel.New(fakemodel.WithTurns(
 		fakemodel.ToolCalls(callWrite("a.txt", "ONE\n")), fakemodel.Text("done"),
-		fakemodel.ToolCalls(callWrite("a.txt", "ONE\n")), fakemodel.Text("done"),
 		fakemodel.ToolCalls(callWrite("b.txt", "TWO\n")), fakemodel.Text("done"),
+		fakemodel.ToolCalls(fakemodel.Call("call-bash", "bash", `{"command":"echo hi"}`)), fakemodel.Text("done"),
 	))
-	loop := NewLoop(fake, mustRegistry(t, WriteFileTool(dir)), mustEngine(t, policy.ModeSafe),
+	loop := NewLoop(fake, mustRegistry(t, WriteFileTool(dir), BashTool(exec)), mustEngine(t, policy.ModeSafe),
 		audit.NewWriter(&bytes.Buffer{}), testSystemPrompt, WithPrompter(prompter))
 
 	for i := 0; i < 3; i++ {
-		if _, err := loop.Run(context.Background(), nil, "edit"); err != nil {
+		if _, err := loop.Run(context.Background(), nil, "do it"); err != nil {
 			t.Fatalf("Run(%d) = %v", i, err)
 		}
 	}
 
-	// The repeated identical call was remembered for the session; the
-	// different call still prompted.
+	// Only the first write and the bash call prompted: the second write rode
+	// the session allow for its tool.
 	seen := prompter.requests()
 	if len(seen) != 2 {
-		t.Fatalf("permission prompts = %d, want 2 (allow-session remembered a.txt)", len(seen))
+		t.Fatalf("permission prompts = %+v, want 2 (write_file then bash)", seen)
 	}
-	if seen[0].Params["path"] != "a.txt" || seen[1].Params["path"] != "b.txt" {
-		t.Errorf("prompted paths = %v/%v, want a.txt then b.txt", seen[0].Params["path"], seen[1].Params["path"])
+	if seen[0].Tool != "write_file" || seen[1].Tool != "bash" {
+		t.Errorf("prompted tools = %q/%q, want write_file then bash", seen[0].Tool, seen[1].Tool)
+	}
+	if got := readWorkspace(t, filepath.Join(dir, "b.txt")); got != "TWO\n" {
+		t.Errorf("b.txt = %q, want the second write applied under the session allow", got)
 	}
 
 	// Session-scoped only: a fresh loop (a new session) prompts again.

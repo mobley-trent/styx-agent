@@ -141,6 +141,34 @@ func TestLoopOutOfScopeDeniedDoesNotRun(t *testing.T) {
 	}
 }
 
+// A session allow is never a scope grant: each out-of-scope target prompts on
+// its own, however many the operator has already allowed (§6.2).
+func TestLoopSessionAllowDoesNotBypassScope(t *testing.T) {
+	now := loopClock(t, "2026-09-29T12:00:00Z")
+	eng := engagementAt(t, scopeSource(true, true), now)
+	fetcher := &recordingFetcher{body: "outside body"}
+	prompter := &scriptedPrompter{decide: func(PromptRequest) Decision { return DecisionAllowSession }}
+	fake := fakemodel.New(fakemodel.WithTurns(
+		fakemodel.ToolCalls(fakemodel.Call("call-1", "web_fetch", `{"url":"http://203.0.113.9/x"}`)),
+		fakemodel.Text("done"),
+		fakemodel.ToolCalls(fakemodel.Call("call-2", "web_fetch", `{"url":"http://203.0.113.9/y"}`)),
+		fakemodel.Text("done"),
+	))
+	engine := mustEngine(t, policy.ModeEngagement,
+		policy.WithScope(eng.Scope()), policy.WithROE(eng.ROE()), policy.WithClock(func() time.Time { return now }))
+	loop := NewLoop(fake, mustRegistry(t, WebFetchTool(fetcher)), engine,
+		audit.NewWriter(&bytes.Buffer{}), testSystemPrompt, WithPrompter(prompter))
+
+	for i := 0; i < 2; i++ {
+		if _, err := loop.Run(context.Background(), nil, "fetch it"); err != nil {
+			t.Fatalf("Run(%d) = %v", i, err)
+		}
+	}
+	if got := len(prompter.requests()); got != 2 {
+		t.Errorf("out-of-scope prompts = %d, want 2 (a session allow never covers scope)", got)
+	}
+}
+
 func TestLoopROEHardDeniesAreUnpromptable(t *testing.T) {
 	now := loopClock(t, "2026-09-29T12:00:00Z")
 	eng := engagementAt(t, scopeSource(false, true), now)
