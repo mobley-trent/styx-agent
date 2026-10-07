@@ -180,16 +180,6 @@ type PromptMsg struct {
 // busy flag, for instance.
 type RefreshMsg struct{}
 
-// item is one element of the transcript: either a committed line of text or a
-// subagent block. Ordering is the stream's ordering, so a block sits exactly
-// where its run started. A banner line is re-tinted each frame so it tracks the
-// live theme.
-type item struct {
-	text   string
-	block  *subagentBlock
-	banner bool
-}
-
 // subagentBlock is one subagent run as the stream renders it (§9.5): a header
 // with a spinner and live preview while running, collapsible to the run's full
 // transcript and report. It is a view over the persisted subagent events — it
@@ -252,7 +242,9 @@ type Model struct {
 	styles theme
 	dark   bool
 
-	items   []item
+	// pending holds rendered transcript lines that are committed but not yet
+	// printed to the terminal's scrollback; flush drains it.
+	pending []string
 	partial string
 	input   []rune
 
@@ -262,6 +254,12 @@ type Model struct {
 	// subagents maps a run key to its block, so a run's inner events fold into
 	// the block its start event opened.
 	subagents map[string]*subagentBlock
+	// order lists the still-live blocks' run keys in start order, so the live
+	// region renders them deterministically.
+	order []string
+	// print writes committed transcript lines above the live region. It is the
+	// terminal seam: production installs tea.Println, tests capture the lines.
+	print func(lines ...string) tea.Cmd
 	// spinning reports whether a spinner tick is scheduled.
 	spinning bool
 	// bannerPlaced reports whether the startup banner has been considered.
@@ -269,15 +267,21 @@ type Model struct {
 	// later resize never re-adds a banner skipped at startup.
 	bannerPlaced bool
 
-	width  int
-	height int
-	quit   bool
+	width int
+	quit  bool
 }
 
 // New builds the UI model. The dark theme is the default until the terminal
 // answers the background-color query in Init (§9.6).
 func New(cfg Config) *Model {
-	return &Model{cfg: cfg, width: 80, height: 24, dark: true, styles: themeFor(true), subagents: map[string]*subagentBlock{}}
+	return &Model{
+		cfg:       cfg,
+		width:     80,
+		dark:      true,
+		styles:    themeFor(true),
+		subagents: map[string]*subagentBlock{},
+		print:     func(lines ...string) tea.Cmd { return tea.Println(strings.Join(lines, "\n")) },
+	}
 }
 
 // Init implements tea.Model. It asks the terminal for its background color so
@@ -290,8 +294,9 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
+		m.width = msg.Width
 		m.placeBanner()
+		return m, m.flush()
 	case tea.BackgroundColorMsg:
 		m.dark = msg.IsDark()
 		m.styles = themeFor(m.dark)
@@ -299,7 +304,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.key(msg)
 	case EventMsg:
 		m.apply(msg.Event)
-		return m, m.spin()
+		return m, tea.Batch(m.flush(), m.spin())
 	case PromptMsg:
 		m.prompt = &msg.Prompt
 		m.reply = msg.Reply
@@ -355,11 +360,10 @@ func (m *Model) placeBanner() {
 	if v := strings.TrimSpace(m.cfg.Version); v != "" && m.width >= bannerWidth+versionGap+lipgloss.Width(v) {
 		lines[len(lines)-1] += strings.Repeat(" ", versionGap) + v
 	}
-	prefix := make([]item, 0, len(lines))
+	// The banner belongs to the transcript: it prints once into scrollback.
 	for _, ln := range lines {
-		prefix = append(prefix, item{text: ln, banner: true})
+		m.append(m.styles.banner.Render(ln))
 	}
-	m.items = append(prefix, m.items...)
 }
 
 // key handles one key press.
@@ -412,33 +416,33 @@ func (m *Model) submit() tea.Cmd {
 	name, arg, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
 	switch name {
 	case "quit", "exit":
-		return m.quitCmd()
+		return tea.Batch(m.quitCmd(), m.flush())
 	case "clear":
-		// /clear forgets the transcript and the model context, but never the
-		// chrome: the status bar, input, and any live card stay (§9.4). The
-		// app drops the conversation; the TUI drops what it rendered.
-		m.items = nil
+		// /clear forgets the model context and any live content, but never the
+		// scrollback: committed lines are immutable (ADR-0001). The app drops
+		// the conversation; the live region drops what it held (§9.4).
 		m.partial = ""
 		m.subagents = map[string]*subagentBlock{}
+		m.order = nil
 		if m.cfg.Clear != nil {
 			m.cfg.Clear()
 		}
 		m.append("conversation context cleared")
-		return nil
+		return m.flush()
 	}
 	if m.cfg.Command == nil {
 		m.append("no commands are available")
-		return nil
+		return m.flush()
 	}
 	out, err := m.cfg.Command(name, arg)
 	if err != nil {
 		m.append("! " + err.Error())
-		return nil
+		return m.flush()
 	}
 	if out != "" {
 		m.append(out)
 	}
-	return nil
+	return m.flush()
 }
 
 // quitCmd is the command form of tea.Quit.
@@ -603,27 +607,32 @@ func capDiffLines(lines []diff.Line, n int) []diff.Line {
 	return out
 }
 
-// View implements tea.Model.
+// View implements tea.Model. It renders only the fixed live region at the
+// bottom of the terminal: still-live subagent blocks, the in-flight streaming
+// partial, a live prompt card, the input line, and the status bar. Committed
+// transcript lines are printed once into the terminal's own scrollback and are
+// never re-rendered, so the view stays short and AltScreen stays off (ADR-0001).
 func (m *Model) View() tea.View {
 	var b strings.Builder
 
-	// The transcript scrolls; the live card, input line, and status bar are
-	// always visible, and the live partial answer takes a line when present.
-	card := m.promptBlock()
-	reserved := 2 + len(card)
-	if m.partial != "" {
-		reserved++
-	}
-	body := tailLines(m.body(), m.height-reserved)
-	if len(body) > 0 {
-		b.WriteString(strings.Join(body, "\n"))
-		b.WriteByte('\n')
+	// Still-running subagent blocks are the only transcript content that is
+	// still mutable (their spinner animates and Tab can expand them), so they
+	// live in the live region until their run finishes and prints.
+	for _, key := range m.order {
+		blk := m.subagents[key]
+		if blk == nil {
+			continue
+		}
+		for _, line := range blk.render(m.styles) {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
 	}
 	if m.partial != "" {
 		b.WriteString(strings.TrimRight(m.partial, "\n"))
 		b.WriteByte('\n')
 	}
-	for _, line := range card {
+	for _, line := range m.promptBlock() {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
@@ -631,27 +640,7 @@ func (m *Model) View() tea.View {
 	b.WriteByte('\n')
 	b.WriteString(m.statusLine())
 
-	v := tea.NewView(b.String())
-	v.AltScreen = true
-	return v
-}
-
-// body is the rendered transcript: committed lines and subagent blocks in
-// stream order, plus a live partial answer.
-func (m *Model) body() []string {
-	var out []string
-	for _, it := range m.items {
-		if it.block != nil {
-			out = append(out, it.block.render(m.styles)...)
-			continue
-		}
-		if it.banner {
-			out = append(out, m.styles.banner.Render(it.text))
-			continue
-		}
-		out = append(out, it.text)
-	}
-	return out
+	return tea.NewView(b.String())
 }
 
 // inputLine is the prompt with the current buffer and a block cursor.
@@ -830,7 +819,7 @@ func (m *Model) applySubagent(ev sessions.Event) {
 		b := &subagentBlock{runID: key, role: ev.Subagent, running: true}
 		b.preview = firstLineText(ev.Text)
 		m.subagents[key] = b
-		m.items = append(m.items, item{block: b})
+		m.order = append(m.order, key)
 		return
 	}
 	b := m.blockFor(key)
@@ -845,6 +834,23 @@ func (m *Model) applySubagent(ev sessions.Event) {
 	case ev.Text != "":
 		b.report = ev.Text
 		b.preview = firstLineText(ev.Text)
+	}
+	// The run is finished, so its printed form is final: commit the block to
+	// scrollback and drop it from the live region. Before this moment Tab can
+	// expand it; afterwards the printed lines are immutable (ADR-0001, spec
+	// "scrollback is the pager").
+	m.append(strings.Join(b.render(m.styles), "\n"))
+	m.retire(key)
+}
+
+// retire removes a finished block from the live region.
+func (m *Model) retire(key string) {
+	delete(m.subagents, key)
+	for i, k := range m.order {
+		if k == key {
+			m.order = append(m.order[:i], m.order[i+1:]...)
+			return
+		}
 	}
 }
 
@@ -888,10 +894,10 @@ func (m *Model) blockFor(key string) *subagentBlock {
 	return m.subagents[key]
 }
 
-// toggleLatestSubagent expands or collapses the most recent subagent block.
+// toggleLatestSubagent expands or collapses the most recent still-live block.
 func (m *Model) toggleLatestSubagent() {
-	for i := len(m.items) - 1; i >= 0; i-- {
-		if b := m.items[i].block; b != nil {
+	for i := len(m.order) - 1; i >= 0; i-- {
+		if b := m.subagents[m.order[i]]; b != nil {
 			b.toggle()
 			return
 		}
@@ -935,14 +941,24 @@ func verdictText(ev sessions.Event) string {
 	return ev.Verdict + " (" + ev.Reason + ")"
 }
 
-// append adds a line (or several) to the transcript.
+// append queues a rendered line (or several) to be printed into the terminal's
+// scrollback. Committed lines are immutable once printed (ADR-0001).
 func (m *Model) append(text string) {
 	if strings.TrimRight(text, "\n") == "" {
 		return
 	}
-	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
-		m.items = append(m.items, item{text: line})
+	m.pending = append(m.pending, strings.Split(strings.TrimRight(text, "\n"), "\n")...)
+}
+
+// flush returns the command that prints the pending transcript lines above the
+// live region, or nil when nothing is pending.
+func (m *Model) flush() tea.Cmd {
+	if len(m.pending) == 0 {
+		return nil
 	}
+	lines := m.pending
+	m.pending = nil
+	return m.print(lines...)
 }
 
 // commitPartial folds a live partial answer into the transcript.
@@ -952,19 +968,6 @@ func (m *Model) commitPartial() {
 	}
 	m.append(m.partial)
 	m.partial = ""
-}
-
-// tailLines keeps the last n lines: the stream scrolls, newest at the bottom.
-// A non-positive budget drops the transcript entirely rather than flooding a
-// too-small terminal.
-func tailLines(lines []string, n int) []string {
-	if n <= 0 {
-		return nil
-	}
-	if len(lines) <= n {
-		return lines
-	}
-	return lines[len(lines)-n:]
 }
 
 // capLines keeps at most n lines and marks that more followed.

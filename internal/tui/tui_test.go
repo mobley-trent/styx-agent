@@ -19,6 +19,10 @@ type harness struct {
 	submits  []string
 	commands []string
 	quit     bool
+	// printed collects the transcript lines committed to the terminal's
+	// scrollback: the harness replaces the model's print seam so tests can read
+	// what the terminal receives above the live region.
+	printed []string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -42,7 +46,23 @@ func newHarness(t *testing.T) *harness {
 		},
 		Quit: func() { h.quit = true },
 	})
+	h.model.print = func(lines ...string) tea.Cmd {
+		h.printed = append(h.printed, lines...)
+		return nil
+	}
 	return h
+}
+
+// newCapturedModel builds a Model whose print seam records the committed
+// transcript lines that would be printed above the live region.
+func newCapturedModel(cfg Config) (*Model, *[]string) {
+	m := New(cfg)
+	printed := new([]string)
+	m.print = func(lines ...string) tea.Cmd {
+		*printed = append(*printed, lines...)
+		return nil
+	}
+	return m, printed
 }
 
 func (h *harness) update(msg tea.Msg) {
@@ -57,14 +77,21 @@ func (h *harness) typeText(s string) {
 
 func (h *harness) view() string { return h.model.View().Content }
 
+// printedText is the committed transcript, as the terminal's scrollback holds it.
+func (h *harness) printedText() string { return strings.Join(h.printed, "\n") }
+
 func TestStreamRendersModelOutput(t *testing.T) {
 	h := newHarness(t)
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindUser, Text: "what is in main.go?"}})
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindTextDelta, Text: "Let "}})
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindTextDelta, Text: "me look."}})
 
+	// The in-flight partial streams in the live region, not in scrollback.
 	if got := h.view(); !strings.Contains(got, "Let me look.") {
-		t.Errorf("stream does not show the live partial answer:\n%s", got)
+		t.Errorf("live region does not show the streaming partial answer:\n%s", got)
+	}
+	if got := h.printedText(); strings.Contains(got, "Let me look.") {
+		t.Errorf("the streaming partial was committed before the turn moved on:\n%s", got)
 	}
 
 	h.update(EventMsg{Event: sessions.Event{
@@ -76,14 +103,14 @@ func TestStreamRendersModelOutput(t *testing.T) {
 	}})
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindAssistant, Text: "It prints usage."}})
 
-	got := h.view()
-	for _, want := range []string{"> what is in main.go?", "read_file", "allow", "package main", "It prints usage."} {
-		if !strings.Contains(got, want) {
-			t.Errorf("stream is missing %q:\n%s", want, got)
+	printed := h.printedText()
+	for _, want := range []string{"> what is in main.go?", "Let me look.", "read_file", "allow", "package main", "It prints usage."} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("scrollback is missing %q:\n%s", want, printed)
 		}
 	}
-	if strings.Contains(got, "Let me look.") && !strings.Contains(got, "It prints usage.") {
-		t.Error("the assembled answer did not replace the live deltas")
+	if live := h.view(); strings.Contains(live, "> what is in main.go?") || strings.Contains(live, "It prints usage.") {
+		t.Errorf("committed transcript leaked into the live region:\n%s", live)
 	}
 }
 
@@ -91,7 +118,7 @@ func TestStreamRendersFailures(t *testing.T) {
 	h := newHarness(t)
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindToolResult, Tool: "read_file", Failure: "no such file"}})
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindError, Failure: "turn cap reached"}})
-	got := h.view()
+	got := h.printedText()
 	if !strings.Contains(got, "no such file") || !strings.Contains(got, "turn cap reached") {
 		t.Errorf("failures are not rendered:\n%s", got)
 	}
@@ -118,7 +145,7 @@ func TestSlashCommandDispatched(t *testing.T) {
 	if len(h.commands) != 1 || h.commands[0] != "help|" {
 		t.Fatalf("commands = %v, want one help invocation", h.commands)
 	}
-	if got := h.view(); !strings.Contains(got, "commands: /help /resume /quit") {
+	if got := h.printedText(); !strings.Contains(got, "commands: /help /resume /quit") {
 		t.Errorf("command output is not rendered:\n%s", got)
 	}
 
@@ -130,7 +157,7 @@ func TestSlashCommandDispatched(t *testing.T) {
 
 	h.typeText("/boom")
 	h.update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if got := h.view(); !strings.Contains(got, "command failed") {
+	if got := h.printedText(); !strings.Contains(got, "command failed") {
 		t.Errorf("command error is not rendered:\n%s", got)
 	}
 }
@@ -207,15 +234,39 @@ func TestStatusBarShowsModeAndModel(t *testing.T) {
 	}
 }
 
-func TestViewTrimsToWindowHeight(t *testing.T) {
+// Committed transcript is never trimmed to the terminal height: it prints in
+// full into the terminal's own scrollback, which owns scrolling (ADR-0001).
+func TestTranscriptPrintsInFull(t *testing.T) {
 	h := newHarness(t)
 	for i := 0; i < 40; i++ {
 		h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindUser, Text: "line"}})
 	}
 	h.update(tea.WindowSizeMsg{Width: 60, Height: 10})
-	got := strings.Count(h.view(), "\n")
-	if got > 11 {
-		t.Errorf("view has %d newlines for a 10-line terminal, want it trimmed", got)
+
+	if got := strings.Count(h.printedText(), "line"); got != 40 {
+		t.Errorf("scrollback holds %d of 40 committed lines, want all of them", got)
+	}
+	if got := h.view(); strings.Contains(got, "> line") {
+		t.Errorf("committed lines were re-rendered in the live region:\n%s", got)
+	}
+}
+
+// The view is the fixed live region only; AltScreen must stay off so the
+// terminal, not styx, owns scrollback (ADR-0001).
+func TestViewIsLiveRegionWithoutAltScreen(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindUser, Text: "a committed line"}})
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindTextDelta, Text: "streaming"}})
+
+	v := h.model.View()
+	if v.AltScreen {
+		t.Error("View still uses AltScreen; native scrollback would be discarded")
+	}
+	if !strings.Contains(v.Content, "streaming") {
+		t.Errorf("live region is missing the streaming partial:\n%s", v.Content)
+	}
+	if strings.Contains(v.Content, "a committed line") {
+		t.Errorf("committed line was re-rendered in the live region:\n%s", v.Content)
 	}
 }
 
@@ -227,7 +278,7 @@ func TestStreamRendersInlineDiff(t *testing.T) {
 		Path: "a.txt",
 		Diff: diff.File("a.txt", "one\ntwo\n", "one\nTWO\n"),
 	}})
-	got := h.view()
+	got := h.printedText()
 	for _, want := range []string{"a.txt (+1 -1)", "-two", "+TWO", "one"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("inline diff is missing %q:\n%s", want, got)
@@ -240,7 +291,7 @@ func TestStreamRendersMCPLifecycle(t *testing.T) {
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindMCP, Server: "nmap", Status: "ready", Detail: "2 tool(s)"}})
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindMCP, Server: "ghidra", Status: "failed", Detail: "launch failed: executable not found"}})
 
-	view := h.view()
+	view := h.printedText()
 	if !strings.Contains(view, "mcp nmap: ready") {
 		t.Errorf("view = %q, want the ready server rendered", view)
 	}
@@ -257,7 +308,7 @@ func TestStreamRendersPlan(t *testing.T) {
 			{Tool: "write_file", Params: map[string]any{"path": "a.txt"}},
 		},
 	}})
-	got := h.view()
+	got := h.printedText()
 	if !strings.Contains(got, "plan") || !strings.Contains(got, "write_file") {
 		t.Errorf("plan block is not rendered:\n%s", got)
 	}
@@ -354,7 +405,7 @@ func TestToolResultDisplayIsCapped(t *testing.T) {
 	h := newHarness(t)
 	body := strings.Join(make([]string, 50), "line\n")
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindToolResult, Result: body}})
-	if got := h.view(); !strings.Contains(got, "more lines") {
+	if got := h.printedText(); !strings.Contains(got, "more lines") {
 		t.Errorf("a long tool result is not capped in the stream:\n%s", got)
 	}
 }
@@ -371,7 +422,10 @@ func TestPermissionCardShowsSubagentAttribution(t *testing.T) {
 	}
 }
 
-func TestSubagentBlockCollapsesAndExpands(t *testing.T) {
+// A subagent block is mutable only while its run is live: it renders in the
+// live region (animated, expandable) and is committed to scrollback, final,
+// when the run finishes (ADR-0001; spec "scrollback is the pager").
+func TestSubagentBlockIsLiveThenPrints(t *testing.T) {
 	h := newHarness(t)
 	h.update(EventMsg{Event: sessions.Event{
 		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "start", Text: "fix the build",
@@ -379,7 +433,7 @@ func TestSubagentBlockCollapsesAndExpands(t *testing.T) {
 	got := h.view()
 	for _, want := range []string{"subagent coder", "running", "fix the build"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("running block is missing %q:\n%s", want, got)
+			t.Fatalf("live block is missing %q:\n%s", want, got)
 		}
 	}
 
@@ -390,26 +444,46 @@ func TestSubagentBlockCollapsesAndExpands(t *testing.T) {
 	h.update(EventMsg{Event: sessions.Event{
 		Kind: sessions.KindToolResult, Subagent: "coder", Tool: "read_file", Result: "package main\n",
 	}})
+
+	// Expanded while still live, the transcript shows in the live region.
+	h.update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := h.view(); !strings.Contains(got, "package main") {
+		t.Fatalf("expanded live block does not show its transcript:\n%s", got)
+	}
+
 	h.update(EventMsg{Event: sessions.Event{
 		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "report", Text: "build fixed",
 	}})
 
-	// Collapsed: the run's transcript is folded away, only its preview shows.
-	got = h.view()
-	if !strings.Contains(got, "done") || !strings.Contains(got, "build fixed") {
-		t.Fatalf("finished block header is wrong:\n%s", got)
-	}
-	if strings.Contains(got, "package main") {
-		t.Errorf("collapsed block leaked its transcript:\n%s", got)
-	}
-
-	// Expanded: the full transcript and the report become visible.
-	h.update(tea.KeyPressMsg{Code: tea.KeyTab})
-	got = h.view()
-	for _, want := range []string{"package main", "build fixed", "report"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("expanded block is missing %q:\n%s", want, got)
+	printed := h.printedText()
+	for _, want := range []string{"subagent coder", "done", "package main", "build fixed", "report"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("committed block is missing %q:\n%s", want, printed)
 		}
+	}
+	if strings.Contains(h.view(), "subagent coder") {
+		t.Errorf("the committed block is still in the live region:\n%s", h.view())
+	}
+}
+
+func TestCollapsedSubagentBlockPrintsItsHeaderOnly(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "start", Text: "fix the build",
+	}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindToolResult, Subagent: "coder", Tool: "read_file", Result: "package main\n",
+	}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "report", Text: "build fixed",
+	}})
+
+	printed := h.printedText()
+	if !strings.Contains(printed, "subagent coder") || !strings.Contains(printed, "build fixed") {
+		t.Fatalf("committed block header is wrong:\n%s", printed)
+	}
+	if strings.Contains(printed, "package main") {
+		t.Errorf("a collapsed block printed its transcript:\n%s", printed)
 	}
 }
 
@@ -447,8 +521,8 @@ func TestSubagentBlockSuppressesDispatchResult(t *testing.T) {
 	h.update(EventMsg{Event: sessions.Event{
 		Kind: sessions.KindToolResult, Tool: "dispatch_subagent", Result: "the duplicated report",
 	}})
-	if strings.Contains(h.view(), "the duplicated report") {
-		t.Errorf("the dispatch result was rendered twice:\n%s", h.view())
+	if strings.Contains(h.printedText(), "the duplicated report") {
+		t.Errorf("the dispatch result was rendered twice:\n%s", h.printedText())
 	}
 }
 
@@ -477,7 +551,7 @@ func TestStreamRendersCompaction(t *testing.T) {
 		Kind:   sessions.KindCompaction,
 		Detail: "context 87% → 41%: evicted 2 tool result(s)",
 	}})
-	got := h.view()
+	got := h.printedText()
 	if !strings.Contains(got, "compacted") || !strings.Contains(got, "evicted 2 tool result(s)") {
 		t.Errorf("compaction card is not rendered:\n%s", got)
 	}
@@ -552,7 +626,7 @@ func TestStatusBarReflectsLiveIsolationChange(t *testing.T) {
 	}
 }
 
-func TestClearResetsTranscriptAndAppContext(t *testing.T) {
+func TestClearResetsModelContextButKeepsScrollback(t *testing.T) {
 	cleared := false
 	h := &harness{}
 	h.model = New(Config{
@@ -561,9 +635,13 @@ func TestClearResetsTranscriptAndAppContext(t *testing.T) {
 		Clear:   func() { cleared = true },
 		Command: func(string, string) (string, error) { return "", nil },
 	})
+	h.model.print = func(lines ...string) tea.Cmd {
+		h.printed = append(h.printed, lines...)
+		return nil
+	}
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindUser, Text: "remember this"}})
-	if !strings.Contains(h.view(), "remember this") {
-		t.Fatal("setup: transcript did not record the turn")
+	if !strings.Contains(h.printedText(), "remember this") {
+		t.Fatal("setup: the turn was not committed to scrollback")
 	}
 
 	h.typeText("/clear")
@@ -572,19 +650,22 @@ func TestClearResetsTranscriptAndAppContext(t *testing.T) {
 	if !cleared {
 		t.Error("/clear did not reset the harness conversation")
 	}
-	got := h.view()
-	if strings.Contains(got, "remember this") {
-		t.Errorf("transcript was not cleared:\n%s", got)
+	if !strings.Contains(h.printedText(), "cleared") {
+		t.Errorf("no confirmation that context cleared:\n%s", h.printedText())
 	}
-	if !strings.Contains(got, "cleared") {
-		t.Errorf("no confirmation that context cleared:\n%s", got)
+	// Committed lines are immutable: /clear cannot reach back into scrollback.
+	if !strings.Contains(h.printedText(), "remember this") {
+		t.Errorf("the immutable scrollback was rewritten by /clear:\n%s", h.printedText())
+	}
+	if live := h.view(); strings.Contains(live, "remember this") {
+		t.Errorf("cleared content is still in the live region:\n%s", live)
 	}
 }
 
 func TestBannerRendersOnWideTerminal(t *testing.T) {
 	h := newHarness(t)
 	h.update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
-	got := h.view()
+	got := h.printedText()
 	for _, want := range []string{"d8888b", "88888888888", `"Y8888P"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("wide terminal does not render the wordmark (%q):\n%s", want, got)
@@ -595,7 +676,7 @@ func TestBannerRendersOnWideTerminal(t *testing.T) {
 func TestBannerSkippedOnNarrowTerminal(t *testing.T) {
 	h := newHarness(t)
 	h.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
-	if got := h.view(); strings.Contains(got, "d8888b") {
+	if got := h.printedText(); strings.Contains(got, "d8888b") {
 		t.Errorf("narrow terminal rendered the wordmark instead of skipping it:\n%s", got)
 	}
 }
@@ -614,8 +695,8 @@ func TestBannerWidthMatchesArt(t *testing.T) {
 	// Exactly at the guard it renders; one column under it does not.
 	at := newHarness(t)
 	at.update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
-	if !strings.Contains(at.view(), "d8888b") {
-		t.Errorf("the banner was skipped at its own %d-column width:\n%s", bannerWidth, at.view())
+	if !strings.Contains(at.printedText(), "d8888b") {
+		t.Errorf("the banner was skipped at its own %d-column width:\n%s", bannerWidth, at.printedText())
 	}
 }
 
@@ -625,7 +706,7 @@ func TestBannerPlacedOnce(t *testing.T) {
 	wide := newHarness(t)
 	wide.update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
 	wide.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
-	if !strings.Contains(wide.view(), "d8888b") {
+	if !strings.Contains(wide.printedText(), "d8888b") {
 		t.Error("banner disappeared after a resize below the guard")
 	}
 
@@ -633,20 +714,20 @@ func TestBannerPlacedOnce(t *testing.T) {
 	narrow := newHarness(t)
 	narrow.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
 	narrow.update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
-	if strings.Contains(narrow.view(), "d8888b") {
+	if strings.Contains(narrow.printedText(), "d8888b") {
 		t.Error("banner was added after a narrow startup")
 	}
 }
 
 func TestBannerStampsVersionBottomRight(t *testing.T) {
-	m := New(Config{
+	m, printed := newCapturedModel(Config{
 		Version: "v9.9.9",
 		Status:  func() Status { return Status{Mode: "safe"} },
 	})
 	m.Update(tea.WindowSizeMsg{Width: bannerWidth + versionGap + 20, Height: 40})
-	got := m.View().Content
+	got := strings.Join(*printed, "\n")
 	var row string
-	for _, ln := range strings.Split(got, "\n") {
+	for _, ln := range *printed {
 		if strings.Contains(ln, "v9.9.9") {
 			row = ln
 			break
@@ -658,18 +739,18 @@ func TestBannerStampsVersionBottomRight(t *testing.T) {
 	if !strings.Contains(row, `"Y8888P"`) {
 		t.Errorf("version is not on the bottom art row:\n%s", row)
 	}
-	if i := strings.Index(row, "v9.9.9"); i < bannerWidth {
-		t.Errorf("version at column %d, want it right of the %d-column art:\n%s", i, bannerWidth, row)
+	if i := strings.Index(row, "v9.9.9"); i < 0 || lipgloss.Width(row[:i]) < bannerWidth {
+		t.Errorf("version is not right of the %d-column art:\n%s", bannerWidth, row)
 	}
 }
 
 func TestBannerDropsVersionWhenTooNarrow(t *testing.T) {
-	m := New(Config{
+	m, printed := newCapturedModel(Config{
 		Version: "v9.9.9",
 		Status:  func() Status { return Status{Mode: "safe"} },
 	})
 	m.Update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
-	got := m.View().Content
+	got := strings.Join(*printed, "\n")
 	if !strings.Contains(got, "d8888b") {
 		t.Fatalf("banner skipped at its own width:\n%s", got)
 	}
