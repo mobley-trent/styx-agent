@@ -10,6 +10,12 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The STYX AGENT wordmark is a new design, and the startup banner now renders
+  on terminals at least 96 columns wide (down from 109); narrower terminals
+  still skip it rather than wrap or truncate. The README logo is the same art.
+
 ## [v0.2.0] - 2026-10-06
 
 ### Added

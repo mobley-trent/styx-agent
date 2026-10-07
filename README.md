@@ -1,12 +1,15 @@
 ```
- .d8888b. 88888888888 Y88b   d88P Y88b   d88P            d8888  .d8888b.  8888888888 888b    888 88888888888
-d88P  Y88b    888      Y88b d88P   Y88b d88P            d88888 d88P  Y88b 888        8888b   888     888
-Y88b.         888       Y88o88P     Y88o88P            d88P888 888    888 888        88888b  888     888
- "Y888b.      888        Y888P       Y888P            d88P 888 888        8888888    888Y88b 888     888
-    "Y88b.    888         888        d888b           d88P  888 888  88888 888        888 Y88b888     888
-      "888    888         888       d88888b  888888 d88P   888 888    888 888        888  Y88888     888
-Y88b  d88P    888         888      d88P Y88b       d8888888888 Y88b  d88P 888        888   Y8888     888
- "Y8888P"     888         888     d88P   Y88b     d88P     888  "Y8888P88 8888888888 888    Y888     888
+             /$$                                                                         /$$
+            | $$                                                                        | $$
+  /$$$$$$$ /$$$$$$   /$$   /$$ /$$   /$$        /$$$$$$   /$$$$$$   /$$$$$$  /$$$$$$$  /$$$$$$
+ /$$_____/|_  $$_/  | $$  | $$|  $$ /$$//$$$$$$|____  $$ /$$__  $$ /$$__  $$| $$__  $$|_  $$_/
+|  $$$$$$   | $$    | $$  | $$ \  $$$$/|______/ /$$$$$$$| $$  \ $$| $$$$$$$$| $$  \ $$  | $$
+ \____  $$  | $$ /$$| $$  | $$  >$$  $$        /$$__  $$| $$  | $$| $$_____/| $$  | $$  | $$ /$$
+ /$$$$$$$/  |  $$$$/|  $$$$$$$ /$$/\  $$      |  $$$$$$$|  $$$$$$$|  $$$$$$$| $$  | $$  |  $$$$/
+|_______/    \___/   \____  $$|__/  \__/       \_______/ \____  $$ \_______/|__/  |__/   \___/
+                     /$$  | $$                           /$$  \ $$
+                    |  $$$$$$/                          |  $$$$$$/
+                     \______/                            \______/
 ```
 # styx-agent
 
@@ -15,23 +18,30 @@ engineering, and blue-team work, with harness-enforced dual-mode safety.
 The model is untrusted; the Go harness mediates everything: one policy
 engine, one agent loop, container-isolated execution.
 
-**Status:** pre-alpha (v0.1.1). The harness runs end to end: one hand-rolled
+**Status:** pre-alpha (v0.2.0). The harness runs end to end: one hand-rolled
 agent loop with a byte-stable system prompt and bounded turn and
 parallel-dispatch caps, and one policy engine as the allow/prompt/deny choke
-point, with an audit write on every call. Built-in tools cover file
-manipulation (`read_file`, `write_file`, `edit_file`, `glob`, `grep`),
-container-isolated exec (`bash`, `code_exec`), network fetch, plan approval,
-subagent dispatch, and agent skills; external capabilities arrive through the
-same gate as per-project MCP servers over stdio, becoming ordinary audited
-descriptors regardless of server-side strictness. Dual-mode safety is enforced
-by the harness: safe mode by default, engagement mode unlocked through the
-strict engagement gate (scope pins and rules of engagement). The four built-in
-skill packs (coding, red team, reverse engineering, blue team) and `SKILL.md`
-agent skills extend the workflow surface. The streaming TUI renders inline
-diffs with per-diff accept/reject and accept-all-rest-of-turn, keyboard-first
-permission cards, plan approval, a status bar, dark/light themes, slash
-commands, and cost tracking; sessions persist as append-only JSONL with
-`/resume`, context compaction, and `STYX.md` project memory. See
+point, with an audit write on every call. It starts without a reachable model
+provider: a missing credential or an unserved model is a recoverable turn
+error with a degraded marker in the status bar, and a later prompt retries,
+while safety-critical refusals (invalid config, a refused or stale engagement
+file) stay fatal at startup. Built-in tools cover file manipulation
+(`read_file`, `write_file`, `edit_file`, `glob`, `grep`), container-isolated
+exec (`bash`, `code_exec`), network fetch, plan approval, subagent dispatch,
+and agent skills; external capabilities arrive through the same gate as
+per-project MCP servers over stdio, becoming ordinary audited descriptors
+regardless of server-side strictness. Dual-mode safety is enforced by the
+harness: safe mode by default, engagement mode unlocked through the strict
+engagement gate (scope pins and rules of engagement); egress is either pinned
+to scope or visibly degraded isolation. The four built-in skill packs (coding,
+red team, reverse engineering, blue team) and `SKILL.md` agent skills extend the
+workflow surface. The streaming TUI renders inline diffs with per-diff
+accept/reject and accept-all-rest-of-turn, keyboard-first permission cards,
+plan approval, a status bar, dark/light themes, slash commands, and cost
+tracking, and it opens the initial transcript with a theme-tinted STYX AGENT
+wordmark stamped with the running version (skipped on terminals narrower than
+96 columns); sessions persist as append-only JSONL with `/resume`, context
+compaction, and `STYX.md` project memory. See
 [docs/spec.md](docs/spec.md) for the buildable spec and [GLOSSARY.md](GLOSSARY.md)
 for the domain glossary.
 

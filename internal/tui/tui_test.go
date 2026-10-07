@@ -714,7 +714,7 @@ func TestBannerRendersOnWideTerminal(t *testing.T) {
 	h := newHarness(t)
 	h.update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
 	got := h.printedText()
-	for _, want := range []string{"d8888b", "88888888888", `"Y8888P"`} {
+	for _, want := range []string{"/$$$$$$$", "|  $$$$$$/", `\______/`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("wide terminal does not render the wordmark (%q):\n%s", want, got)
 		}
@@ -724,7 +724,7 @@ func TestBannerRendersOnWideTerminal(t *testing.T) {
 func TestBannerSkippedOnNarrowTerminal(t *testing.T) {
 	h := newHarness(t)
 	h.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
-	if got := h.printedText(); strings.Contains(got, "d8888b") {
+	if got := h.printedText(); strings.Contains(got, "/$$$$$$$") {
 		t.Errorf("narrow terminal rendered the wordmark instead of skipping it:\n%s", got)
 	}
 }
@@ -743,7 +743,7 @@ func TestBannerWidthMatchesArt(t *testing.T) {
 	// Exactly at the guard it renders; one column under it does not.
 	at := newHarness(t)
 	at.update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
-	if !strings.Contains(at.printedText(), "d8888b") {
+	if !strings.Contains(at.printedText(), "/$$$$$$$") {
 		t.Errorf("the banner was skipped at its own %d-column width:\n%s", bannerWidth, at.printedText())
 	}
 }
@@ -754,7 +754,7 @@ func TestBannerPlacedOnce(t *testing.T) {
 	wide := newHarness(t)
 	wide.update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
 	wide.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
-	if !strings.Contains(wide.printedText(), "d8888b") {
+	if !strings.Contains(wide.printedText(), "/$$$$$$$") {
 		t.Error("banner disappeared after a resize below the guard")
 	}
 
@@ -762,7 +762,7 @@ func TestBannerPlacedOnce(t *testing.T) {
 	narrow := newHarness(t)
 	narrow.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
 	narrow.update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
-	if strings.Contains(narrow.printedText(), "d8888b") {
+	if strings.Contains(narrow.printedText(), "/$$$$$$$") {
 		t.Error("banner was added after a narrow startup")
 	}
 }
@@ -784,7 +784,7 @@ func TestBannerStampsVersionBottomRight(t *testing.T) {
 	if row == "" {
 		t.Fatalf("version is not stamped on any banner row:\n%s", got)
 	}
-	if !strings.Contains(row, `"Y8888P"`) {
+	if !strings.Contains(row, `\______/`) {
 		t.Errorf("version is not on the bottom art row:\n%s", row)
 	}
 	if i := strings.Index(row, "v9.9.9"); i < 0 || lipgloss.Width(row[:i]) < bannerWidth {
@@ -799,7 +799,7 @@ func TestBannerDropsVersionWhenTooNarrow(t *testing.T) {
 	})
 	m.Update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
 	got := strings.Join(*printed, "\n")
-	if !strings.Contains(got, "d8888b") {
+	if !strings.Contains(got, "/$$$$$$$") {
 		t.Fatalf("banner skipped at its own width:\n%s", got)
 	}
 	if strings.Contains(got, "v9.9.9") {
