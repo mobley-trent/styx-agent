@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -53,7 +52,7 @@ const (
 	// DecisionAllowOnce runs this call only.
 	DecisionAllowOnce Decision = "allow-once"
 	// DecisionAllowSession runs this call and, for the rest of the session,
-	// any call it matches.
+	// every call of the same tool that would otherwise prompt.
 	DecisionAllowSession Decision = "allow-session"
 	// DecisionDeny refuses the call.
 	DecisionDeny Decision = "deny"
@@ -217,7 +216,7 @@ type Loop struct {
 	reviewMu sync.Mutex
 
 	mu         sync.Mutex
-	session    map[string]bool
+	session    map[string]bool // tool names allowed for the rest of the session
 	plan       []PlanAction
 	acceptRest bool
 }
@@ -765,8 +764,10 @@ func (l *Loop) resolve(ctx context.Context, verdict policy.VerdictResult, call m
 		return audit.VerdictAllowPlan, nil
 	}
 
-	key := sessionKey(call.Name, params)
-	if l.sessionAllowed(key) {
+	// A session allow covers the tool for the rest of the session, but it is
+	// never a scope grant or a detonation approval: an out-of-scope target and
+	// a destructive call still prompt on every attempt (§6.2, §8.3).
+	if verdict.Reason != policy.ReasonOutOfScope && verdict.Reason != policy.ReasonDestructive && l.sessionAllowed(call.Name) {
 		return audit.VerdictAllowSession, nil
 	}
 
@@ -783,7 +784,7 @@ func (l *Loop) resolve(ctx context.Context, verdict policy.VerdictResult, call m
 	case DecisionAllowOnce:
 		return audit.VerdictAllowOnce, nil
 	case DecisionAllowSession:
-		l.rememberSession(key)
+		l.rememberSession(call.Name)
 		return audit.VerdictAllowSession, nil
 	default:
 		return audit.VerdictDeny, nil
@@ -1027,27 +1028,16 @@ func denialText(tool string, reason policy.Reason) string {
 	}
 }
 
-// sessionKey identifies a prompt decision within a session: the tool plus its
-// verbatim parameters (JSON object keys are marshaled in sorted order, so equal
-// parameters produce equal keys).
-func sessionKey(tool string, params map[string]any) string {
-	b, err := json.Marshal(params)
-	if err != nil {
-		b = []byte(fmt.Sprintf("%v", params))
-	}
-	return tool + "|" + string(b)
-}
-
-func (l *Loop) sessionAllowed(key string) bool {
+func (l *Loop) sessionAllowed(tool string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.session[key]
+	return l.session[tool]
 }
 
-func (l *Loop) rememberSession(key string) {
+func (l *Loop) rememberSession(tool string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.session[key] = true
+	l.session[tool] = true
 }
 
 // emitEvent publishes one event on the session bus.

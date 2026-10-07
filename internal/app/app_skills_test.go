@@ -92,6 +92,10 @@ func TestSkillsCommandListsAndInvokes(t *testing.T) {
 	if !strings.Contains(out, "deploy") || !strings.Contains(out, "model-invocable") {
 		t.Errorf("/skills output = %q, want the discovered skill", out)
 	}
+	// The listing only lists: it never points the operator at invocation.
+	if strings.Contains(out, "<skill-name>") || strings.Contains(out, "invoke") {
+		t.Errorf("/skills output = %q, want no invocation prompt", out)
+	}
 
 	// With no submitter, the rendered turn is returned directly.
 	out, err = h.command("deploy", "")
