@@ -10,6 +10,8 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [v0.2.1] - 2026-10-07
+
 ### Changed
 
 - The STYX AGENT wordmark is a new design, and the startup banner now renders
@@ -79,7 +81,8 @@ Initial pre-alpha release: the tracer-bullet harness runs end to end.
 - Distribution: goreleaser Linux/macOS archives with keyless-cosign-signed
   `SHA256SUMS`, a Homebrew tap, and a Linux install script.
 
-[Unreleased]: https://github.com/mobley-trent/styx-agent/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mobley-trent/styx-agent/compare/v0.2.1...HEAD
+[v0.2.1]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.2.1
 [v0.2.0]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.2.0
 [v0.1.1]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.1.1
 [v0.1.0]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.1.0
