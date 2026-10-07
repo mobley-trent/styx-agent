@@ -17,6 +17,25 @@ file — is documented in [RELEASING.md](RELEASING.md).
 - The STYX AGENT wordmark is a new design, and the startup banner now renders
   on terminals at least 96 columns wide (down from 109); narrower terminals
   still skip it rather than wrap or truncate. The README logo is the same art.
+- The TUI prints committed transcript lines once into the terminal's own
+  scrollback and keeps only a fixed bottom live region, rather than retaining
+  an alternate screen with a height-trimmed transcript: native scrollback and
+  search work again, `/clear` drops the model context without rewriting what
+  has already printed, and a still-live subagent block stays animated in the
+  live region until its run ends and commits. (#84)
+- `allow-session` now grants the tool for the rest of the session instead of
+  only the parameters that prompted; an out-of-scope target or a destructive
+  call still prompts on every attempt. (#85)
+- `/skills` is a pure listing: it no longer advertises `/<skill-name>`
+  invocation and the matching `/help` line is gone (invocation still works).
+  (#85)
+
+### Fixed
+
+- A tall committed block (for example the `/skills` listing) could leave its
+  overflow as blank scrollback, because the print-above path cannot insert
+  more lines than the screen height; committed lines now print in chunks
+  bounded by the terminal. (#85)
 
 ## [v0.2.0] - 2026-10-06
 
