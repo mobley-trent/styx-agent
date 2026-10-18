@@ -199,9 +199,16 @@ denies, ROE violations, or out-of-scope checks.
 
 **Live region**
 The bottom strip of the terminal UI that is re-rendered every frame: the input editor,
-the status bar, any live prompt card, and the in-flight streaming partial. Everything
-above it is committed transcript printed once into the terminal's own scrollback and
-never rewritten.
+the status bar, any live prompt card, the inline command menu, and the in-flight
+streaming partial. Everything above it is committed transcript printed once into the
+terminal's own scrollback and never rewritten.
+
+**Command registry**
+The harness's one declaration of the command surface: each command's usage line,
+description, handler, and the picker options it offers. Dispatch, `/help`, the inline
+slash-command menu, and the modal pickers all read it, so adding a command documents
+and lists it in the same act. A **command picker** is the modal list a command with
+options opens when it is run with no argument.
 
 ## Testing
 

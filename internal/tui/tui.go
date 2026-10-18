@@ -119,6 +119,13 @@ type Config struct {
 	// Command handles a slash command and returns text to render. A non-nil
 	// error is rendered as an error line.
 	Command func(name, arg string) (string, error)
+	// Commands returns the harness command registry: the inline menu's rows and
+	// each command's picker entries. Nil means the command surface is not
+	// attached, and the menu stays shut (docs/tui-parity.md §4).
+	Commands func() []CommandInfo
+	// Theme returns the operator's /theme choice — "dark", "light", or empty
+	// for the terminal background (§9.6).
+	Theme func() string
 	// Clear resets the harness conversation when the operator runs /clear. The
 	// TUI clears its own transcript; the app forgets the model context.
 	Clear func()
@@ -297,6 +304,14 @@ type Model struct {
 	// editor is the prompt line: a textarea with a history ring (§1 of
 	// docs/tui-parity.md).
 	editor inputEditor
+	// menu is the inline fuzzy command menu, drawn above the input while the
+	// line is a command name (§4).
+	menu slashMenu
+	// picker is the open modal command picker, nil when none is open (§4).
+	picker *picker
+	// termDark is the terminal's reported background, used while the operator
+	// has no /theme preference (§9.6).
+	termDark bool
 
 	prompt *Prompt
 	reply  func(string)
@@ -326,9 +341,12 @@ type Model struct {
 // answers the background-color query in Init (§9.6).
 func New(cfg Config) *Model {
 	m := &Model{
-		cfg:       cfg,
-		width:     defaultWidth,
-		height:    defaultHeight,
+		cfg:    cfg,
+		width:  defaultWidth,
+		height: defaultHeight,
+		// The dark theme is the default until the terminal answers the
+		// background-color query or a /theme preference overrides it.
+		termDark:  true,
 		dark:      true,
 		styles:    themeFor(true),
 		subagents: map[string]*subagentBlock{},
@@ -336,6 +354,7 @@ func New(cfg Config) *Model {
 	}
 	m.editor = newInputEditor(m.styles)
 	m.editor.setWidth(m.width)
+	m.syncTheme()
 	return m
 }
 
@@ -352,23 +371,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.editor.setWidth(m.width)
+		if m.picker != nil {
+			m.picker.setSize(m.width, m.pickerHeight(m.picker.rows()))
+		}
 		m.placeBanner()
 		return m, m.flush()
 	case tea.BackgroundColorMsg:
-		m.dark = msg.IsDark()
-		m.styles = themeFor(m.dark)
-		m.editor.setTheme(m.styles)
+		m.termDark = msg.IsDark()
+		m.syncTheme()
 	case tea.KeyPressMsg:
 		return m.key(msg)
 	case tea.PasteMsg:
-		// A live card owns the keyboard, so it swallows a paste too.
-		if m.prompt != nil {
+		// A live card owns the keyboard, so it swallows a paste too; a modal
+		// picker does the same.
+		if m.prompt != nil || m.picker != nil {
 			return m, nil
 		}
 		// A bracketed paste edits the line like typing does; the textarea's
 		// sanitizer collapses any newlines to spaces.
 		m.editor.endRecall()
-		return m, m.editor.update(msg)
+		cmd := m.editor.update(msg)
+		m.refreshMenu()
+		return m, cmd
 	case EventMsg:
 		m.apply(msg.Event)
 		return m, tea.Batch(m.flush(), m.spin())
@@ -386,6 +410,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerTick()
 		}
 		m.spinning = false
+	}
+	// Anything the picker's list waits on — the filter's match results, the
+	// textinput blink — resolves inside the picker, not the editor.
+	if m.picker != nil {
+		return m, m.picker.update(msg)
 	}
 	return m, nil
 }
@@ -447,6 +476,37 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.answerPrompt(key)
 		return m, nil
 	}
+	// So does a modal picker (§4).
+	if m.picker != nil {
+		return m, m.pickerKey(msg)
+	}
+	// The inline command menu takes the keys that would otherwise move through
+	// history or complete: while it is open they browse the commands (§4).
+	if m.menu.active() {
+		switch key.Code {
+		case tea.KeyUp:
+			m.menu.move(-1)
+			return m, nil
+		case tea.KeyDown:
+			m.menu.move(1)
+			return m, nil
+		case tea.KeyTab:
+			if info, ok := m.menu.current(); ok {
+				m.editor.show("/" + info.Name)
+				m.refreshMenu()
+			}
+			return m, nil
+		case tea.KeyEnter: // KeyReturn is the same rune as KeyEnter
+			if info, ok := m.menu.current(); ok {
+				m.editor.show("/" + info.Name)
+				return m, m.submit()
+			}
+		case tea.KeyEscape:
+			// Escape closes the menu first; the line it was completing stays.
+			m.menu.close()
+			return m, nil
+		}
+	}
 	switch key.Code {
 	case tea.KeyTab:
 		m.toggleLatestSubagent()
@@ -465,15 +525,19 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.editor.reset()
 	case tea.KeyUp:
 		m.editor.historyPrev()
+		m.refreshMenu()
 	case tea.KeyDown:
 		m.editor.historyNext()
+		m.refreshMenu()
 	default:
 		// Everything else is editing: cursor movement, word navigation,
 		// selection, deletion, and insertion all belong to the textarea.
 		if typed(msg) {
 			m.editor.endRecall()
 		}
-		return m, m.editor.update(msg)
+		cmd := m.editor.update(msg)
+		m.refreshMenu()
+		return m, cmd
 	}
 	return m, nil
 }
@@ -490,6 +554,7 @@ func (m *Model) busy() bool {
 func (m *Model) submit() tea.Cmd {
 	text := strings.TrimSpace(m.editor.value())
 	m.editor.reset()
+	m.menu.close()
 	if text == "" {
 		return nil
 	}
@@ -518,11 +583,22 @@ func (m *Model) submit() tea.Cmd {
 		m.append("conversation context cleared")
 		return m.flush()
 	}
+	// A command that declares options and was run bare opens its modal picker
+	// instead of printing a list to type from (§4).
+	if info, ok := m.commandInfo(name); ok && strings.TrimSpace(arg) == "" && info.Options != nil {
+		if options := info.Options(); len(options) > 0 {
+			m.openPicker(info.Name, options)
+			return nil
+		}
+	}
 	if m.cfg.Command == nil {
 		m.append("no commands are available")
 		return m.flush()
 	}
 	out, err := m.cfg.Command(name, arg)
+	// A command may have changed the theme in force (/theme), so the live
+	// region retints before the next frame.
+	m.syncTheme()
 	if err != nil {
 		m.append("! " + err.Error())
 		return m.flush()
@@ -697,11 +773,24 @@ func capDiffLines(lines []diff.Line, n int) []diff.Line {
 
 // View implements tea.Model. It renders only the fixed live region at the
 // bottom of the terminal: still-live subagent blocks, the in-flight streaming
-// partial, a live prompt card, the input line, and the status bar. Committed
-// transcript lines are printed once into the terminal's own scrollback and are
-// never re-rendered, so the view stays short and AltScreen stays off (ADR-0001).
+// partial, a live prompt card, the inline command menu, the input line, and the
+// status bar. Committed transcript lines are printed once into the terminal's
+// own scrollback and are never re-rendered, so the view stays short and
+// AltScreen stays off (ADR-0001).
 func (m *Model) View() tea.View {
 	var b strings.Builder
+
+	// A modal picker replaces the live region's content: it is what the
+	// operator is looking at, and it owns the keyboard (§4). The status bar
+	// stays visible below it.
+	if m.picker != nil {
+		for _, line := range m.picker.view(m.styles) {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+		b.WriteString(m.statusLine())
+		return tea.NewView(b.String())
+	}
 
 	// Still-running subagent blocks are the only transcript content that is
 	// still mutable (their spinner animates and Tab can expand them), so they
@@ -724,11 +813,43 @@ func (m *Model) View() tea.View {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
+	for _, line := range m.menuBlock() {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
 	b.WriteString(m.inputLine())
 	b.WriteByte('\n')
 	b.WriteString(m.statusLine())
 
 	return tea.NewView(b.String())
+}
+
+// syncTheme applies the theme the operator asked for: a /theme choice when one
+// is set, otherwise the terminal's own background (§9.6). Committed lines keep
+// the theme they were printed with, so a switch retints the live region and
+// everything after it (ADR-0001).
+func (m *Model) syncTheme() {
+	dark := m.termDark
+	switch m.themePreference() {
+	case "dark":
+		dark = true
+	case "light":
+		dark = false
+	}
+	if m.dark == dark && m.styles.name != "" {
+		return
+	}
+	m.dark = dark
+	m.styles = themeFor(dark)
+	m.editor.setTheme(m.styles)
+}
+
+// themePreference is the operator's /theme choice, empty for auto.
+func (m *Model) themePreference() string {
+	if m.cfg.Theme == nil {
+		return ""
+	}
+	return m.cfg.Theme()
 }
 
 // inputLine is the prompt line, rendered by the editor (which owns the block

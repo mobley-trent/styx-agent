@@ -29,11 +29,28 @@ type harness struct {
 	// scrollback: the harness replaces the model's print seam so tests can read
 	// what the terminal receives above the live region.
 	printed []string
+	// theme is what the /theme preference callback reports.
+	theme string
+	// modelOptions and resumeOptions are the picker entries the harness's
+	// command registry serves.
+	modelOptions  []Option
+	resumeOptions []Option
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{busy: true}
+	h := &harness{
+		busy: true,
+		// The registry mirrors the shape the harness serves: descriptions for
+		// the menu, and picker entries for the commands that declare options.
+		modelOptions: []Option{
+			{Value: "deepseek-flash", Label: "deepseek-flash  (current)", Detail: "64k token window"},
+			{Value: "deepseek-v4-pro", Label: "deepseek-v4-pro", Detail: "128k token window"},
+		},
+		resumeOptions: []Option{
+			{Value: "20260101T000000Z-abcd", Label: "20260101T000000Z-abcd", Detail: "2026-01-01 00:00 · inspect main.go"},
+		},
+	}
 	h.model = New(Config{
 		Status: func() Status {
 			return Status{Mode: "safe", Packs: "coding+red-team", Model: "deepseek-flash", Session: "abc123", Busy: h.busy}
@@ -47,11 +64,31 @@ func newHarness(t *testing.T) *harness {
 				return "commands: /help /resume /quit", nil
 			case "boom":
 				return "", errors.New("command failed")
+			case "theme":
+				h.theme = arg
+				return "theme: " + arg, nil
+			case "model":
+				return "model: " + arg, nil
 			default:
 				return "", nil
 			}
 		},
-		Quit: func() { h.quit = true },
+		Commands: func() []CommandInfo {
+			return []CommandInfo{
+				{Name: "help", Usage: "/help", Description: "show this help"},
+				{Name: "memory", Usage: "/memory", Description: "show the project's STYX.md"},
+				{Name: "model", Usage: "/model [id]", Description: "list the pinned models",
+					Options: func() []Option { return h.modelOptions }},
+				{Name: "resume", Usage: "/resume [id]", Description: "list past sessions",
+					Options: func() []Option { return h.resumeOptions }},
+				{Name: "theme", Usage: "/theme [dark|light|auto]", Description: "choose a color scheme",
+					Options: func() []Option {
+						return []Option{{Value: "dark", Label: "dark"}, {Value: "light", Label: "light"}}
+					}},
+			}
+		},
+		Theme: func() string { return h.theme },
+		Quit:  func() { h.quit = true },
 	})
 	h.model.print = func(lines ...string) tea.Cmd {
 		h.printed = append(h.printed, lines...)

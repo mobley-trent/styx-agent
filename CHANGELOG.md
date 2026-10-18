@@ -10,8 +10,21 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The TUI builds against Bubble Tea v2.1.0. Earlier v2 releases left the rows a
+  shrinking live region gave up as stale text on screen, which the new command
+  menu and pickers would show on every keystroke; v2.1.0 clears them.
+
 ### Added
 
+- Typing `/` opens an inline command menu over the harness's command registry:
+  it filters as you type, up/down move the selection, Tab completes the command
+  name, and Enter runs the highlighted command. `/model`, `/resume`, and `/theme`
+  now open a modal picker instead of printing a list to type an id from, and
+  `/help` is generated from the same registry, so a new command is documented,
+  listed, and offered a picker from one declaration. `/theme` chooses the dark
+  or light scheme or hands the choice back to the terminal background. (#71)
 - The input line is a real editor: the cursor moves and edits mid-line, word
   navigation and selection follow the usual readline keys, and up/down recall
   previous prompts (the draft in progress is restored on the way back down).
