@@ -15,12 +15,34 @@ Infer the repo from `git remote -v`; `gh` does this automatically when run insid
 
 ## Closing: the `Closes #<n>` clause only
 
-**An issue is closed only by the `Closes #<n>` clause in a pull request body, at merge time.** Never run `gh issue close` — not to tidy up, not for a change the tree already holds, not even when the work looks finished.
+**An issue is closed only by the `Closes #<n>` clause in a pull request body, at merge time.** Never run `gh issue close` for work that shipped or is about to ship — not to tidy up, not for a change the tree already holds, not even when the work looks finished. The one exception is a **rejection**, which has no work to ship: see [Rejections](#rejections-not-planned-the-only-hand-close).
 
 - Put the clause in the PR body at creation: `Closes #67`, or `Closes #67, closes #68` for a batch. `gh pr create` with `--body-file` is the usual path; a PR opened without it gets the clause added with `gh pr edit --body-file`.
 - The merge is what closes it, so the issue, the PR, and the merge commit record one link, and the close is never earlier than the change that justifies it.
 - Before the merge the issue is **open and assigned** — the claim that the work is in flight. Comment the answer or the summary on the issue if useful, but leave the state to the merge.
-- A decision that produces no code still needs a home for the clause: land the spec/ADR as a PR, or say explicitly in the issue that it closes via the PR that carries its artifact.
+- A decision that produces no code still needs a home for the clause: land the artifact as a PR. See [Issues with no code to land](#issues-with-no-code-to-land).
+
+### Issues with no code to land
+
+A clause needs a PR, and a PR needs a diff, so an issue whose work is a decision, spec, ADR, research note, or answer lands that artifact **in the repo** — usually `docs/`, `docs/research/`, `docs/adr/`, or `GLOSSARY.md` — and ships it with a PR carrying `Closes #<n>`, exactly like a code change. The decision tickets on map [#53](https://github.com/mobley-trent/styx-agent/issues/53) are the precedent: #73, #77, #79, #81, and #83 each landed a spec, research note, or ADR that way, and none of them touched product code.
+
+If an issue's whole answer is a comment — a question, a "should we X?" — write the answer where it will be read again: a doc, an ADR, or a glossary entry. An issue whose answer is worth nothing durable is usually not an issue at all: answer it in the thread and leave the issue open until a doc that carries the answer lands. Research notes earn their place here too — findings left on a `research/<name>` branch that never merges are findings nobody can find again.
+
+GitHub also honours the closing keyword in a commit message on the default branch. Keep it in the PR body regardless: the body is where a reviewer sees the link *before* the merge.
+
+### Rejections: `not planned`, the only hand-close
+
+**A duplicate, invalid, won't-fix, superseded, or out-of-scope issue is rejected, not resolved**, and it closes by hand:
+
+```sh
+gh issue close <n> --reason "not planned" --comment "<why>"
+```
+
+That is the only sanctioned `gh issue close`. Always pass `--reason "not planned"` — never `completed`, which would claim the issue was resolved — and always say why in the comment. A rejection is a scope decision, not a step on a route, so it never earns a wayfinder map's Decisions-so-far pointer; a ticket ruled beyond the destination belongs in the map's **Out of scope** section instead.
+
+### The clause fires on the default branch
+
+`Closes #<n>` closes the issue when the PR merges **into the repository's default branch**. A stacked PR merged into another feature branch does not close it: put the clause on the PR that lands in `main`, or repeat it there.
 
 ## Pull requests as a triage surface
 
