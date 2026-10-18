@@ -9,9 +9,18 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --comment "..."`
+- **Open a PR**: `gh pr create --title "..." --body-file <file>`, with the summary/evidence shape from the `pr` skill.
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+
+## Closing: the `Closes #<n>` clause only
+
+**An issue is closed only by the `Closes #<n>` clause in a pull request body, at merge time.** Never run `gh issue close` — not to tidy up, not for a change the tree already holds, not even when the work looks finished.
+
+- Put the clause in the PR body at creation: `Closes #67`, or `Closes #67, closes #68` for a batch. `gh pr create` with `--body-file` is the usual path; a PR opened without it gets the clause added with `gh pr edit --body-file`.
+- The merge is what closes it, so the issue, the PR, and the merge commit record one link, and the close is never earlier than the change that justifies it.
+- Before the merge the issue is **open and assigned** — the claim that the work is in flight. Comment the answer or the summary on the issue if useful, but leave the state to the merge.
+- A decision that produces no code still needs a home for the clause: land the spec/ADR as a PR, or say explicitly in the issue that it closes via the PR that carries its artifact.
 
 ## Pull requests as a triage surface
 
@@ -42,4 +51,4 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
-- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+- **Resolve**: `gh issue comment <n> --body "<answer>"`, then ship the artifact on a branch and open a PR whose body carries `Closes #<n>` (see [Closing](#closing-the-closes-n-clause-only)); the merge closes the ticket. Append the context pointer (gist + link) to the map's Decisions-so-far **once the merge has closed it** — the map indexes closed tickets only, so a ticket with a PR still open is not yet a decision on the route.
