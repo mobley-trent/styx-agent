@@ -20,6 +20,11 @@ file — is documented in [RELEASING.md](RELEASING.md).
   styx; the interrupted turn prints as an abort and stays resumable, and its
   partial answer is kept in the scrollback. While nothing is running, `Escape`
   clears the input line. `ctrl-c`/`ctrl-d` still quit. (#68)
+- Assistant answers print as formatted markdown: headings, lists, tables, inline
+  code, fenced blocks, and links render in scrollback, tinted from the dark or
+  light theme in force. Text still streams raw while a turn is in flight; the
+  committed line is the rendered form. Subagent answers render the same way
+  inside their block. (#69)
 
 ## [v0.2.1] - 2026-10-07
 

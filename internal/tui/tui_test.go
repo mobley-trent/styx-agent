@@ -86,6 +86,11 @@ func (h *harness) view() string { return h.model.View().Content }
 // printedText is the committed transcript, as the terminal's scrollback holds it.
 func (h *harness) printedText() string { return strings.Join(h.printed, "\n") }
 
+// plainPrinted is the committed transcript without styling, for tests that
+// assert on content: a rendered answer is split by style sequences between
+// words, so a phrase is only contiguous once those are stripped.
+func (h *harness) plainPrinted() string { return stripANSI(h.printedText()) }
+
 func TestStreamRendersModelOutput(t *testing.T) {
 	h := newHarness(t)
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindUser, Text: "what is in main.go?"}})
@@ -109,7 +114,9 @@ func TestStreamRendersModelOutput(t *testing.T) {
 	}})
 	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindAssistant, Text: "It prints usage."}})
 
-	printed := h.printedText()
+	// Rendered answers carry styling, so content is asserted on the visible text
+	// (plainPrinted) rather than on the raw transcript.
+	printed := h.plainPrinted()
 	for _, want := range []string{"> what is in main.go?", "Let me look.", "read_file", "allow", "package main", "It prints usage."} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("scrollback is missing %q:\n%s", want, printed)
