@@ -25,6 +25,12 @@ file — is documented in [RELEASING.md](RELEASING.md).
   light theme in force. Text still streams raw while a turn is in flight; the
   committed line is the rendered form. Subagent answers render the same way
   inside their block. (#69)
+- Tool results, diffs, and subagent transcripts print in full into the
+  scrollback instead of stopping at 20 lines with no path to the rest; a
+  finished subagent block always prints its whole transcript, while a
+  still-running one shows its recent tail in the live region. A pathological
+  output (a multi-megabyte read, say) elides behind a marker that points at the
+  session log, so one call cannot flood the terminal. (#70)
 
 ## [v0.2.1] - 2026-10-07
 
