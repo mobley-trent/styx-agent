@@ -10,6 +10,13 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+
+- The input line is a real editor: the cursor moves and edits mid-line, word
+  navigation and selection follow the usual readline keys, and up/down recall
+  previous prompts (the draft in progress is restored on the way back down).
+  Live prompt cards stay modal, so an open card never moves the cursor. (#67)
+
 ## [v0.2.1] - 2026-10-07
 
 ### Changed
