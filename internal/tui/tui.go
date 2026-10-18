@@ -24,11 +24,23 @@ import (
 )
 
 const (
-	// viewLines is the most lines of a single tool result rendered inline. The
-	// stream stays readable even when a tool returns a large file.
-	viewLines = 20
-	// diffViewLines is the most lines of an inline diff rendered. A large diff
-	// is summarized rather than flooding the stream.
+	// printLineCap and printByteCap are the safety cap on detail committed to
+	// scrollback — tool results, diffs, and subagent transcripts. Detail prints
+	// in full, so the terminal is the pager; the cap is generous and exists only
+	// so one pathological output (a multi-megabyte read, say) cannot flood the
+	// scrollback. Past the cap the detail elides behind a marker, and the
+	// session JSONL still holds the whole event (docs/tui-parity.md,
+	// "scrollback is the pager").
+	printLineCap = 2000
+	printByteCap = 256 << 10
+	// liveTranscriptLines is the most transcript lines a still-live subagent
+	// block renders in the live region. The live region is fixed and shallow,
+	// so it shows the run's recent tail; the run's full transcript prints to
+	// scrollback when it finishes.
+	liveTranscriptLines = 12
+	// diffViewLines is the most lines of an inline diff rendered in a live
+	// prompt card. A large diff is summarized there rather than flooding the
+	// fixed live region; the committed diff prints in full under the safety cap.
 	diffViewLines = 40
 	// defaultWidth and defaultHeight are the terminal dimensions assumed until
 	// the first WindowSizeMsg arrives.
@@ -210,11 +222,21 @@ type subagentBlock struct {
 // toggle flips the block between collapsed and expanded.
 func (b *subagentBlock) toggle() { b.expanded = !b.expanded }
 
-// render flattens the block to stream lines: a header always, the transcript
-// and report only when expanded.
-func (b *subagentBlock) render(th theme) []string {
+// render flattens the block for the live region: a header always, and while
+// the run is live, the transcript tail plus the report when expanded.
+func (b *subagentBlock) render(th theme) []string { return b.flatten(th, b.expanded, true) }
+
+// committed flattens the finished block for scrollback: the header, the run's
+// full transcript under the safety cap, and its report. Detail is reached by
+// printing more, not by toggling, so a committed block always prints expanded
+// and its printed form is final (ADR-0001; spec "scrollback is the pager").
+func (b *subagentBlock) committed(th theme) []string { return b.flatten(th, true, false) }
+
+// flatten lays the block out as transcript lines. live selects the live
+// region's bounded tail; a committed block prints the full transcript instead.
+func (b *subagentBlock) flatten(th theme, expanded, live bool) []string {
 	marker, status := "▸", "done"
-	if b.expanded {
+	if expanded {
 		marker = "▾"
 	}
 	if b.running {
@@ -225,11 +247,22 @@ func (b *subagentBlock) render(th theme) []string {
 		header += " · " + b.preview
 	}
 	out := []string{header}
-	if !b.expanded {
+	if !expanded {
 		return out
 	}
 	indent := strings.Repeat(" ", subagentIndent)
-	for _, ln := range b.lines {
+	lines := b.lines
+	if live {
+		// A live block only ever shows its recent activity in the fixed region;
+		// the whole transcript is what committing prints.
+		if len(lines) > liveTranscriptLines {
+			out = append(out, indent+th.card.Render(fmt.Sprintf("… %d earlier lines", len(lines)-liveTranscriptLines)))
+			lines = lines[len(lines)-liveTranscriptLines:]
+		}
+	} else {
+		lines = elidedLines(lines)
+	}
+	for _, ln := range lines {
 		out = append(out, indent+ln)
 	}
 	if b.failure != "" {
@@ -798,11 +831,13 @@ func (m *Model) apply(ev sessions.Event) {
 		m.commitPartial()
 		if ev.Diff != nil {
 			m.append("  " + m.styles.diffHeader.Render(ev.Diff.Summary()))
+			// A committed diff prints in full: the scrollback is the pager, so
+			// only the safety cap elides a pathological diff.
 			lines := make([]string, 0, len(ev.Diff.Lines))
-			for _, ln := range capDiffLines(ev.Diff.Lines, diffViewLines) {
+			for _, ln := range ev.Diff.Lines {
 				lines = append(lines, "    "+renderDiffLine(m.styles, ln))
 			}
-			m.append(strings.Join(lines, "\n"))
+			m.append(strings.Join(elidedLines(lines), "\n"))
 		} else if ev.Path != "" {
 			m.append("  diff: " + ev.Path)
 		}
@@ -897,10 +932,11 @@ func (m *Model) applySubagent(ev sessions.Event) {
 		b.preview = firstLineText(stripANSI(b.report))
 	}
 	// The run is finished, so its printed form is final: commit the block to
-	// scrollback and drop it from the live region. Before this moment Tab can
-	// expand it; afterwards the printed lines are immutable (ADR-0001, spec
-	// "scrollback is the pager").
-	m.append(strings.Join(b.render(m.styles), "\n"))
+	// scrollback, full transcript included, and drop it from the live region.
+	// Before this moment Tab can expand it; afterwards the printed lines are
+	// immutable and Tab has nothing left to touch (ADR-0001, spec "scrollback
+	// is the pager").
+	m.append(strings.Join(b.committed(m.styles), "\n"))
 	m.retire(key)
 }
 
@@ -992,7 +1028,7 @@ func toolResultText(ev sessions.Event) string {
 	case ev.Result == "":
 		return "(no output)"
 	default:
-		return capLines(ev.Result, viewLines)
+		return strings.Join(elidedLines(strings.Split(strings.TrimRight(ev.Result, "\n"), "\n")), "\n")
 	}
 }
 
@@ -1090,13 +1126,27 @@ func (m *Model) commitPartial() {
 	m.partial = ""
 }
 
-// capLines keeps at most n lines and marks that more followed.
-func capLines(s string, n int) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) <= n {
-		return strings.Join(lines, "\n")
+// elidedLines applies the committed-output safety cap. Detail prints in full
+// while it fits both caps; past them the block is cut and a marker names the
+// elision and where the whole output survives, so a pathological result can
+// never flood the scrollback silently (docs/tui-parity.md).
+func elidedLines(lines []string) []string {
+	kept, size := 0, 0
+	for kept < len(lines) && kept < printLineCap {
+		n := len(lines[kept]) + 1
+		// The first line is always kept, however wide it is: eliding everything
+		// would leave the operator with a marker and no output at all.
+		if kept > 0 && size+n > printByteCap {
+			break
+		}
+		size += n
+		kept++
 	}
-	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n… (%d more lines)", len(lines)-n)
+	if kept == len(lines) {
+		return lines
+	}
+	out := append(make([]string, 0, kept+1), lines[:kept]...)
+	return append(out, fmt.Sprintf("… elided %d of %d lines (full output is in the session log)", len(lines)-kept, len(lines)))
 }
 
 // indentLines indents every line of a block.

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"image/color"
 	"strings"
 	"testing"
@@ -494,12 +495,60 @@ func TestQuitWorksWhileCardOpen(t *testing.T) {
 	}
 }
 
-func TestToolResultDisplayIsCapped(t *testing.T) {
+// Detail is reached by printing more, not by toggling: a tool result prints in
+// full into scrollback (docs/tui-parity.md, "scrollback is the pager").
+func TestToolResultPrintsInFull(t *testing.T) {
 	h := newHarness(t)
-	body := strings.Join(make([]string, 50), "line\n")
-	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindToolResult, Result: body}})
-	if got := h.printedText(); !strings.Contains(got, "more lines") {
-		t.Errorf("a long tool result is not capped in the stream:\n%s", got)
+	body := make([]string, 0, 200)
+	for i := 0; i < 200; i++ {
+		body = append(body, fmt.Sprintf("result line %03d", i))
+	}
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindToolResult, Result: strings.Join(body, "\n")}})
+
+	printed := h.plainPrinted()
+	for _, want := range []string{"result line 000", "result line 120", "result line 199"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("scrollback is missing %q; a tool result within the cap prints in full", want)
+		}
+	}
+	if strings.Contains(printed, "elided") || strings.Contains(printed, "more lines") {
+		t.Errorf("a result within the safety cap was elided")
+	}
+}
+
+// Only a pathological output elides, and it says so: one tool call must not
+// flood the scrollback, while the session log keeps the whole event.
+func TestPathologicalToolResultElides(t *testing.T) {
+	h := newHarness(t)
+	body := make([]string, 0, printLineCap+50)
+	for i := 0; i < printLineCap+50; i++ {
+		body = append(body, "flood line")
+	}
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindToolResult, Result: strings.Join(body, "\n")}})
+
+	printed := h.plainPrinted()
+	if got := strings.Count(printed, "flood line"); got != printLineCap {
+		t.Errorf("printed %d lines, want the %d-line safety cap", got, printLineCap)
+	}
+	want := fmt.Sprintf("elided 50 of %d lines", printLineCap+50)
+	if !strings.Contains(printed, want) || !strings.Contains(printed, "session log") {
+		t.Errorf("elided output carries no marker naming the elision and where to find it")
+	}
+}
+
+// The line cap is not the only guard: one enormous line would still flood the
+// scrollback, so the byte cap elides too.
+func TestPathologicalToolResultElidesBySize(t *testing.T) {
+	h := newHarness(t)
+	line := strings.Repeat("x", printByteCap/2)
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindToolResult, Result: strings.Join([]string{line, line, line}, "\n")}})
+
+	printed := h.plainPrinted()
+	if !strings.Contains(printed, "elided 2 of 3 lines") {
+		t.Errorf("an over-size result did not elide behind a marker")
+	}
+	if got := strings.Count(printed, "x"); got > printByteCap {
+		t.Errorf("printed %d bytes, want at most the %d-byte safety cap", got, printByteCap)
 	}
 }
 
@@ -512,6 +561,24 @@ func TestPermissionCardShowsSubagentAttribution(t *testing.T) {
 	got := h.view()
 	if !strings.Contains(got, "subagent recon") || !strings.Contains(got, "bash") {
 		t.Errorf("permission card lacks subagent attribution:\n%s", got)
+	}
+}
+
+// A committed diff prints in full: the scrollback is the pager, so only a
+// pathological diff elides.
+func TestCommittedDiffPrintsInFull(t *testing.T) {
+	h := newHarness(t)
+	var lines []diff.Line
+	for i := 0; i < 80; i++ {
+		lines = append(lines, diff.Line{Op: diff.OpAdd, Text: fmt.Sprintf("added %02d", i)})
+	}
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindDiff, Diff: &diff.FileDiff{Path: "a.txt", Added: 80, Lines: lines}}})
+
+	printed := h.plainPrinted()
+	for _, want := range []string{"added 00", "added 40", "added 79"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("committed diff is missing %q", want)
+		}
 	}
 }
 
@@ -559,24 +626,64 @@ func TestSubagentBlockIsLiveThenPrints(t *testing.T) {
 	}
 }
 
-func TestCollapsedSubagentBlockPrintsItsHeaderOnly(t *testing.T) {
+// A finished subagent block prints its whole transcript whether or not it was
+// expanded while live, and its printed form is then final: Tab has nothing left
+// to expand (spec "scrollback is the pager").
+func TestCommittedSubagentBlockPrintsItsFullTranscript(t *testing.T) {
 	h := newHarness(t)
 	h.update(EventMsg{Event: sessions.Event{
 		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "start", Text: "fix the build",
 	}})
-	h.update(EventMsg{Event: sessions.Event{
-		Kind: sessions.KindToolResult, Subagent: "coder", Tool: "read_file", Result: "package main\n",
-	}})
+	for i := 0; i < 30; i++ {
+		h.update(EventMsg{Event: sessions.Event{
+			Kind: sessions.KindToolResult, Subagent: "coder", Tool: "read_file",
+			Result: fmt.Sprintf("transcript line %02d", i),
+		}})
+	}
 	h.update(EventMsg{Event: sessions.Event{
 		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "report", Text: "build fixed",
 	}})
 
-	printed := h.printedText()
-	if !strings.Contains(printed, "subagent coder") || !strings.Contains(printed, "build fixed") {
-		t.Fatalf("committed block header is wrong:\n%s", printed)
+	printed := h.plainPrinted()
+	for _, want := range []string{"subagent coder", "transcript line 00", "transcript line 29", "build fixed"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("committed block is missing %q:\n%s", want, printed)
+		}
 	}
-	if strings.Contains(printed, "package main") {
-		t.Errorf("a collapsed block printed its transcript:\n%s", printed)
+
+	// The block is committed, so the scrollback is immutable: Tab cannot
+	// rewrite what has already printed.
+	before := h.printedText()
+	h.update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := h.printedText(); got != before {
+		t.Errorf("Tab rewrote the committed transcript:\n%s", got)
+	}
+}
+
+// The live region is fixed and shallow, so a still-running block shows its
+// recent tail only; the full transcript arrives when the run commits.
+func TestLiveSubagentBlockShowsOnlyItsTail(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "start", Text: "fix the build",
+	}})
+	for i := 0; i < 30; i++ {
+		h.update(EventMsg{Event: sessions.Event{
+			Kind: sessions.KindToolResult, Subagent: "coder", Tool: "read_file",
+			Result: fmt.Sprintf("transcript line %02d", i),
+		}})
+	}
+	h.update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+	got := h.view()
+	if !strings.Contains(got, fmt.Sprintf("%d earlier lines", 30-liveTranscriptLines)) {
+		t.Errorf("live region does not mark the transcript it trimmed:\n%s", got)
+	}
+	if !strings.Contains(got, fmt.Sprintf("transcript line %02d", 29)) {
+		t.Errorf("live region is missing the transcript tail:\n%s", got)
+	}
+	if strings.Contains(got, "transcript line 00") {
+		t.Errorf("live region printed the whole transcript:\n%s", got)
 	}
 }
 
