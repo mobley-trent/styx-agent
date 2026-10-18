@@ -34,6 +34,9 @@ const (
 	// the first WindowSizeMsg arrives.
 	defaultWidth  = 80
 	defaultHeight = 24
+	// subagentIndent is how far a subagent block's lines are indented in the
+	// transcript. Its assistant text wraps to the width that leaves.
+	subagentIndent = 4
 	// dispatchToolName is the delegation tool. Its result is the subagent
 	// block's report, so the main stream skips the duplicate result line
 	// (§4.2).
@@ -225,17 +228,18 @@ func (b *subagentBlock) render(th theme) []string {
 	if !b.expanded {
 		return out
 	}
+	indent := strings.Repeat(" ", subagentIndent)
 	for _, ln := range b.lines {
-		out = append(out, "    "+ln)
+		out = append(out, indent+ln)
 	}
 	if b.failure != "" {
-		out = append(out, "    "+th.fail.Render("✗ "+b.failure))
+		out = append(out, indent+th.fail.Render("✗ "+b.failure))
 		return out
 	}
 	if b.report != "" {
-		out = append(out, "    "+th.card.Render("─ report ─"))
+		out = append(out, indent+th.card.Render("─ report ─"))
 		for _, ln := range strings.Split(strings.TrimRight(b.report, "\n"), "\n") {
-			out = append(out, "    "+ln)
+			out = append(out, indent+ln)
 		}
 	}
 	return out
@@ -254,6 +258,9 @@ type Model struct {
 	// printed to the terminal's scrollback; flush drains it.
 	pending []string
 	partial string
+	// markdown renders committed assistant answers as formatted markdown,
+	// cached per theme and width (docs/tui-parity.md §3).
+	markdown markdownRenderer
 	// editor is the prompt line: a textarea with a history ring (§1 of
 	// docs/tui-parity.md).
 	editor inputEditor
@@ -762,10 +769,12 @@ func (m *Model) apply(ev sessions.Event) {
 	case sessions.KindTextDelta:
 		m.partial += ev.Text
 	case sessions.KindAssistant:
-		// The assembled message supersedes any deltas already rendered.
+		// The assembled message supersedes any deltas already rendered, and it
+		// commits as rendered markdown: the deltas streamed raw above the
+		// prompt, the scrollback holds the formatted answer (§3).
 		m.partial = ""
 		if strings.TrimSpace(ev.Text) != "" {
-			m.append(ev.Text)
+			m.append(m.markdown.render(ev.Text, m.styles, m.width))
 		}
 	case sessions.KindToolCall:
 		m.commitPartial()
@@ -881,8 +890,11 @@ func (m *Model) applySubagent(ev sessions.Event) {
 		b.failure = ev.Failure
 		b.preview = firstLineText(ev.Failure)
 	case ev.Text != "":
-		b.report = ev.Text
-		b.preview = firstLineText(ev.Text)
+		// The run's closing text is the block's report: assistant output, so it
+		// prints formatted like any other answer, while the header preview stays
+		// plain text.
+		b.report = m.markdown.render(ev.Text, m.styles, m.width-subagentIndent)
+		b.preview = firstLineText(stripANSI(b.report))
 	}
 	// The run is finished, so its printed form is final: commit the block to
 	// scrollback and drop it from the live region. Before this moment Tab can
@@ -917,7 +929,9 @@ func (m *Model) applySubagentEvent(ev sessions.Event) {
 	var rendered string
 	switch ev.Kind {
 	case sessions.KindAssistant:
-		rendered = ev.Text
+		// A subagent's answer is assistant output too, so it is formatted the
+		// same way — wrapped inside the block's own indentation.
+		rendered = m.markdown.render(ev.Text, m.styles, m.width-subagentIndent)
 	case sessions.KindToolCall:
 		rendered = toolCallText(ev)
 	case sessions.KindToolResult:
@@ -929,11 +943,11 @@ func (m *Model) applySubagentEvent(ev sessions.Event) {
 	case sessions.KindError:
 		rendered = "! " + ev.Failure
 	}
-	if strings.TrimSpace(rendered) == "" {
+	if strings.TrimSpace(stripANSI(rendered)) == "" {
 		return
 	}
 	b.lines = append(b.lines, strings.Split(strings.TrimRight(rendered, "\n"), "\n")...)
-	if preview := firstLineText(rendered); preview != "" {
+	if preview := firstLineText(stripANSI(rendered)); preview != "" {
 		b.preview = preview
 	}
 }
@@ -1065,12 +1079,14 @@ func renderedRows(line string, width int) int {
 	return (w + width - 1) / width
 }
 
-// commitPartial folds a live partial answer into the transcript.
+// commitPartial folds a live partial answer into the transcript as rendered
+// markdown: a turn that ends without an assembled assistant event still prints
+// a formatted answer (§3).
 func (m *Model) commitPartial() {
 	if m.partial == "" {
 		return
 	}
-	m.append(m.partial)
+	m.append(m.markdown.render(m.partial, m.styles, m.width))
 	m.partial = ""
 }
 
