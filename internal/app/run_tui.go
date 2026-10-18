@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,6 +14,61 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/skills"
 	"github.com/mobley-trent/styx-agent/internal/tui"
 )
+
+// turnRunner serializes turns: one at a time — the loop is not reentrant —
+// each under its own cancelable context so Escape can abort the in-flight turn
+// without ending the program (docs/tui-parity.md §5).
+type turnRunner struct {
+	// mu guards cancel, which the turn's own goroutine clears when it ends.
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	busy   atomic.Bool
+	// onIdle runs after a turn ends and the runner is idle again; the TUI
+	// uses it to re-render the status bar's busy marker.
+	onIdle func()
+}
+
+// run starts fn on its own goroutine under a cancelable child of parent, and
+// reports false when a turn is already in flight.
+func (t *turnRunner) run(parent context.Context, fn func(context.Context)) bool {
+	if !t.busy.CompareAndSwap(false, true) {
+		return false
+	}
+	turnCtx, cancel := context.WithCancel(parent)
+	t.mu.Lock()
+	t.cancel = cancel
+	t.mu.Unlock()
+	go func() {
+		defer func() {
+			cancel()
+			t.mu.Lock()
+			t.cancel = nil
+			t.mu.Unlock()
+			// Idle before the busy flag clears, so an interrupt arriving
+			// between the two finds no turn to cancel rather than the
+			// previous turn's already-finished context.
+			t.busy.Store(false)
+			if t.onIdle != nil {
+				t.onIdle()
+			}
+		}()
+		fn(turnCtx)
+	}()
+	return true
+}
+
+// interrupt cancels the in-flight turn, if any. It is safe to call when idle.
+func (t *turnRunner) interrupt() {
+	t.mu.Lock()
+	cancel := t.cancel
+	t.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// active reports whether a turn is in flight.
+func (t *turnRunner) active() bool { return t.busy.Load() }
 
 // helpText is the tracer-bullet command surface. The full set (§9.4) lands
 // with the TUI completion ticket.
@@ -37,7 +93,6 @@ Anything else is sent to the model.`
 // and nothing renders that is not also persisted.
 func runTUI(ctx context.Context, h *Harness) error {
 	var program *tea.Program
-	var busy atomic.Bool
 
 	// A cancelable child context unblocks a live permission card when the
 	// program exits, so the loop goroutine never waits on a terminal that is
@@ -45,31 +100,29 @@ func runTUI(ctx context.Context, h *Harness) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// submit runs one turn at a time: the loop is not reentrant. It is shared
-	// by the input line and by slash-command invocations like /<skill-name>.
-	submit := func(text string) {
-		if !busy.CompareAndSwap(false, true) {
-			return
+	turns := &turnRunner{onIdle: func() {
+		if program != nil {
+			program.Send(tui.RefreshMsg{})
 		}
-		go func() {
-			defer func() {
-				busy.Store(false)
-				if program != nil {
-					program.Send(tui.RefreshMsg{})
-				}
-			}()
+	}}
+
+	// submit runs one turn at a time. It is shared by the input line and by
+	// slash-command invocations like /<skill-name>.
+	submit := func(text string) {
+		turns.run(runCtx, func(turnCtx context.Context) {
 			// The loop emits its own error event (§4.4); the turn stays
 			// resumable and the UI already shows the failure.
-			_ = h.Submit(runCtx, text)
-		}()
+			_ = h.Submit(turnCtx, text)
+		})
 	}
 
 	model := tui.New(tui.Config{
-		Status:  func() tui.Status { return h.Status(busy.Load()) },
-		Version: h.Version,
-		Submit:  submit,
-		Clear:   h.ClearConversation,
-		Command: h.command,
+		Status:    func() tui.Status { return h.Status(turns.active()) },
+		Version:   h.Version,
+		Submit:    submit,
+		Clear:     h.ClearConversation,
+		Command:   h.command,
+		Interrupt: turns.interrupt,
 	})
 
 	program = tea.NewProgram(model, tea.WithContext(runCtx))

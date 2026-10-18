@@ -107,6 +107,10 @@ type Config struct {
 	// Clear resets the harness conversation when the operator runs /clear. The
 	// TUI clears its own transcript; the app forgets the model context.
 	Clear func()
+	// Interrupt aborts the in-flight turn. It is called on Escape while the
+	// loop is busy (docs/tui-parity.md §5); Escape while idle clears the input
+	// line instead and never reaches here.
+	Interrupt func()
 	// Quit is called when the user asks to leave.
 	Quit func()
 }
@@ -409,6 +413,15 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter: // KeyReturn is the same rune as KeyEnter
 		return m, m.submit()
 	case tea.KeyEscape:
+		// Escape never quits (ctrl-c/ctrl-d keep that meaning). While a turn
+		// is in flight it aborts it — the turn stays resumable and the loop
+		// reports the abort as its error event; idle it clears the line.
+		if m.busy() {
+			if m.cfg.Interrupt != nil {
+				m.cfg.Interrupt()
+			}
+			return m, nil
+		}
 		m.editor.reset()
 	case tea.KeyUp:
 		m.editor.historyPrev()
@@ -423,6 +436,12 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.editor.update(msg)
 	}
 	return m, nil
+}
+
+// busy reports whether the loop is working a turn, read from the same status
+// the bar renders so the input surface and the status bar never disagree.
+func (m *Model) busy() bool {
+	return m.cfg.Status != nil && m.cfg.Status().Busy
 }
 
 // submit handles the current input line. It returns a command when the line
