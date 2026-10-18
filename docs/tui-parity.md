@@ -30,7 +30,8 @@ This release closes **five ranked gaps plus two cheap wins**:
 
 Everything else the matrix marked implementable is **deferred**, not rejected: mouse
 support, session tree / fork / clone, external-editor handoff, message queue while busy,
-image paste, LaTeX, shell `!` passthrough, OSC 8 hyperlinks, `/export`, theme selection,
+image paste, LaTeX, shell `!` passthrough, OSC 8 hyperlinks, `/export`,
+user-supplied theme files (the built-in dark/light choice ships with §4's picker),
 configurable keybindings, a `fullscreen` mode, and syntax-highlighted diffs. Two rows
 are **out of scope** for structural reasons and stay so: remote session sharing
 (needs hosted infra) and extension-authored custom UI (would reverse the declined

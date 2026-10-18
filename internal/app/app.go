@@ -123,6 +123,9 @@ type Harness struct {
 	// model is the pinned model ID currently in force. /model swaps it without
 	// touching the byte-stable prompt prefix (§3.1).
 	model string
+	// theme is the operator's /theme choice: "dark", "light", or empty for
+	// the terminal-background auto-selection (§9.6). Session-scoped.
+	theme string
 	// usage is the session's accumulated token accounting and cost, folded
 	// from every KindUsage event emitted on the bus (§3.1, §9.1).
 	usage model.Usage

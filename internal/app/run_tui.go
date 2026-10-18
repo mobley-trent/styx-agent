@@ -70,24 +70,6 @@ func (t *turnRunner) interrupt() {
 // active reports whether a turn is in flight.
 func (t *turnRunner) active() bool { return t.busy.Load() }
 
-// helpText is the tracer-bullet command surface. The full set (§9.4) lands
-// with the TUI completion ticket.
-const helpText = `commands:
-  /help          show this help
-  /status        show mode, model, session, engagement, and cost state
-  /model [id]    list the pinned models, or switch to one (rescales compaction)
-  /memory        show the project's STYX.md as loaded into the system prompt
-  /clear         forget the conversation context (keeps the system prompt)
-  /pack          show the harness-selected skill packs and their state
-  /engagement    list engagement files, or activate one with /engagement <file>
-  /mode [safe]   show the operating mode, or return to safe mode (tears the engagement down)
-  /resume [id]   list past sessions, or restore one by id
-  /compact [in]  compact context now, with an optional custom instruction
-  /skills        list discovered agent skills
-  /quit          leave styx
-
-Anything else is sent to the model.`
-
 // runTUI runs one session in the thin chat stream (§9.1). The loop runs on its
 // own goroutine; every event it emits reaches the UI through the harness bus,
 // and nothing renders that is not also persisted.
@@ -122,6 +104,8 @@ func runTUI(ctx context.Context, h *Harness) error {
 		Submit:    submit,
 		Clear:     h.ClearConversation,
 		Command:   h.command,
+		Commands:  h.commandInfos,
+		Theme:     h.themePreference,
 		Interrupt: turns.interrupt,
 	})
 
@@ -146,38 +130,16 @@ func runTUI(ctx context.Context, h *Harness) error {
 	return nil
 }
 
-// command handles a slash command line.
+// command handles a slash command line: a registry command (aliases included),
+// then a discovered agent skill, then an error.
 func (h *Harness) command(name, arg string) (string, error) {
-	switch name {
-	case "help", "h", "?":
-		return helpText, nil
-	case "status":
-		return h.statusText(), nil
-	case "model":
-		return h.modelCommand(arg)
-	case "memory":
-		return h.memoryText(), nil
-	case "clear":
-		h.ClearConversation()
-		return "conversation context cleared", nil
-	case "pack", "packs":
-		return h.packText(), nil
-	case "engagement":
-		return h.engagementCommand(arg)
-	case "mode":
-		return h.modeCommand(arg)
-	case "resume":
-		return h.resumeCommand(arg)
-	case "compact":
-		return h.Compact(context.Background(), strings.TrimSpace(arg))
-	case "skills":
-		return h.skillsText(), nil
-	default:
-		if sk, ok := h.lookupSkill(name); ok {
-			return h.invokeSkill(sk, arg), nil
-		}
-		return "", fmt.Errorf("unknown command %q; try /help", name)
+	if spec, ok := lookupCommand(name); ok {
+		return spec.run(h, arg)
 	}
+	if sk, ok := h.lookupSkill(name); ok {
+		return h.invokeSkill(sk, arg), nil
+	}
+	return "", fmt.Errorf("unknown command %q; try /help", name)
 }
 
 // lookupSkill resolves a user-typed skill name against the discovered catalog.
