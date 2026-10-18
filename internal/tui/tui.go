@@ -250,7 +250,9 @@ type Model struct {
 	// printed to the terminal's scrollback; flush drains it.
 	pending []string
 	partial string
-	input   []rune
+	// editor is the prompt line: a textarea with a history ring (§1 of
+	// docs/tui-parity.md).
+	editor inputEditor
 
 	prompt *Prompt
 	reply  func(string)
@@ -279,7 +281,7 @@ type Model struct {
 // New builds the UI model. The dark theme is the default until the terminal
 // answers the background-color query in Init (§9.6).
 func New(cfg Config) *Model {
-	return &Model{
+	m := &Model{
 		cfg:       cfg,
 		width:     defaultWidth,
 		height:    defaultHeight,
@@ -288,6 +290,9 @@ func New(cfg Config) *Model {
 		subagents: map[string]*subagentBlock{},
 		print:     func(lines ...string) tea.Cmd { return tea.Println(strings.Join(lines, "\n")) },
 	}
+	m.editor = newInputEditor(m.styles)
+	m.editor.setWidth(m.width)
+	return m
 }
 
 // Init implements tea.Model. It asks the terminal for its background color so
@@ -302,13 +307,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.editor.setWidth(m.width)
 		m.placeBanner()
 		return m, m.flush()
 	case tea.BackgroundColorMsg:
 		m.dark = msg.IsDark()
 		m.styles = themeFor(m.dark)
+		m.editor.setTheme(m.styles)
 	case tea.KeyPressMsg:
 		return m.key(msg)
+	case tea.PasteMsg:
+		// A live card owns the keyboard, so it swallows a paste too.
+		if m.prompt != nil {
+			return m, nil
+		}
+		// A bracketed paste edits the line like typing does; the textarea's
+		// sanitizer collapses any newlines to spaces.
+		m.editor.endRecall()
+		return m, m.editor.update(msg)
 	case EventMsg:
 		m.apply(msg.Event)
 		return m, tea.Batch(m.flush(), m.spin())
@@ -387,19 +403,24 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.answerPrompt(key)
 		return m, nil
 	}
-	switch {
-	case key.Code == tea.KeyTab:
+	switch key.Code {
+	case tea.KeyTab:
 		m.toggleLatestSubagent()
-	case key.Code == tea.KeyEnter || key.Code == tea.KeyReturn:
+	case tea.KeyEnter: // KeyReturn is the same rune as KeyEnter
 		return m, m.submit()
-	case key.Code == tea.KeyBackspace:
-		if n := len(m.input); n > 0 {
-			m.input = m.input[:n-1]
+	case tea.KeyEscape:
+		m.editor.reset()
+	case tea.KeyUp:
+		m.editor.historyPrev()
+	case tea.KeyDown:
+		m.editor.historyNext()
+	default:
+		// Everything else is editing: cursor movement, word navigation,
+		// selection, deletion, and insertion all belong to the textarea.
+		if typed(msg) {
+			m.editor.endRecall()
 		}
-	case key.Code == tea.KeyEscape:
-		m.input = nil
-	case key.Text != "":
-		m.input = append(m.input, []rune(key.Text)...)
+		return m, m.editor.update(msg)
 	}
 	return m, nil
 }
@@ -408,11 +429,12 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // asks the program to leave (/quit, /exit), so the caller can hand tea.Quit
 // back to the runtime exactly as ctrl-c does; otherwise it returns nil.
 func (m *Model) submit() tea.Cmd {
-	text := strings.TrimSpace(string(m.input))
-	m.input = nil
+	text := strings.TrimSpace(m.editor.value())
+	m.editor.reset()
 	if text == "" {
 		return nil
 	}
+	m.editor.remember(text)
 	if !strings.HasPrefix(text, "/") {
 		if m.cfg.Submit != nil {
 			m.cfg.Submit(text)
@@ -650,9 +672,10 @@ func (m *Model) View() tea.View {
 	return tea.NewView(b.String())
 }
 
-// inputLine is the prompt with the current buffer and a block cursor.
+// inputLine is the prompt line, rendered by the editor (which owns the block
+// cursor and the prompt glyph).
 func (m *Model) inputLine() string {
-	return m.styles.prompt.Render("> ") + string(m.input) + "█"
+	return m.editor.view()
 }
 
 // statusLine is the one-line status bar (§9.1).
