@@ -433,7 +433,7 @@ func (l *Loop) Run(ctx context.Context, history []model.Message, input string) (
 
 		out, err := l.streamTurn(ctx, messages, turn)
 		if err != nil {
-			l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: err.Error()})
+			l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: failureText(err)})
 			return Result{Turns: turn, Messages: conversation(messages)}, err
 		}
 
@@ -458,10 +458,22 @@ func (l *Loop) Run(ctx context.Context, history []model.Message, input string) (
 		results, err := l.dispatch(ctx, repairer, out.calls, turn)
 		messages = append(messages, results...)
 		if err != nil {
-			l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: err.Error()})
+			l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: failureText(err)})
 			return Result{Turns: turn, Messages: conversation(messages)}, err
 		}
 	}
+}
+
+// failureText names a run-ending failure for the session's error event. A
+// canceled context is a turn the operator interrupted, not a fault to
+// diagnose, so it reads as one (§9.2, docs/tui-parity.md §5); the turn's
+// partial conversation is already in the result, so the abort stays
+// resumable.
+func failureText(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "turn interrupted"
+	}
+	return err.Error()
 }
 
 // conversation returns the model conversation without its system prompt. The
@@ -570,6 +582,14 @@ func (l *Loop) streamTurn(ctx context.Context, messages []model.Message, turn in
 		}
 	}
 	if !done {
+		// A canceled context is the operator interrupting the turn
+		// (docs/tui-parity.md §5), not a malformed stream. The client may
+		// have raced the cancellation and closed its channel without an
+		// error event, so report the cancellation itself: the abort then
+		// surfaces as an interrupt rather than an unknown outcome.
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		return out, ErrStreamIncomplete
 	}
 	return out, nil

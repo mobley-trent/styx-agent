@@ -19,6 +19,11 @@ type harness struct {
 	submits  []string
 	commands []string
 	quit     bool
+	// busy is what the status callback reports, so a test can put the model
+	// in either the in-flight or the idle state Escape branches on.
+	busy bool
+	// interrupts counts calls to the Escape abort path.
+	interrupts int
 	// printed collects the transcript lines committed to the terminal's
 	// scrollback: the harness replaces the model's print seam so tests can read
 	// what the terminal receives above the live region.
@@ -27,12 +32,13 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{}
+	h := &harness{busy: true}
 	h.model = New(Config{
 		Status: func() Status {
-			return Status{Mode: "safe", Packs: "coding+red-team", Model: "deepseek-flash", Session: "abc123", Busy: true}
+			return Status{Mode: "safe", Packs: "coding+red-team", Model: "deepseek-flash", Session: "abc123", Busy: h.busy}
 		},
-		Submit: func(text string) { h.submits = append(h.submits, text) },
+		Interrupt: func() { h.interrupts++ },
+		Submit:    func(text string) { h.submits = append(h.submits, text) },
 		Command: func(name, arg string) (string, error) {
 			h.commands = append(h.commands, name+"|"+arg)
 			switch name {
@@ -212,11 +218,43 @@ func TestBackspaceAndEscapeEdit(t *testing.T) {
 		t.Fatalf("submits = %v, want \"abd\"", h.submits)
 	}
 
+	// Escape clears the line while the loop is idle (§5).
+	h.busy = false
 	h.typeText("gone")
 	h.update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	h.update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if len(h.submits) != 1 {
 		t.Errorf("submits = %v, want the escaped input to submit nothing", h.submits)
+	}
+	if h.interrupts != 0 {
+		t.Errorf("idle Escape interrupted %d turn(s), want none", h.interrupts)
+	}
+}
+
+// Escape aborts the in-flight turn instead of quitting, and leaves the line the
+// operator was typing alone: the turn is what is being cancelled, not the
+// draft (docs/tui-parity.md §5).
+func TestEscapeInterruptsBusyTurn(t *testing.T) {
+	h := newHarness(t)
+	h.typeText("half a prompt")
+	h.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if h.interrupts != 1 {
+		t.Errorf("interrupts = %d, want 1", h.interrupts)
+	}
+	if h.quit {
+		t.Error("Escape quit the program; only ctrl-c/ctrl-d may")
+	}
+	if got := h.model.editor.value(); got != "half a prompt" {
+		t.Errorf("input line = %q, want the draft preserved across an interrupt", got)
+	}
+	// The program keeps running: Escape returns no quit command.
+	_, cmd := h.model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		t.Errorf("Escape returned a command, want the UI to stay up")
+	}
+	if h.interrupts != 2 {
+		t.Errorf("interrupts = %d, want a second abort while still busy", h.interrupts)
 	}
 }
 

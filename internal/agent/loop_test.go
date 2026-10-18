@@ -107,6 +107,81 @@ func mustEngine(t *testing.T, mode policy.Mode, opts ...policy.Option) *policy.E
 	return engine
 }
 
+// An interrupted turn (the TUI's Escape, docs/tui-parity.md §5) aborts through
+// the loop's ordinary error path with a message that names the abort, and the
+// partial conversation stays behind so the next turn resumes from it.
+func TestRunReportsInterruptedTurn(t *testing.T) {
+	fake := fakemodel.New(fakemodel.WithTurns(
+		fakemodel.Turn{Text: []string{"working on it"}, StreamErr: context.Canceled},
+		fakemodel.Text("done"),
+	))
+	events := &collector{}
+
+	loop := NewLoop(
+		fake,
+		mustRegistry(t, testTool("noop", func(context.Context, map[string]any) (string, error) { return "", nil })),
+		mustEngine(t, policy.ModeSafe),
+		audit.NewWriter(&bytes.Buffer{}),
+		testSystemPrompt,
+		WithEmitter(events.emit),
+	)
+
+	result, err := loop.Run(context.Background(), nil, "keep going")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() = %v, want the cancellation surfaced to the caller", err)
+	}
+
+	failures := events.byKind(sessions.KindError)
+	if len(failures) != 1 || failures[0].Failure != "turn interrupted" {
+		t.Fatalf("error events = %+v, want one \"turn interrupted\"", failures)
+	}
+
+	// Resumable: the aborted turn left the operator's prompt in the
+	// conversation, and the next turn answers normally.
+	if len(result.Messages) == 0 || result.Messages[len(result.Messages)-1].Content != "keep going" {
+		t.Fatalf("messages after the abort = %+v, want the prompt retained", result.Messages)
+	}
+	resumed, err := loop.Run(context.Background(), result.Messages, "and now?")
+	if err != nil {
+		t.Fatalf("Run() after the abort = %v, want the conversation to continue", err)
+	}
+	if resumed.Answer != "done" {
+		t.Errorf("answer after the abort = %q, want %q", resumed.Answer, "done")
+	}
+}
+
+// A turn canceled mid-stream aborts as an interrupt even when the client's
+// channel closes without an error event — the cancellation races the client's
+// own error delivery, so the loop reads the context rather than trusting the
+// stream to report it.
+func TestRunReportsCanceledTurn(t *testing.T) {
+	fake := fakemodel.New(fakemodel.WithTurns(fakemodel.Turn{
+		Text:  []string{"working on it"},
+		Delay: 20 * time.Millisecond,
+	}))
+	events := &collector{}
+
+	loop := NewLoop(
+		fake,
+		mustRegistry(t, testTool("noop", func(context.Context, map[string]any) (string, error) { return "", nil })),
+		mustEngine(t, policy.ModeSafe),
+		audit.NewWriter(&bytes.Buffer{}),
+		testSystemPrompt,
+		WithEmitter(events.emit),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the operator's Escape, before the turn streams anything
+
+	if _, err := loop.Run(ctx, nil, "keep going"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() = %v, want the cancellation surfaced to the caller", err)
+	}
+	failures := events.byKind(sessions.KindError)
+	if len(failures) != 1 || failures[0].Failure != "turn interrupted" {
+		t.Fatalf("error events = %+v, want one \"turn interrupted\"", failures)
+	}
+}
+
 func TestLoopReadsFileAndAnswers(t *testing.T) {
 	dir := workspace(t, map[string]string{"main.go": "package main\n"})
 	fake := fakemodel.New(fakemodel.WithTurns(

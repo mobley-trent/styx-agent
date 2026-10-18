@@ -16,6 +16,10 @@ file — is documented in [RELEASING.md](RELEASING.md).
   navigation and selection follow the usual readline keys, and up/down recall
   previous prompts (the draft in progress is restored on the way back down).
   Live prompt cards stay modal, so an open card never moves the cursor. (#67)
+- `Escape` aborts the turn in flight and returns the prompt without leaving
+  styx; the interrupted turn prints as an abort and stays resumable, and its
+  partial answer is kept in the scrollback. While nothing is running, `Escape`
+  clears the input line. `ctrl-c`/`ctrl-d` still quit. (#68)
 
 ## [v0.2.1] - 2026-10-07
 
