@@ -27,6 +27,7 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 		StateQueryTool(nil),
 		StateUpdateTool(nil),
 	}
+	tools = append(tools, ParserTools(dir, nil, nil)...)
 	if skillTool, ok := SkillTool(skillCatalog(t, map[string]string{
 		"demo": skillDoc("demo", "a demonstration skill", ""),
 	})); ok {

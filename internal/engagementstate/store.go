@@ -683,6 +683,40 @@ func (s *Store) newID(d *document, kind Kind) (string, error) {
 	return "", fmt.Errorf("engagementstate: cannot mint a free %s id", kind)
 }
 
+// recordID picks a new record's identifier. A caller-supplied id is honoured
+// when the op names one, because a harness-side batch (the parser tools,
+// docs/parser-tool-contracts.md §5) builds ops that reference the records the
+// same batch creates: a service, credential, access, or finding written by one
+// op must be nameable by the edges and evidence ops that follow it. The
+// natural-key match always runs first, so a re-scan that matches an existing
+// record keeps that record's id whatever the op asked for.
+//
+// A supplied id must carry its own kind prefix and must be free: a caller that
+// names an id already taken by another record would otherwise silently rewrite
+// a record the batch never meant to touch.
+func (s *Store) recordID(d *document, kind Kind, supplied string) (string, error) {
+	raw := strings.TrimSpace(supplied)
+	if raw == "" {
+		return s.newID(d, kind)
+	}
+	prefix, suffix, ok := strings.Cut(raw, "-")
+	if !ok || Kind(prefix) != kind {
+		return "", fmt.Errorf("%w: id %q: want an id prefixed %q", ErrOp, raw, kind)
+	}
+	if suffix == "" || len(suffix) > 32 {
+		return "", fmt.Errorf("%w: id %q: want %s-<hex>", ErrOp, raw, kind)
+	}
+	for _, r := range suffix {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return "", fmt.Errorf("%w: id %q: want %s-<hex>", ErrOp, raw, kind)
+		}
+	}
+	if _, taken := d.nodeKind(raw); taken {
+		return "", fmt.Errorf("%w: id %q is already taken", ErrOp, raw)
+	}
+	return raw, nil
+}
+
 // randomID is the production identifier source: two random bytes rendered as
 // four hex characters, prefixed by the record kind.
 func randomID(kind Kind) (string, error) {
@@ -781,6 +815,51 @@ func (d *document) resolveEndpoints(edgeType EdgeType, from, to string) (string,
 		return "", "", err
 	}
 	return fromID, toID, nil
+}
+
+// findingForEvidence resolves an `attach_evidence` op's finding reference: a
+// harness id, or — when the id is not recorded — the finding's natural key (its
+// title, disambiguated by the op's affected refs). The parsers need the second
+// form: a re-detected finding (docs/parser-tool-contracts.md §8) may already be
+// recorded under an id the parser never minted, and its evidence must attach to
+// that record rather than fail the batch. Several title matches with no affected
+// refs to separate them are refused as ambiguous, never guessed.
+func (d *document) findingForEvidence(ref string, affected []string) (*Finding, error) {
+	raw := strings.TrimSpace(ref)
+	if raw == "" {
+		return nil, fmt.Errorf("%w: finding: a finding id is required", ErrOp)
+	}
+	if i := d.findFinding(raw); i >= 0 {
+		return &d.Findings[i], nil
+	}
+	var want []string
+	if len(affected) > 0 {
+		resolved, err := d.resolveRefs(affected)
+		if err != nil {
+			return nil, err
+		}
+		want = sortedCopy(resolved)
+	}
+	var matches []string
+	for i := range d.Findings {
+		f := &d.Findings[i]
+		if f.Title != raw {
+			continue
+		}
+		if want != nil && !slices.Equal(sortedCopy(f.Affected), want) {
+			continue
+		}
+		matches = append(matches, f.ID)
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("%w: no finding with id %q or title %q", ErrNotFound, raw, raw)
+	case 1:
+		return &d.Findings[d.findFinding(matches[0])], nil
+	default:
+		return nil, fmt.Errorf("%w: finding title %q is ambiguous (%s); name the id, or the affected refs that separate them",
+			ErrOp, raw, strings.Join(matches, ", "))
+	}
 }
 
 // finding resolves a finding reference to its record.

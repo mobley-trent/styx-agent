@@ -427,6 +427,171 @@ func TestAccessPrincipalMustNotNameAnotherKind(t *testing.T) {
 	}
 }
 
+// TestOneBatchCanReferenceWhatItCreates is the parser contract's commit shape
+// (docs/parser-tool-contracts.md §5): a single atomic batch writes a host, a
+// service, a finding with its evidence, a credential, and the edges among them,
+// naming the records the same batch creates. Without a settable id the batch
+// could not be expressed at all, because only the store knows an id it mints.
+func TestOneBatchCanReferenceWhatItCreates(t *testing.T) {
+	store := openTestStore(t)
+	receipt := mustUpdate(t, store,
+		Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}, Hostname: "web01"},
+		Op{Op: OpUpsertEntity, Kind: KindService, ID: "service-00a1", Host: "10.0.0.7", Port: 445, Proto: "tcp", State: "open"},
+		Op{Op: OpUpsertFinding, ID: "finding-00a1", Title: "SMB signing disabled", Severity: SeverityMedium, Confidence: ConfidenceHigh, Affected: []string{"10.0.0.7"}},
+		Op{Op: OpAttachEvidence, Finding: "finding-00a1", EvidenceKind: EvidenceCLIOutput, Ref: "[+] SMB 10.0.0.7 445 web01 (signing:False)"},
+		Op{Op: OpAddEdge, Type: string(EdgeRunsOn), From: "service-00a1", To: "10.0.0.7", Confidence: ConfidenceHigh},
+		Op{Op: OpUpsertEntity, Kind: KindCredential, ID: "credential-00a1", Type: CredentialPassword, Principal: "ACME\\admin", Secret: "hunter2"},
+		Op{Op: OpAddEdge, Type: string(EdgeValidFor), From: "credential-00a1", To: "service-00a1", Confidence: ConfidenceHigh},
+		Op{Op: OpUpsertEntity, Kind: KindAccess, ID: "access-00a1", Principal: "credential-00a1", Target: "service-00a1", Level: LevelAdmin, Via: "finding-00a1"},
+	)
+	for i, want := range []string{"host-0001", "service-00a1", "finding-00a1", "finding-00a1", "", "credential-00a1", "", "access-00a1"} {
+		if want == "" {
+			continue
+		}
+		if got := receipt.Effects[i].ID; got != want {
+			t.Errorf("effects[%d].id = %q, want %q", i, got, want)
+		}
+	}
+
+	snap := store.Snapshot()
+	service, ok := snap.Entity("service-00a1")
+	if !ok {
+		t.Fatalf("the batch's service is missing: %+v", snap.Entities)
+	}
+	if service.Kind != KindService || service.Port != 445 {
+		t.Errorf("service = %+v, want the batch's 445/tcp record", service)
+	}
+	finding, ok := snap.Finding("finding-00a1")
+	if !ok {
+		t.Fatalf("the batch's finding is missing: %+v", snap.Findings)
+	}
+	if finding.EvidenceCount() != 1 {
+		t.Errorf("evidence = %d, want the one item the batch attached", finding.EvidenceCount())
+	}
+	if finding.Status != StatusDetected || finding.Verification != VerificationUnverified {
+		t.Errorf("status/verification = %s/%s, want detected/unverified: a parser escalates neither", finding.Status, finding.Verification)
+	}
+	access, ok := snap.Entity("access-00a1")
+	if !ok {
+		t.Fatalf("the batch's access is missing")
+	}
+	if access.Via != "finding-00a1" {
+		t.Errorf("access.via = %q, want the batch's finding", access.Via)
+	}
+	wantEdges := []string{"RUNS_ON|service-00a1|host-0001", "VALID_FOR|credential-00a1|service-00a1", "EXPLOITED_VIA|finding-00a1|access-00a1"}
+	for _, want := range wantEdges {
+		found := false
+		for _, e := range snap.Edges {
+			if e.Key() == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("edge %s is missing: %+v", want, snap.Edges)
+		}
+	}
+}
+
+// TestSuppliedIDMustBeFreeAndOfTheOpsKind keeps a supplied id from rewriting a
+// record the batch never meant to touch.
+func TestSuppliedIDMustBeFreeAndOfTheOpsKind(t *testing.T) {
+	store := openTestStore(t)
+	mustUpdate(t, store, Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}})
+
+	cases := []struct {
+		name string
+		op   Op
+	}{
+		{"another kind's prefix", Op{Op: OpUpsertEntity, Kind: KindService, ID: "host-00ff", Host: "10.0.0.7", Port: 80, Proto: "tcp"}},
+		{"a taken id", Op{Op: OpUpsertEntity, Kind: KindHost, ID: "host-0001", Addresses: []string{"10.0.0.8"}}},
+		{"a malformed id", Op{Op: OpUpsertEntity, Kind: KindHost, ID: "host-zzzz", Addresses: []string{"10.0.0.9"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := store.Update(context.Background(), Origin{Tool: "nmap_parse"}, []Op{tc.op}); !errors.Is(err, ErrOp) {
+				t.Errorf("Update(%s) = %v, want a refusal", tc.name, err)
+			}
+		})
+	}
+	if got := len(store.Snapshot().Entities); got != 1 {
+		t.Errorf("entities = %d, want only the host the first batch wrote", got)
+	}
+}
+
+// TestNaturalKeyMatchKeepsTheRecordsID: a re-scan that matches an existing
+// record must reuse it, whatever id the op asked for, so the record's edges and
+// evidence stay attached to one node (§3, §8 of the parser contract).
+func TestNaturalKeyMatchKeepsTheRecordsID(t *testing.T) {
+	store := openTestStore(t)
+	first := mustUpdate(t, store,
+		Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}},
+		Op{Op: OpUpsertEntity, Kind: KindService, Host: "10.0.0.7", Port: 445, Proto: "tcp"},
+	)
+	rescan := mustUpdate(t, store,
+		Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}},
+		Op{Op: OpUpsertEntity, Kind: KindService, ID: "service-abcdef", Host: "10.0.0.7", Port: 445, Proto: "tcp"},
+	)
+	if rescan.Effects[1].Created || rescan.Effects[1].ID != first.Effects[1].ID {
+		t.Errorf("re-scan effect = %+v, want the existing service reused", rescan.Effects[1])
+	}
+	if len(store.Snapshot().Entities) != 2 {
+		t.Errorf("entities = %d, want the host and its service", len(store.Snapshot().Entities))
+	}
+}
+
+// TestEvidenceAttachesToAnExistingFindingByTitle covers §8: a re-detected
+// finding may already be recorded under an id the parser never minted (a model
+// wrote it), and its evidence must attach to that record.
+func TestEvidenceAttachesToAnExistingFindingByTitle(t *testing.T) {
+	store := openTestStore(t)
+	mustUpdate(t, store, Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}})
+	modelWritten := mustUpdate(t, store, Op{Op: OpUpsertFinding, Title: "SMB signing disabled", Severity: SeverityMedium, Affected: []string{"10.0.0.7"}})
+
+	// The parser's batch: it mints an id for the finding, the natural key
+	// matches the record the model wrote, and its evidence names the finding by
+	// title — the only reference a parser can be sure of.
+	attach := mustUpdate(t, store,
+		Op{Op: OpUpsertFinding, ID: "finding-00a1", Title: "SMB signing disabled", Severity: SeverityMedium, Confidence: ConfidenceHigh, Affected: []string{"10.0.0.7"}},
+		Op{Op: OpAttachEvidence, Finding: "SMB signing disabled", Affected: []string{"10.0.0.7"}, EvidenceKind: EvidenceArtifact, Ref: ".styx/out/cme-10.0.0.7.log"},
+	)
+	if attach.Effects[0].ID != modelWritten.Effects[0].ID {
+		t.Errorf("re-detection wrote a second finding (%s) instead of reusing %s", attach.Effects[0].ID, modelWritten.Effects[0].ID)
+	}
+	finding, _ := store.Snapshot().Finding(modelWritten.Effects[0].ID)
+	if finding.EvidenceCount() != 1 {
+		t.Fatalf("evidence = %d, want the re-parse's item on the existing record", finding.EvidenceCount())
+	}
+	if finding.Confidence != ConfidenceHigh {
+		t.Errorf("confidence = %s, want the re-parse's high", finding.Confidence)
+	}
+	if finding.Status != StatusDetected {
+		t.Errorf("status = %s, want the re-scan to leave it alone", finding.Status)
+	}
+}
+
+func TestAmbiguousEvidenceTitleIsRefused(t *testing.T) {
+	store := openTestStore(t)
+	mustUpdate(t, store,
+		Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}},
+		Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.8"}},
+		Op{Op: OpUpsertFinding, Title: "OpenSSH 8.2 -- user enumeration", Severity: SeverityLow, Affected: []string{"10.0.0.7"}},
+		Op{Op: OpUpsertFinding, Title: "OpenSSH 8.2 -- user enumeration", Severity: SeverityLow, Affected: []string{"10.0.0.8"}},
+	)
+	_, err := store.Update(context.Background(), Origin{Tool: "nuclei_parse"}, []Op{
+		{Op: OpAttachEvidence, Finding: "OpenSSH 8.2 -- user enumeration", EvidenceKind: EvidenceArtifact, Ref: ".styx/out/nuclei.jsonl"},
+	})
+	if !errors.Is(err, ErrOp) || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("Update(ambiguous title) = %v, want an ambiguity refusal", err)
+	}
+	// Naming the affected refs separates them.
+	mustUpdate(t, store, Op{Op: OpAttachEvidence, Finding: "OpenSSH 8.2 -- user enumeration", Affected: []string{"10.0.0.8"}, EvidenceKind: EvidenceArtifact, Ref: ".styx/out/nuclei.jsonl"})
+	for _, f := range store.Snapshot().Findings {
+		if f.Affected[0] == "host-0002" && f.EvidenceCount() != 1 {
+			t.Errorf("finding %+v did not receive the evidence", f)
+		}
+	}
+}
+
 func TestStoreRefusesWritesAfterClose(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.Close(); err != nil {

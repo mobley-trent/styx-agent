@@ -1,0 +1,23 @@
+===============================================================
+Gobuster v3.6
+by OJ Reeves (@TheColonial) & Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.0.0.5:8080
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirb/common.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.6
+[+] Timeout:                 10s
+===============================================================
+Starting gobuster in directory enumeration mode
+===============================================================
+/admin                (Status: 301) [Size: 178] [--> http://10.0.0.5:8080/admin/]
+/api                  (Status: 200) [Size: 1024]
+/login                (Status: 200) [Size: 4096]
+/backup.sql           (Status: 200) [Size: 912340]
+/.git                 (Status: 301) [Size: 178]
+Missed: /server-status (Status: 403)
+===============================================================
+Finished
+===============================================================

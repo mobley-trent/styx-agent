@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "count": 2,
+    "type": "computers",
+    "version": 5
+  },
+  "computers": [
+    {
+      "Properties": {
+        "name": "DC01.ACME.LOCAL",
+        "samaccountname": "DC01$",
+        "domain": "ACME.LOCAL",
+        "operatingsystem": "Windows Server 2019 Standard",
+        "enabled": true,
+        "haslaps": false
+      },
+      "ObjectIdentifier": "S-1-5-21-1004336348-1177238915-682003330-1001",
+      "Sessions": {
+        "Collected": true,
+        "FailureReason": null,
+        "Results": [
+          {"UserName": "ACME.LOCAL\\jdoe", "UserSID": "S-1-5-21-1004336348-1177238915-682003330-1105"},
+          {"UserName": "ACME.LOCAL\\svc-backup", "UserSID": "S-1-5-21-1004336348-1177238915-682003330-1106"}
+        ]
+      },
+      "LocalAdmins": {
+        "Collected": true,
+        "Results": [
+          {"ObjectIdentifier": "S-1-5-21-1004336348-1177238915-682003330-500", "ObjectType": "User", "Name": "ACME.LOCAL\\Administrator"}
+        ]
+      },
+      "Aces": [
+        {"PrincipalSID": "S-1-5-21-1004336348-1177238915-682003330-512", "RightName": "GenericAll"}
+      ],
+      "IsDeleted": false,
+      "IsACLProtected": false
+    },
+    {
+      "Properties": {
+        "name": "FILE01.ACME.LOCAL",
+        "samaccountname": "FILE01$",
+        "domain": "ACME.LOCAL",
+        "operatingsystem": "Windows Server 2016 Standard"
+      },
+      "ObjectIdentifier": "S-1-5-21-1004336348-1177238915-682003330-1002",
+      "Sessions": [
+        {"UserName": "ACME.LOCAL\\jdoe", "UserSID": "S-1-5-21-1004336348-1177238915-682003330-1105"}
+      ],
+      "LocalAdmins": [
+        {"ObjectIdentifier": "S-1-5-21-1004336348-1177238915-682003330-500"}
+      ],
+      "IsDeleted": false
+    }
+  ]
+}

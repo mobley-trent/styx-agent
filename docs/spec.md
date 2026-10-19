@@ -252,8 +252,11 @@ Three layers, in order:
    (§10.6), outside the conversation, so compaction operates on *views* of it at most — the
    state digest is ordinary evictable content (§5.1, docs/engagement-state.md §8), and
    losing it loses a view, never the record. Only the audited, schema-validated state ops
-   can write the store, so no model output reaches it through a summary either. (#74,
-   `docs/engagement-state.md`)
+   can write the store, so no model output reaches it through a summary either. The
+   pending-parse directive (`docs/parser-tool-contracts.md` §4) rides the same digest and
+   is evictable for the same reason: it is a view of what the harness has seen, and the
+   artifact on disk — not the directive — is the record. (#74,
+   `docs/engagement-state.md`, `docs/parser-tool-contracts.md`)
 
 Cache economics: compaction invalidates the exact-prefix cache once (~one-time cost); the
 hysteresis band, byte-stable prefix, low watermark, and no-rolling-summarization rule keep
@@ -279,9 +282,12 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `skill` | invoke a loaded agent skill (§8.4) | delegates to its steps |
 | `state_query` | read engagement state: entities, findings, neighborhood reads over the relationship graph | no |
 | `state_update` | write engagement state through typed, atomic ops (upserts, evidence, status, verification, edges) | no |
+| `nmap_parse` / `nuclei_parse` / `sqlmap_parse` / `gobuster_parse` / `cme_parse` / `bloodhound_parse` | parse one scanner artifact into engagement state over one harness-side pipeline (per-format extractor → atomic op batch → receipt) | no |
 
 One exec surface per mechanism: `bash` for shell, `code_exec` for language runtimes.
-Strict mode applies to all built-ins; the repair layer validates their arguments.
+Strict mode applies to all built-ins; the repair layer validates their arguments. The six
+parser tools share one strict `{path}` schema and confine that path to the session
+workspace; model `docs/parser-tool-contracts.md`.
 
 ### 5.2 Execution isolation (applies to `bash` and `code_exec`)
 
@@ -325,8 +331,9 @@ Nothing bypasses this order — MCP tools included.
 | `exploit-dev` | exec + fs + web_fetch + state | scope-checked, engagement-gated |
 | `log-triage` | fs-read + code_exec + state | none |
 
-"state" is `state_query` + `state_update` (docs/engagement-state.md §7): parsers run inside
-subagents, so the write path must reach them, and provenance already carries subagent
+"state" is `state_query` + `state_update` (docs/engagement-state.md §7). All four presets
+also receive the six parser tools (docs/parser-tool-contracts.md §9): a subagent that runs
+a scanner must be able to parse what it produced, and provenance already carries subagent
 attribution.
 
 None receive `dispatch_subagent`. Presets are pack-agnostic (§8.5).
@@ -372,6 +379,11 @@ Every tool call resolves to exactly one verdict: **allow / prompt / deny**.
   write is unworkable volume once parsers and subagents are writing findings, and the audit
   trail is the control. Neither tool carries scope targets, so this is a rule-table matter
   alone. (docs/engagement-state.md §7)
+- The six parser tools are engagement-gated the same way, and for the same reason: a parse
+  writes engagement state, so engagement mode allows them, audited, and safe mode denies
+  them where there is no store. They carry no scope targets — the artifact is a local file
+  and a parse reaches no network — so the rule table alone decides.
+  (docs/parser-tool-contracts.md §9)
 
 ### 6.2 Mode interaction
 
@@ -463,7 +475,9 @@ egress rules) is torn down. Session ends also tear down (§5.2 cleanup).
 The harness injects a scope summary (targets, ROE flags, expiry) into the system prompt —
 **advisory self-restraint only**; all enforcement stays in the policy engine and the
 container egress layer. This section participates in the byte-stable prompt prefix (§3.3):
-it is set at gate activation and never mutated mid-session.
+it is set at gate activation and never mutated mid-session. The state digest and the
+pending-parse directive it carries (§4.5, §10.6) are ordinary turn content instead:
+engagement state changes mid-session, so they cannot be part of that byte-stable prefix.
 
 ### 7.5 Audit log
 
@@ -682,8 +696,15 @@ the missing variable (§1 fail on demand).
   the file. No automatic migration in v1.
 - The store persists until the operator deletes it: deactivation and session end keep it,
   and nothing auto-prunes on engagement expiry.
+- Scanner output is evidence and lives in `.styx/out/` at the project root: activation
+  creates that directory and additively records `.styx/` in the project's `.gitignore` (a
+  project that is neither a repository nor has an ignore file is left alone). The six
+  parser tools read artifacts from the session workspace and, beside `state_update`, are
+  the only path into the store; the pending-parse watch over that directory is how the
+  harness notices a scan nobody parsed (`docs/parser-tool-contracts.md` §3–§4).
 - Implementation: `internal/engagementstate`; model `docs/engagement-state.md`, rationale
-  ADR-0004.
+  ADR-0004. Parser framework: `internal/parsers`; contract `docs/parser-tool-contracts.md`,
+  rationale ADR-0005.
 
 ---
 
@@ -704,6 +725,11 @@ Decision #16. CI gate: GitHub Actions, every push/PR to `main`.
      parallel cap (8), 429/5xx backoff, repair-layer bounds (2 repairs → turn abort),
      subagent preset allowlists, compaction triggers (85% + 60% re-arm hysteresis), audit
      JSONL shape + fail-closed on write error.
+   - **Parser contract tests** — each of the six formats against a checked-in artifact
+     fixture, the strict `{path}` schema, path confinement, a foreign format refused with
+     nothing written, a partial parse committed with skipped records reported, and the
+     pending-parse obligation surfacing in the digest and clearing on a successful parse
+     (`docs/parser-tool-contracts.md`).
    - **Prompt golden snapshots** — byte-exact rendered system prompt per
      (mode × skill pack × engagement-state) combination; guards the byte-stable prefix the
      cache economics and engagement framing depend on; asserts the engagement scope-summary

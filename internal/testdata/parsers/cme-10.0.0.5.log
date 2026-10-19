@@ -1,0 +1,10 @@
+SMB         10.0.0.5        445    DC01             [*] Windows Server 2019 Build 17763 x64 (name:DC01) (domain:ACME.LOCAL) (signing:False) (SMBv1:False)
+SMB         10.0.0.5        445    DC01             [+] ACME.LOCAL\admin:hunter2 (Pwn3d!)
+SMB         10.0.0.5        445    DC01             [-] ACME.LOCAL\admin:wrong STATUS_LOGON_FAILURE
+SMB         10.0.0.5        445    DC01             [-] ACME.LOCAL\guest: STATUS_ACCOUNT_DISABLED
+SMB         10.0.0.5        445    DC01             [+] LSA Secrets
+SMB         10.0.0.5        445    DC01             [*] Enumerated shares
+SMB         10.0.0.5        445    DC01             Share           Permissions     Remark
+SMB         10.0.0.5        445    DC01             -----           -----------     ------
+SUPPORTED PROTOCOLS
+<no output was written for this run>

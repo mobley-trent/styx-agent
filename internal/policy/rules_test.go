@@ -1,6 +1,10 @@
 package policy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/mobley-trent/styx-agent/internal/parsers"
+)
 
 func TestRuleTableResolvePrecedence(t *testing.T) {
 	// deny > prompt > allow among matching rules, regardless of order (§6.1).
@@ -136,6 +140,18 @@ func TestDefaultRules(t *testing.T) {
 		{name: "safe: state_update denies", mode: ModeSafe, tool: "state_update", want: VerdictDeny},
 		{name: "engagement: state_query allows", mode: ModeEngagement, tool: "state_query", want: VerdictAllow},
 		{name: "engagement: state_update allows", mode: ModeEngagement, tool: "state_update", want: VerdictAllow},
+
+		// The parser tools are the same mode difference, for the same reason: a
+		// parse writes engagement state, and safe mode has none
+		// (docs/parser-tool-contracts.md §9).
+		{name: "safe: nmap_parse denies", mode: ModeSafe, tool: "nmap_parse", want: VerdictDeny},
+		{name: "safe: nuclei_parse denies", mode: ModeSafe, tool: "nuclei_parse", want: VerdictDeny},
+		{name: "safe: sqlmap_parse denies", mode: ModeSafe, tool: "sqlmap_parse", want: VerdictDeny},
+		{name: "safe: gobuster_parse denies", mode: ModeSafe, tool: "gobuster_parse", want: VerdictDeny},
+		{name: "safe: cme_parse denies", mode: ModeSafe, tool: "cme_parse", want: VerdictDeny},
+		{name: "safe: bloodhound_parse denies", mode: ModeSafe, tool: "bloodhound_parse", want: VerdictDeny},
+		{name: "engagement: nmap_parse allows", mode: ModeEngagement, tool: "nmap_parse", want: VerdictAllow},
+		{name: "engagement: bloodhound_parse allows", mode: ModeEngagement, tool: "bloodhound_parse", want: VerdictAllow},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,9 +164,11 @@ func TestDefaultRules(t *testing.T) {
 	}
 
 	// The tables are identical rule for rule, with one deliberate exception:
-	// the engagement-state surface, which safe mode denies because there is no
-	// store to touch (docs/engagement-state.md §7). Everything else holds the
-	// §6.2 invariant that the mode flag alone widens nothing.
+	// the engagement-state surface and the parser tools that write it, which
+	// safe mode denies because there is no store to touch
+	// (docs/engagement-state.md §7, docs/parser-tool-contracts.md §9).
+	// Everything else holds the §6.2 invariant that the mode flag alone widens
+	// nothing.
 	safe := DefaultRules(ModeSafe)
 	eng := DefaultRules(ModeEngagement)
 	if len(safe.Rules) != len(eng.Rules) {
@@ -170,10 +188,14 @@ func TestDefaultRules(t *testing.T) {
 	}
 }
 
-// isStateTool reports whether a tool name is part of the engagement-state
-// surface.
+// isStateTool reports whether a tool name writes or reads engagement state:
+// the state tools and the six parsers, which are denied together in safe mode
+// and allowed together in engagement mode.
 func isStateTool(tool string) bool {
-	return tool == "state_query" || tool == "state_update"
+	if tool == "state_query" || tool == "state_update" {
+		return true
+	}
+	return parsers.Known(tool)
 }
 
 func TestDefaultRulesUnknownModePanics(t *testing.T) {
