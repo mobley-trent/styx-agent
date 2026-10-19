@@ -129,5 +129,21 @@ func DefaultRules(mode Mode) *RuleTable {
 		// Skill invocation returns workflow text only; widens nothing.
 		{Tool: "skill", Action: VerdictAllow, Source: "default"},
 	}
+
+	// Engagement state is the local forensic record. In safe mode there is no
+	// store to touch, so the surface is denied; in engagement mode both tools
+	// are allowed and audited — writes included, because a prompt per state
+	// write would be unworkable volume once parsers and subagents write
+	// findings, and the audit trail is the control (docs/engagement-state.md §7).
+	// Neither tool carries scope targets, so this is a rule-table matter alone
+	// (§6.1 of the spec).
+	stateAction := VerdictDeny
+	if mode == ModeEngagement {
+		stateAction = VerdictAllow
+	}
+	rules = append(rules,
+		Rule{Tool: "state_query", Action: stateAction, Source: "default"},
+		Rule{Tool: "state_update", Action: stateAction, Source: "default"},
+	)
 	return &RuleTable{Rules: rules}
 }

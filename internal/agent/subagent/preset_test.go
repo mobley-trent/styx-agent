@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/mobley-trent/styx-agent/internal/agent"
@@ -14,10 +15,13 @@ func TestPresetsMatchSpec(t *testing.T) {
 		network         Network
 		engagementGated bool
 	}{
-		{"coder", []string{"read_file", "write_file", "edit_file", "glob", "grep", "bash", "code_exec"}, NetworkNone, false},
-		{"recon", []string{"web_fetch", "bash", "read_file", "glob", "grep"}, NetworkScope, false},
-		{"exploit-dev", []string{"bash", "code_exec", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch"}, NetworkScope, true},
-		{"log-triage", []string{"read_file", "glob", "grep", "code_exec"}, NetworkNone, false},
+		// Every preset also receives the engagement-state tools (§5.4 of the
+		// spec): parsers run inside subagents, so the write path must reach
+		// them.
+		{"coder", append([]string{"read_file", "write_file", "edit_file", "glob", "grep", "bash", "code_exec"}, stateTools...), NetworkNone, false},
+		{"recon", append([]string{"web_fetch", "bash", "read_file", "glob", "grep"}, stateTools...), NetworkScope, false},
+		{"exploit-dev", append([]string{"bash", "code_exec", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch"}, stateTools...), NetworkScope, true},
+		{"log-triage", append([]string{"read_file", "glob", "grep", "code_exec"}, stateTools...), NetworkNone, false},
 	}
 	if len(Presets()) != len(cases) {
 		t.Fatalf("built-in presets = %d, want %d", len(Presets()), len(cases))
@@ -42,6 +46,11 @@ func TestPresetsMatchSpec(t *testing.T) {
 			}
 			if p.SystemPrompt() == "" {
 				t.Error("system prompt is empty")
+			}
+			for _, tool := range stateTools {
+				if !slices.Contains(p.Allowlist(), tool) {
+					t.Errorf("preset %q is missing the engagement-state tool %q", p.Name, tool)
+				}
 			}
 		})
 	}

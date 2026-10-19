@@ -26,6 +26,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/config"
 	"github.com/mobley-trent/styx-agent/internal/containerlayer"
 	"github.com/mobley-trent/styx-agent/internal/engagement"
+	"github.com/mobley-trent/styx-agent/internal/engagementstate"
 	"github.com/mobley-trent/styx-agent/internal/mcpclient"
 	"github.com/mobley-trent/styx-agent/internal/memory"
 	"github.com/mobley-trent/styx-agent/internal/model"
@@ -134,6 +135,10 @@ type Harness struct {
 	sessions  *sessions.Store
 	audit     *audit.Writer
 	container *containerlayer.Manager
+	// state is the engagement's forensic record (docs/engagement-state.md).
+	// Nil in safe mode, where there is no engagement to record, and replaced
+	// with a fresh store on every gate activation (§7.3).
+	state     *engagementstate.Store
 	mcp       *mcpclient.Manager
 	compactor *agent.Compactor
 	out       io.Writer
@@ -422,6 +427,20 @@ func (h *Harness) configure() error {
 
 	fetcher, logFetcher := h.networkTooling(eng)
 
+	// Engagement state is the per-engagement forensic record (spec §10; the
+	// model is docs/engagement-state.md). It is opened per activation and
+	// closed when the mode changes. A document whose schema version this build
+	// cannot read refuses to start, like any other unreadable record; a store
+	// another live session holds is not an error — this session reads it, and
+	// the digest says writes are unavailable.
+	stateStore, err := h.openStateStore(eng)
+	if err != nil {
+		if container != nil {
+			_ = container.Close()
+		}
+		return err
+	}
+
 	baseTools := []agent.Tool{
 		agent.ReadFileTool(h.WorkDir),
 		agent.WriteFileTool(h.WorkDir),
@@ -433,6 +452,11 @@ func (h *Harness) configure() error {
 		agent.WebFetchTool(fetcher),
 		agent.SSHLogsTool(logFetcher),
 		agent.ProposePlanTool(),
+		// The state tools are registered in both modes: the default rule table
+		// denies them in safe mode (there is no store to touch) and allows them,
+		// audited, in engagement mode (docs/engagement-state.md §7).
+		agent.StateQueryTool(stateStoreHandle(stateStore)),
+		agent.StateUpdateTool(stateStoreHandle(stateStore)),
 	}
 
 	// The skill tool is exposed only for skills whose frontmatter carries
@@ -487,7 +511,16 @@ func (h *Harness) configure() error {
 		return err
 	}
 
+	// The digest reaches the main loop only: a subagent consumes state through
+	// state_query and reports to the parent, which carries the view
+	// (docs/engagement-state.md §8).
+	loopOpts := h.loopOptions()
+	if stateStore != nil {
+		loopOpts = append(loopOpts, agent.WithStateDigest(stateDigest{store: stateStore}))
+	}
+
 	old := h.container
+	oldState := h.state
 
 	h.mu.Lock()
 	h.Mode = mode
@@ -496,13 +529,57 @@ func (h *Harness) configure() error {
 	h.Tools = tools
 	h.packs = selection
 	h.container = container
-	h.Loop = agent.NewLoop(h.client, tools, engine, h.audit, prompt, h.loopOptions()...)
+	h.state = stateStore
+	h.Loop = agent.NewLoop(h.client, tools, engine, h.audit, prompt, loopOpts...)
 	h.mu.Unlock()
 
 	if old != nil {
 		_ = old.Close()
 	}
+	if oldState != nil {
+		_ = oldState.Close()
+	}
 	return nil
+}
+
+// openStateStore opens the engagement's state store (docs/engagement-state.md
+// §1). Safe mode has no engagement, so it has no store: the tools answer that
+// there is no engagement state, and the rule table denies them first anyway.
+func (h *Harness) openStateStore(eng *engagement.Engagement) (*engagementstate.Store, error) {
+	if eng == nil {
+		return nil, nil
+	}
+	return engagementstate.Open(h.WorkDir, eng.Name(),
+		engagementstate.WithClock(h.now),
+		engagementstate.WithSession(h.SessionID()))
+}
+
+// stateStoreHandle adapts a concrete store to the state tools' seam. A nil
+// store becomes a nil interface rather than a typed nil, so the handlers' "no
+// engagement state" guard is what answers in safe mode rather than a nil
+// dereference.
+func stateStoreHandle(store *engagementstate.Store) agent.StateStore {
+	if store == nil {
+		return nil
+	}
+	return store
+}
+
+// stateDigest adapts the engagement-state store to the loop's digest seam
+// (docs/engagement-state.md §8): the store owns when a digest is due, the loop
+// owns where it goes.
+//
+// It is wired to the main loop only — a subagent gets no digest — and it holds
+// the store the loop was built with, so an in-flight turn cannot be retargeted
+// by a concurrent mode switch.
+type stateDigest struct{ store *engagementstate.Store }
+
+// Digest implements agent.StateDigest.
+func (d stateDigest) Digest(force bool) (string, bool) {
+	if d.store == nil {
+		return "", false
+	}
+	return d.store.Digest(force)
 }
 
 // ensureMCP returns the session's MCP manager, creating and starting it on
@@ -712,6 +789,7 @@ func (h *Harness) writeEngagementNotes(eng *engagement.Engagement) error {
 	if h.session != nil {
 		sessionID = h.session.ID()
 	}
+	state := h.state
 	h.mu.Unlock()
 
 	tools, artifacts := h.sessionSummary(sessionID)
@@ -724,6 +802,7 @@ func (h *Harness) writeEngagementNotes(eng *engagement.Engagement) error {
 		Ended:                h.now().UTC().Format(time.RFC3339),
 		Tools:                tools,
 		Artifacts:            artifacts,
+		Findings:             stateFindings(state),
 	}
 	if expires, ok := eng.Expires(); ok {
 		notes.Expires = expires.UTC().Format(time.RFC3339)
@@ -742,6 +821,29 @@ func (h *Harness) writeEngagementNotes(eng *engagement.Engagement) error {
 		return err
 	}
 	return nil
+}
+
+// stateFindings renders the store's findings as the notes block's one-liners
+// (§10.2; docs/engagement-state.md §9). The store — not model recollection — is
+// the source of what an engagement found, and a deactivated finding stays in
+// the record, marked, rather than vanishing from the notes.
+func stateFindings(store *engagementstate.Store) []string {
+	if store == nil {
+		return nil
+	}
+	snapshot := store.Snapshot()
+	if len(snapshot.Findings) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(snapshot.Findings))
+	for _, f := range snapshot.Findings {
+		line := fmt.Sprintf("%s · %s (%s, %s)", f.Severity, f.Title, f.Status, f.Verification)
+		if !f.Active {
+			line += " [inactive]"
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // sessionSummary folds the session's events into the notes' tool counts and
@@ -1094,10 +1196,15 @@ func (h *Harness) Close() error {
 	h.container = nil
 	mcp := h.mcp
 	h.mcp = nil
+	state := h.state
+	h.state = nil
 	h.mu.Unlock()
 
 	if session != nil {
 		errs = append(errs, session.Close())
+	}
+	if state != nil {
+		errs = append(errs, state.Close())
 	}
 	if mcp != nil {
 		errs = append(errs, mcp.Close())

@@ -128,6 +128,14 @@ func TestDefaultRules(t *testing.T) {
 		{name: "engagement: write still prompts", mode: ModeEngagement, tool: "write_file", want: VerdictPrompt},
 		{name: "engagement: bash still prompts", mode: ModeEngagement, tool: "bash", want: VerdictPrompt},
 		{name: "engagement: read still allows", mode: ModeEngagement, tool: "read_file", want: VerdictAllow},
+
+		// Engagement state is the decided mode difference: safe mode has no
+		// store to touch, so the surface is denied; engagement mode allows it,
+		// audited, writes included (docs/engagement-state.md §7).
+		{name: "safe: state_query denies", mode: ModeSafe, tool: "state_query", want: VerdictDeny},
+		{name: "safe: state_update denies", mode: ModeSafe, tool: "state_update", want: VerdictDeny},
+		{name: "engagement: state_query allows", mode: ModeEngagement, tool: "state_query", want: VerdictAllow},
+		{name: "engagement: state_update allows", mode: ModeEngagement, tool: "state_update", want: VerdictAllow},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -139,17 +147,33 @@ func TestDefaultRules(t *testing.T) {
 		})
 	}
 
-	// Both modes must produce identical tables: engagement widens nothing.
+	// The tables are identical rule for rule, with one deliberate exception:
+	// the engagement-state surface, which safe mode denies because there is no
+	// store to touch (docs/engagement-state.md §7). Everything else holds the
+	// §6.2 invariant that the mode flag alone widens nothing.
 	safe := DefaultRules(ModeSafe)
 	eng := DefaultRules(ModeEngagement)
 	if len(safe.Rules) != len(eng.Rules) {
 		t.Fatalf("default tables differ in length: safe=%d engagement=%d", len(safe.Rules), len(eng.Rules))
 	}
 	for i := range safe.Rules {
-		if safe.Rules[i] != eng.Rules[i] {
+		if safe.Rules[i] == eng.Rules[i] {
+			continue
+		}
+		if !isStateTool(safe.Rules[i].Tool) {
 			t.Errorf("default table rule %d differs between modes: %+v vs %+v", i, safe.Rules[i], eng.Rules[i])
 		}
+		if safe.Rules[i].Action != VerdictDeny || eng.Rules[i].Action != VerdictAllow {
+			t.Errorf("state rule %d = %v in safe mode, %v in engagement mode; want deny then allow",
+				i, safe.Rules[i].Action, eng.Rules[i].Action)
+		}
 	}
+}
+
+// isStateTool reports whether a tool name is part of the engagement-state
+// surface.
+func isStateTool(tool string) bool {
+	return tool == "state_query" || tool == "state_update"
 }
 
 func TestDefaultRulesUnknownModePanics(t *testing.T) {

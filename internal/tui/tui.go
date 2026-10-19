@@ -1011,6 +1011,13 @@ func (m *Model) apply(ev sessions.Event) {
 		}
 	case sessions.KindCompaction:
 		m.append(m.styles.card.Render("… compacted: " + ev.Detail))
+	case sessions.KindStateDigest:
+		// The digest is a harness note about engagement state rather than model
+		// output, so it commits as one dim line: the full view is in the prompt
+		// and the session log, and the scrollback is not the place to reprint
+		// it every time state changes.
+		m.commitPartial()
+		m.append(m.styles.card.Render("◇ " + firstLineText(ev.Text)))
 	case sessions.KindEngagement:
 		m.commitPartial()
 		switch {

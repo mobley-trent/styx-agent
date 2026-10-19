@@ -205,6 +205,11 @@ type Loop struct {
 	subagent      string
 	subagentRun   string
 	compactor     *Compactor
+	// digest supplies the engagement-state digest the loop tail-appends when
+	// state changes (docs/engagement-state.md §8). Nil appends none, which is
+	// what a subagent run gets: a subagent consumes state through state_query
+	// and reports to the parent, which carries the view.
+	digest StateDigest
 
 	// compactArmed is the hysteresis flag for auto-compaction (§4.5). It is
 	// per-loop, so a shared Compactor carries no per-conversation state.
@@ -361,6 +366,32 @@ func WithSubagentRun(runID string) LoopOption {
 	}
 }
 
+// WithStateDigest sets the engagement-state digest source the loop appends
+// from (docs/engagement-state.md §8). The store owns when a digest is due; the
+// loop owns where it goes. Leave it unset — the subagent case — and no digest
+// is appended.
+func WithStateDigest(d StateDigest) LoopOption {
+	return func(l *Loop) { l.digest = d }
+}
+
+// StateDigest supplies the engagement-state digest the loop appends to the
+// conversation when state changes (docs/engagement-state.md §8).
+type StateDigest interface {
+	// Digest returns the digest body to append and whether one is due. force
+	// re-appends one even when state has not changed, which is how a digest
+	// returns after compaction evicted the one a conversation carried.
+	Digest(force bool) (string, bool)
+}
+
+// StateDigestFunc adapts a function to StateDigest.
+func StateDigestFunc(f func(force bool) (string, bool)) StateDigest { return digestFunc(f) }
+
+// digestFunc implements StateDigest over a plain function.
+type digestFunc func(force bool) (string, bool)
+
+// Digest implements StateDigest.
+func (f digestFunc) Digest(force bool) (string, bool) { return f(force) }
+
 // WithCompactor installs context compaction (§4.5). Nil (the default) leaves
 // the loop uncompacted. The compactor is stateless, so one instance may be
 // shared across loops; the hysteresis flag lives on each loop.
@@ -430,6 +461,11 @@ func (l *Loop) Run(ctx context.Context, history []model.Message, input string) (
 		// over-threshold history (a long resumed session) is compacted before
 		// it is sent — and never while a turn's tool calls are in flight.
 		messages = l.maybeCompact(ctx, messages, turn)
+
+		// The state digest is tail-appended just before the model call, so the
+		// byte-stable prefix keeps warming the cache and a digest the
+		// conversation no longer carries returns (docs/engagement-state.md §8).
+		messages = l.appendDigest(messages, turn)
 
 		out, err := l.streamTurn(ctx, messages, turn)
 		if err != nil {
@@ -509,6 +545,41 @@ func (l *Loop) maybeCompact(ctx context.Context, messages []model.Message, turn 
 	compacted = append(compacted, out...)
 	l.emitEvent(sessions.Event{Kind: sessions.KindCompaction, Turn: turn, Detail: result.Detail})
 	return compacted
+}
+
+// digestPrefix marks the harness-appended engagement-state digest message
+// (docs/engagement-state.md §8). It is what identifies a digest inside a
+// conversation, so the loop can tell whether the one it carries is still there.
+const digestPrefix = "[engagement state]"
+
+// digestMessage renders one digest as the system message the model sees.
+func digestMessage(body string) string {
+	return digestPrefix + "\n" + strings.TrimSpace(body)
+}
+
+// appendDigest tail-appends the engagement-state digest when one is due (§8):
+// state changed since the last digest, or the conversation no longer carries
+// one because compaction evicted it (or /clear dropped it).
+func (l *Loop) appendDigest(messages []model.Message, turn int) []model.Message {
+	if l.digest == nil {
+		return messages
+	}
+	body, due := l.digest.Digest(!hasDigest(messages))
+	if !due || strings.TrimSpace(body) == "" {
+		return messages
+	}
+	l.emitEvent(sessions.Event{Kind: sessions.KindStateDigest, Turn: turn, Text: body})
+	return append(messages, model.Message{Role: model.RoleSystem, Content: digestMessage(body)})
+}
+
+// hasDigest reports whether the conversation still carries a state digest.
+func hasDigest(messages []model.Message) bool {
+	for _, m := range messages {
+		if m.Role == model.RoleSystem && strings.HasPrefix(m.Content, digestPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // turnOutput is one streamed model turn, assembled.
@@ -870,6 +941,10 @@ func (l *Loop) execute(ctx context.Context, adm *admission, turn int) {
 // turn-scoped pre-authorization, diff-class tools go through the per-diff
 // review flow, and everything else dispatches directly (§9.2).
 func (l *Loop) run(ctx context.Context, adm *admission, turn int) (string, error) {
+	// Provenance for a state write is the harness's, never the model's: the
+	// loop stamps which run the call came from before any handler sees it
+	// (docs/engagement-state.md §6).
+	ctx = withOrigin(ctx, l.subagent)
 	if adm.call.Name == PlanToolName {
 		return l.approvePlanStep(ctx, adm, turn)
 	}
