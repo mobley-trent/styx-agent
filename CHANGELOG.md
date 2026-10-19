@@ -18,6 +18,11 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- Model reasoning prints dimmed inline as part of the transcript: thinking
+  streams above the answer while a turn runs, commits to the scrollback ahead
+  of the answer it explains, and stays visually distinct from both answers and
+  tool output. A subagent's reasoning prints dimmed inside its block the same
+  way. (#72)
 - Typing `/` opens an inline command menu over the harness's command registry:
   it filters as you type, up/down move the selection, Tab completes the command
   name, and Enter runs the highlighted command. `/model`, `/resume`, and `/theme`

@@ -31,6 +31,7 @@ type theme struct {
 	card       lipgloss.Style
 	cardKey    lipgloss.Style
 	banner     lipgloss.Style
+	reasoning  lipgloss.Style
 	diffHeader lipgloss.Style
 	add        lipgloss.Style
 	del        lipgloss.Style
@@ -54,6 +55,10 @@ func (t theme) styled() theme {
 	t.card = lipgloss.NewStyle().Faint(true)
 	t.cardKey = lipgloss.NewStyle().Bold(true).Foreground(t.accent)
 	t.banner = lipgloss.NewStyle().Bold(true).Foreground(t.warnColor)
+	// Reasoning is muted and italic: dim enough to read past, and distinct from
+	// both a plain assistant answer and a faint tool-call line
+	// (docs/tui-parity.md, "Cheap win · Reasoning display").
+	t.reasoning = lipgloss.NewStyle().Faint(true).Italic(true).Foreground(t.muted)
 	t.diffHeader = lipgloss.NewStyle().Bold(true).Foreground(t.accent)
 	t.add = lipgloss.NewStyle().Foreground(t.addColor)
 	t.del = lipgloss.NewStyle().Foreground(t.delColor)

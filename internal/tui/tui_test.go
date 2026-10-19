@@ -175,6 +175,128 @@ func TestStreamRendersFailures(t *testing.T) {
 	}
 }
 
+// Model reasoning streams dimmed above the answer and stays in the scrollback
+// afterwards, so what the model was thinking is readable in the transcript
+// rather than dropped on the floor (docs/tui-parity.md, "Cheap win · Reasoning
+// display").
+func TestReasoningStreamsDimmedAndCommits(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindUser, Text: "scan the host"}})
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindReasoningDelta, Text: "Weigh"}})
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindReasoningDelta, Text: "ing options."}})
+
+	live := h.view()
+	if !strings.Contains(stripANSI(live), "Weighing options.") {
+		t.Fatalf("reasoning does not stream in the live region:\n%s", live)
+	}
+	dim := h.model.styles.reasoning.Render("Weighing options.")
+	if !strings.Contains(live, dim) {
+		t.Errorf("streamed reasoning is not dimmed:\n%q", live)
+	}
+	if got := h.printedText(); strings.Contains(got, "Weighing") {
+		t.Errorf("streaming reasoning was committed before the turn moved on:\n%s", got)
+	}
+
+	// The assembled assistant event carries the whole reasoning; it supersedes
+	// the deltas rather than printing a second copy.
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindAssistant, Text: "Port 80 is open.", Reasoning: "Weighing options.",
+	}})
+
+	printed := h.printedText()
+	if got := strings.Count(printed, dim); got != 1 {
+		t.Errorf("committed reasoning appears %d time(s), want once:\n%q", got, printed)
+	}
+	// Positions are compared on the visible transcript: a rendered answer is
+	// split by style sequences between its words.
+	visible := h.plainPrinted()
+	reasoningAt := strings.Index(visible, "Weighing options.")
+	answerAt := strings.Index(visible, "Port 80 is open.")
+	if reasoningAt < 0 || answerAt < 0 || reasoningAt > answerAt {
+		t.Errorf("the answer must print below the reasoning that explains it (reasoning@%d answer@%d):\n%s",
+			reasoningAt, answerAt, visible)
+	}
+	if live := h.view(); strings.Contains(live, "Weighing") {
+		t.Errorf("committed reasoning leaked back into the live region:\n%s", live)
+	}
+}
+
+// Reasoning commits when the turn moves on to a tool call or ends in an error,
+// not only when an assembled answer arrives: an interrupted turn keeps its
+// thinking in the scrollback too.
+func TestReasoningCommitsWhenTheTurnMovesOn(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindReasoningDelta, Text: "Read the config first."}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindToolCall, Tool: "read_file",
+		Params: map[string]any{"path": "app.yaml"}, Verdict: "allow",
+	}})
+	if got := h.printedText(); !strings.Contains(got, h.model.styles.reasoning.Render("Read the config first.")) {
+		t.Errorf("reasoning was dropped when the turn called a tool:\n%q", got)
+	}
+
+	aborted := newHarness(t)
+	aborted.update(EventMsg{Event: sessions.Event{Kind: sessions.KindReasoningDelta, Text: "Half a thought."}})
+	aborted.update(EventMsg{Event: sessions.Event{Kind: sessions.KindError, Failure: "turn interrupted"}})
+	if got := aborted.printedText(); !strings.Contains(got, aborted.model.styles.reasoning.Render("Half a thought.")) {
+		t.Errorf("an interrupted turn dropped its reasoning:\n%q", got)
+	}
+}
+
+// The live region is fixed and shallow, so a long reasoning stream shows only
+// its recent tail there; the whole block prints to the scrollback when the turn
+// commits it (ADR-0001).
+func TestReasoningLiveRegionShowsTheTail(t *testing.T) {
+	h := newHarness(t)
+	for i := 0; i < 30; i++ {
+		h.update(EventMsg{Event: sessions.Event{
+			Kind: sessions.KindReasoningDelta, Text: fmt.Sprintf("thought %02d\n", i),
+		}})
+	}
+	live := h.view()
+	if !strings.Contains(live, "thought 29") {
+		t.Fatalf("live region does not show the latest reasoning:\n%s", live)
+	}
+	if strings.Contains(live, "thought 00") {
+		t.Errorf("live region shows the whole reasoning stream:\n%s", live)
+	}
+	if !strings.Contains(live, "earlier reasoning lines") {
+		t.Errorf("live region does not say it elided earlier reasoning:\n%s", live)
+	}
+
+	h.update(EventMsg{Event: sessions.Event{Kind: sessions.KindAssistant, Text: "done"}})
+	printed := h.plainPrinted()
+	for _, want := range []string{"thought 00", "thought 29"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("scrollback is missing %q after the turn committed:\n%s", want, printed)
+		}
+	}
+}
+
+// A subagent's reasoning prints dimmed inside its block, and the block's header
+// preview still names the answer rather than the thinking that preceded it.
+func TestSubagentReasoningPrintsDimmedInItsBlock(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindSubagent, Subagent: "coder", Detail: "start", Text: "fix the build",
+	}})
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindAssistant, Subagent: "coder",
+		Reasoning: "The build fails on a missing import.",
+		Text:      "Import added; the build passes.",
+	}})
+	blk := h.model.subagents["coder"]
+	if blk == nil {
+		t.Fatal("no live block for the run")
+	}
+	if got := strings.Join(blk.lines, "\n"); !strings.Contains(got, h.model.styles.reasoning.Render("The build fails on a missing import.")) {
+		t.Errorf("subagent reasoning is missing or undimmed in the block:\n%v", blk.lines)
+	}
+	if !strings.Contains(blk.preview, "Import added; the build passes.") {
+		t.Errorf("block preview = %q, want the answer's first line", blk.preview)
+	}
+}
+
 func TestEnterSubmitsPrompt(t *testing.T) {
 	h := newHarness(t)
 	h.typeText("hello there")
