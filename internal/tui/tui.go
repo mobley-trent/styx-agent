@@ -104,6 +104,10 @@ type Status struct {
 	// Compaction is the context-fill readout ("ctx 42%"), empty when the
 	// model's context window is unknown (§4.5, §9.1).
 	Compaction string
+	// Pending is the pending-parse readout ("parse 2 pending"): how many
+	// scanner artifacts are waiting for their parser
+	// (docs/parser-tool-contracts.md §4). Empty when nothing is pending.
+	Pending string
 	// Cost is the session's accumulated model spend ("cost $0.0012"), empty
 	// until a turn reports usage (§3.1, §9.1).
 	Cost string
@@ -913,6 +917,9 @@ func (m *Model) statusLine() string {
 	}
 	if status.Targets != "" {
 		parts = append(parts, status.Targets)
+	}
+	if status.Pending != "" {
+		parts = append(parts, status.Pending)
 	}
 	if status.MCP != "" {
 		parts = append(parts, status.MCP)

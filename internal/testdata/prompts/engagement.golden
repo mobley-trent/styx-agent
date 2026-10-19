@@ -36,6 +36,12 @@ This summary is advisory self-restraint only. Every network and exec action is
 still checked against the pinned scope by the harness; a request outside these
 targets is refused or held for the operator.
 
+Scanned artifacts: write raw scanner output to `.styx/out/` and parse it with
+the matching parser tool (`nmap_parse`, `nuclei_parse`, `sqlmap_parse`,
+`gobuster_parse`, `cme_parse`, `bloodhound_parse`). A raw run's findings reach
+engagement state only through its parser; the harness reports what a parse
+recorded and what it skipped.
+
 # Project memory (STYX.md)
 
 # STYX.md

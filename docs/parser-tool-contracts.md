@@ -100,7 +100,10 @@ Enforcement is **structural + tracked, never a hard block**:
      see `docs/engagement-state.md` §8) and in the status bar; and as a directive text in
      the turn following detection.
    - **Cleared** when the matching parser successfully parses that artifact, the artifact is
-     removed, or the obligation is explicitly waived.
+     removed, or the obligation is explicitly waived. A parsed artifact stays on disk — it
+     is evidence — so the clear is remembered by the artifact's write stamp (size and mtime):
+     that version is never nudged again, while a rewrite by another scan is a new, unread
+     artifact.
 3. **Never a hard block.** The loop does not refuse further scanner runs or network calls
    while an obligation is open: argv sniffing cannot see every scanner and a block risks
    deadlock on an artifact the model should not parse yet. An ignored obligation simply

@@ -132,6 +132,10 @@ output into state.
 **Artifact**
 A preserved raw tool output file that a parser reads and a finding cites as evidence.
 
+**Artifact directory**
+`.styx/out/` at the project root: where scanners are asked to write raw output. Activation
+creates it and gitignores it, because evidence does not belong in the repository.
+
 **Parse receipt**
 The compact summary a parser returns after a parse — what it wrote and what it skipped — so
 the model sees the result without re-reading the raw output.

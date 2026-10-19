@@ -31,6 +31,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/memory"
 	"github.com/mobley-trent/styx-agent/internal/model"
 	"github.com/mobley-trent/styx-agent/internal/netfetch"
+	"github.com/mobley-trent/styx-agent/internal/parsers"
 	"github.com/mobley-trent/styx-agent/internal/policy"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
 	"github.com/mobley-trent/styx-agent/internal/skillpacks"
@@ -138,12 +139,17 @@ type Harness struct {
 	// state is the engagement's forensic record (docs/engagement-state.md).
 	// Nil in safe mode, where there is no engagement to record, and replaced
 	// with a fresh store on every gate activation (§7.3).
-	state     *engagementstate.Store
-	mcp       *mcpclient.Manager
-	compactor *agent.Compactor
-	out       io.Writer
-	now       func() time.Time
-	warned    bool
+	state *engagementstate.Store
+	// parsers tracks the engagement's pending-parse obligations
+	// (docs/parser-tool-contracts.md §4): the scanner artifacts the harness has
+	// seen and no parser has read yet. Nil in safe mode, beside the store it
+	// feeds, and replaced with the store on every gate activation (§7.3).
+	pendingParses *parsers.Tracker
+	mcp           *mcpclient.Manager
+	compactor     *agent.Compactor
+	out           io.Writer
+	now           func() time.Time
+	warned        bool
 	// updateNotified records that the notifier has emitted its one notice for
 	// this session, so a second CheckForUpdate never re-renders it.
 	updateNotified bool
@@ -441,6 +447,28 @@ func (h *Harness) configure() error {
 		return err
 	}
 
+	// The pending-parse watch arrives with the store: an engagement's artifacts
+	// are its evidence, and the harness tracks which of them no parser has read
+	// (docs/parser-tool-contracts.md §4). Safe mode has neither. The artifact
+	// directory and its gitignore entry are prepared here — the prompt routes
+	// scanner output there, so an engagement whose project cannot hold it is a
+	// refusal at activation rather than a surprise mid-engagement.
+	var pendingParses *parsers.Tracker
+	if stateStore != nil {
+		if err := parsers.PrepareWorkspace(h.WorkDir); err != nil {
+			if container != nil {
+				_ = container.Close()
+			}
+			return err
+		}
+		pendingParses = parsers.NewTracker(h.WorkDir).WithClock(h.now)
+		// Every exec is observed for the two detections §4 describes: the argv
+		// sniff, and the artifact the run leaves in `.styx/out/`.
+		if exec != nil {
+			exec = parsers.Observer{Inner: exec, Tracker: pendingParses}
+		}
+	}
+
 	baseTools := []agent.Tool{
 		agent.ReadFileTool(h.WorkDir),
 		agent.WriteFileTool(h.WorkDir),
@@ -458,6 +486,10 @@ func (h *Harness) configure() error {
 		agent.StateQueryTool(stateStoreHandle(stateStore)),
 		agent.StateUpdateTool(stateStoreHandle(stateStore)),
 	}
+	// The six parser tools are registered the same way, and gated the same way:
+	// a parse writes engagement state, so safe mode denies it
+	// (docs/parser-tool-contracts.md §9).
+	baseTools = append(baseTools, agent.ParserTools(h.WorkDir, stateStoreHandle(stateStore), pendingParses)...)
 
 	// The skill tool is exposed only for skills whose frontmatter carries
 	// model-invocation metadata (§8.4). No invocable skill means no tool.
@@ -516,7 +548,7 @@ func (h *Harness) configure() error {
 	// (docs/engagement-state.md §8).
 	loopOpts := h.loopOptions()
 	if stateStore != nil {
-		loopOpts = append(loopOpts, agent.WithStateDigest(stateDigest{store: stateStore}))
+		loopOpts = append(loopOpts, agent.WithStateDigest(stateDigest{store: stateStore, pending: pendingParses}))
 	}
 
 	old := h.container
@@ -530,6 +562,7 @@ func (h *Harness) configure() error {
 	h.packs = selection
 	h.container = container
 	h.state = stateStore
+	h.pendingParses = pendingParses
 	h.Loop = agent.NewLoop(h.client, tools, engine, h.audit, prompt, loopOpts...)
 	h.mu.Unlock()
 
@@ -567,19 +600,41 @@ func stateStoreHandle(store *engagementstate.Store) agent.StateStore {
 
 // stateDigest adapts the engagement-state store to the loop's digest seam
 // (docs/engagement-state.md §8): the store owns when a digest is due, the loop
-// owns where it goes.
+// owns where it goes. The pending-parse obligations ride the same digest
+// (docs/parser-tool-contracts.md §4): an obligation appearing or clearing is a
+// digest-worthy change on its own, and its lines are appended to the store's
+// body, which is what makes the directive reach the model in the turn after
+// detection.
 //
 // It is wired to the main loop only — a subagent gets no digest — and it holds
 // the store the loop was built with, so an in-flight turn cannot be retargeted
 // by a concurrent mode switch.
-type stateDigest struct{ store *engagementstate.Store }
+type stateDigest struct {
+	store   *engagementstate.Store
+	pending *parsers.Tracker
+}
 
 // Digest implements agent.StateDigest.
 func (d stateDigest) Digest(force bool) (string, bool) {
 	if d.store == nil {
 		return "", false
 	}
-	return d.store.Digest(force)
+	if d.pending != nil {
+		d.pending.Reconcile()
+		force = force || d.pending.Due()
+	}
+	body, due := d.store.Digest(force)
+	if !due {
+		return "", false
+	}
+	if d.pending == nil {
+		return body, true
+	}
+	if lines := d.pending.Lines(); len(lines) > 0 {
+		body = body + "\n" + strings.Join(lines, "\n")
+	}
+	d.pending.Surfaced()
+	return body, true
 }
 
 // ensureMCP returns the session's MCP manager, creating and starting it on
@@ -1198,6 +1253,7 @@ func (h *Harness) Close() error {
 	h.mcp = nil
 	state := h.state
 	h.state = nil
+	h.pendingParses = nil
 	h.mu.Unlock()
 
 	if session != nil {
@@ -1608,6 +1664,7 @@ func (h *Harness) Status(busy bool) tui.Status {
 		Model:      h.currentModel(),
 		Provider:   h.providerText(),
 		Targets:    scopeText(eng),
+		Pending:    h.pendingParseText(),
 		Session:    shortID(h.SessionID()),
 		Isolation:  string(h.isolation()),
 		MCP:        mcpStatusText(h.MCPServers()),
@@ -1615,6 +1672,25 @@ func (h *Harness) Status(busy bool) tui.Status {
 		Cost:       h.costText(),
 		Busy:       busy,
 	}
+}
+
+// pendingParseText is the status bar's pending-parse readout
+// (docs/parser-tool-contracts.md §4): how many scanner artifacts are waiting for
+// their parser. It is empty in safe mode and when nothing is pending. The count
+// is read, not reconciled: the exec observer and the digest keep the obligation
+// set current, so the bar stays cheap enough to render every frame.
+func (h *Harness) pendingParseText() string {
+	h.mu.Lock()
+	tracker := h.pendingParses
+	h.mu.Unlock()
+	if tracker == nil {
+		return ""
+	}
+	count := tracker.Count()
+	if count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("parse %d pending", count)
 }
 
 // scopeText is the status bar's in-scope target readout when an engagement is

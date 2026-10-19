@@ -1,6 +1,10 @@
 package policy
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/mobley-trent/styx-agent/internal/parsers"
+)
 
 // Action is a rule-table action (§6.1). A matched rule's action is the
 // candidate verdict; precedence across matching rules is deny > prompt > allow.
@@ -145,5 +149,15 @@ func DefaultRules(mode Mode) *RuleTable {
 		Rule{Tool: "state_query", Action: stateAction, Source: "default"},
 		Rule{Tool: "state_update", Action: stateAction, Source: "default"},
 	)
+
+	// The parser tools are engagement-gated the same way, and for the same
+	// reason: a parse writes engagement state, so in safe mode there is nothing
+	// for it to write. They carry no scope targets either — the artifact is a
+	// local file and the parse reaches no network — so §6.1 handles them as a
+	// rule-table matter alone, with no scope question
+	// (docs/parser-tool-contracts.md §9).
+	for _, name := range parsers.Names() {
+		rules = append(rules, Rule{Tool: name, Action: stateAction, Source: "default"})
+	}
 	return &RuleTable{Rules: rules}
 }

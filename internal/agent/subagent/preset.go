@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mobley-trent/styx-agent/internal/agent"
+	"github.com/mobley-trent/styx-agent/internal/parsers"
 )
 
 // Network classifies a preset's reach (§5.4). A preset that is networkless has
@@ -96,8 +97,10 @@ var logTriageSection string
 // stateTools are the engagement-state tools every preset receives (§5.4 of
 // the spec, docs/engagement-state.md §7): parsers run inside subagents, so the
 // write path must reach them, and provenance already carries subagent
-// attribution.
-var stateTools = []string{"state_query", "state_update"}
+// attribution. The parser tools come with them — all four presets receive the
+// six (docs/parser-tool-contracts.md §9), because the subagent that runs a
+// scanner is the one that should parse its output.
+var stateTools = append([]string{"state_query", "state_update"}, parsers.Names()...)
 
 // presets is the built-in registry, in stable display order (§5.4).
 var presets = []Preset{

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.95 scan initiated Sun Oct 19 09:00:00 2026 as: nmap -sV -oX .styx/out/nmap-10.0.0.0_24.xml 10.0.0.0/24 -->
+<nmaprun scanner="nmap" args="nmap -sV -oX .styx/out/nmap-10.0.0.0_24.xml 10.0.0.0/24" start="1776579600" startstr="Sun Oct 19 09:00:00 2026" version="7.95" xmloutputversion="1.05">
+<scaninfo type="syn" protocol="tcp" numservices="1000" services="1-1000"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<host starttime="1776579601" endtime="1776579610"><status state="up" reason="syn-ack" reason_ttl="64"/>
+<address addr="10.0.0.5" addrtype="ipv4"/>
+<address addr="00:11:22:33:44:55" addrtype="mac" vendor="QEMU"/>
+<hostnames><hostname name="web01.acme.example" type="PTR"/></hostnames>
+<ports><port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="ssh" product="OpenSSH" version="9.6p1" extrainfo="Ubuntu Linux; protocol 2.0" ostype="Linux"/></port>
+<port protocol="tcp" portid="443"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="https" product="nginx" version="1.24.0"/></port>
+<port protocol="tcp" portid="8080"><state state="filtered" reason="no-response" reason_ttl="0"/><service name="unknown"/></port>
+<port protocol="udp" portid="161"><state state="open" reason="udp-response" reason_ttl="64"/><service name="snmp" product="net-snmp" version="5.9"/></port>
+</ports>
+<os><osmatch name="Linux 5.15 - 6.1" accuracy="98" line="63652"/></os>
+</host>
+<host starttime="1776579602" endtime="1776579602"><status state="down" reason="no-response" reason_ttl="0"/>
+<address addr="10.0.0.9" addrtype="ipv4"/>
+</host>
+<runstats><finished time="1776579700" timestr="Sun Oct 19 09:01:40 2026" elapsed="100.00" summary="Nmap done at Sun Oct 19 09:01:40 2026; 256 IP addresses (1 host up) scanned in 100.00 seconds" exit="success"/><hosts up="1" down="255" total="256"/></runstats>
+</nmaprun>

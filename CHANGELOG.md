@@ -18,6 +18,18 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- Parser tools: the six artifacts a red team actually produces — nmap XML, nuclei JSONL,
+  sqlmap logs, gobuster output, CrackMapExec/NetExec logs, and BloodHound collector JSON —
+  are read by harness-side tools (`nmap_parse`, `nuclei_parse`, `sqlmap_parse`,
+  `gobuster_parse`, `cme_parse`, `bloodhound_parse`) into engagement state: one extractor
+  per format, one atomic op batch, one receipt, with skipped records reported and never
+  guessed. A parse cannot take the scanner's word for it — an open port is a fact, not a
+  finding, and no parse escalates status or verification. Scanner output lands in
+  `.styx/out/`, which activation creates and gitignores, and the harness notices what
+  nobody parsed: argv sniffing plus an artifact watch put a
+  `pending parse: <artifact> → <parser>` directive in the state digest and a count in the
+  status bar, a nudge and never a block. Denied in safe mode, allowed and audited in
+  engagement mode, and available to every subagent preset. (#80)
 - Engagement state: a per-engagement record of what was observed — hosts,
   services, credentials, access, segments, findings, and the typed relationship
   graph over them — kept as one schema-versioned JSON document outside the

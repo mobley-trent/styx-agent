@@ -53,7 +53,11 @@ type Op struct {
 
 	// Kind is an upsert_entity's entity kind.
 	Kind Kind `json:"kind,omitempty"`
-	// ID is a target entity's harness id, when the caller already holds one.
+	// ID is the record's harness id. An upsert may supply one — that is how a
+	// harness-side batch references the records it writes in the same batch
+	// (docs/parser-tool-contracts.md §5) — and must otherwise leave it empty
+	// for the store to mint. A supplied id carries its own kind prefix and
+	// must be free; a natural-key match keeps the existing record's id.
 	ID string `json:"id,omitempty"`
 	// Active deactivates (false) or reactivates (true) an entity or finding.
 	// Absent keeps the record's current value; a new record starts active.
@@ -256,7 +260,7 @@ func (s *Store) upsertHost(d *document, op Op, prov Provenance, now time.Time) (
 		return Effect{Op: op.Op, Kind: string(KindHost), ID: e.ID}, nil
 	}
 
-	id, err := s.newID(d, KindHost)
+	id, err := s.recordID(d, KindHost, op.ID)
 	if err != nil {
 		return Effect{}, err
 	}
@@ -318,7 +322,7 @@ func (s *Store) upsertService(d *document, op Op, prov Provenance, now time.Time
 		return Effect{Op: op.Op, Kind: string(KindService), ID: e.ID}, nil
 	}
 
-	id, err := s.newID(d, KindService)
+	id, err := s.recordID(d, KindService, op.ID)
 	if err != nil {
 		return Effect{}, err
 	}
@@ -372,7 +376,7 @@ func (s *Store) upsertCredential(d *document, op Op, prov Provenance, now time.T
 		return Effect{Op: op.Op, Kind: string(KindCredential), ID: e.ID}, nil
 	}
 
-	id, err := s.newID(d, KindCredential)
+	id, err := s.recordID(d, KindCredential, op.ID)
 	if err != nil {
 		return Effect{}, err
 	}
@@ -439,7 +443,7 @@ func (s *Store) upsertAccess(d *document, op Op, prov Provenance, now time.Time)
 		return Effect{Op: op.Op, Kind: string(KindAccess), ID: e.ID}, nil
 	}
 
-	id, err := s.newID(d, KindAccess)
+	id, err := s.recordID(d, KindAccess, op.ID)
 	if err != nil {
 		return Effect{}, err
 	}
@@ -490,7 +494,7 @@ func (s *Store) upsertSegment(d *document, op Op, prov Provenance, now time.Time
 		return Effect{Op: op.Op, Kind: string(KindSegment), ID: e.ID}, nil
 	}
 
-	id, err := s.newID(d, KindSegment)
+	id, err := s.recordID(d, KindSegment, op.ID)
 	if err != nil {
 		return Effect{}, err
 	}
@@ -583,7 +587,7 @@ func (s *Store) upsertFinding(d *document, op Op, prov Provenance, now time.Time
 	if err := checkVerification(verification, 0); err != nil {
 		return Effect{}, err
 	}
-	id, err := s.newID(d, KindFinding)
+	id, err := s.recordID(d, KindFinding, op.ID)
 	if err != nil {
 		return Effect{}, err
 	}
@@ -628,9 +632,12 @@ func (s *Store) setStatus(d *document, op Op, prov Provenance) (Effect, error) {
 }
 
 // attachEvidence attaches one evidence item to a finding, stamped with the
-// harness's provenance. A caller supplies only the evidence's kind and ref.
+// harness's provenance. A caller supplies only the evidence's kind and ref. The
+// finding resolves by id, or — for a harness-side batch that cannot know the id
+// of a record it did not mint — by title, disambiguated by the op's affected
+// refs (§8 of docs/parser-tool-contracts.md).
 func (s *Store) attachEvidence(d *document, op Op, prov Provenance) (Effect, error) {
-	f, err := d.finding(op.Finding)
+	f, err := d.findingForEvidence(op.Finding, op.Affected)
 	if err != nil {
 		return Effect{}, err
 	}
