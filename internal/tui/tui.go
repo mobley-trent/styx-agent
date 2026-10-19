@@ -38,6 +38,11 @@ const (
 	// so it shows the run's recent tail; the run's full transcript prints to
 	// scrollback when it finishes.
 	liveTranscriptLines = 12
+	// liveReasoningLines is the most lines of streaming reasoning the live
+	// region shows. Reasoning follows the same rule as a subagent block: the
+	// fixed region shows the recent tail, and the whole block prints to
+	// scrollback when the turn commits it.
+	liveReasoningLines = 12
 	// diffViewLines is the most lines of an inline diff rendered in a live
 	// prompt card. A large diff is summarized there rather than flooding the
 	// fixed live region; the committed diff prints in full under the safety cap.
@@ -298,6 +303,11 @@ type Model struct {
 	// printed to the terminal's scrollback; flush drains it.
 	pending []string
 	partial string
+	// reasoning accumulates the in-flight turn's streamed reasoning_content. It
+	// renders dimmed in the live region and commits to the scrollback ahead of
+	// the answer it explains (docs/tui-parity.md, "Cheap win · Reasoning
+	// display").
+	reasoning string
 	// markdown renders committed assistant answers as formatted markdown,
 	// cached per theme and width (docs/tui-parity.md §3).
 	markdown markdownRenderer
@@ -575,6 +585,7 @@ func (m *Model) submit() tea.Cmd {
 		// scrollback: committed lines are immutable (ADR-0001). The app drops
 		// the conversation; the live region drops what it held (§9.4).
 		m.partial = ""
+		m.reasoning = ""
 		m.subagents = map[string]*subagentBlock{}
 		m.order = nil
 		if m.cfg.Clear != nil {
@@ -805,6 +816,10 @@ func (m *Model) View() tea.View {
 			b.WriteByte('\n')
 		}
 	}
+	for _, line := range m.reasoningBlock() {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
 	if m.partial != "" {
 		b.WriteString(strings.TrimRight(m.partial, "\n"))
 		b.WriteByte('\n')
@@ -822,6 +837,25 @@ func (m *Model) View() tea.View {
 	b.WriteString(m.statusLine())
 
 	return tea.NewView(b.String())
+}
+
+// reasoningBlock renders the streaming reasoning in the live region: dimmed,
+// and bounded to its recent tail, because the region is fixed and shallow. The
+// whole block prints to the scrollback when the turn commits it (ADR-0001).
+func (m *Model) reasoningBlock() []string {
+	if strings.TrimSpace(m.reasoning) == "" {
+		return nil
+	}
+	lines := strings.Split(strings.TrimRight(m.reasoning, "\n"), "\n")
+	if len(lines) > liveReasoningLines {
+		head := m.styles.card.Render(fmt.Sprintf("… %d earlier reasoning lines", len(lines)-liveReasoningLines))
+		lines = append([]string{head}, lines[len(lines)-liveReasoningLines:]...)
+	}
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		out = append(out, m.styles.reasoning.Render(ln))
+	}
+	return out
 }
 
 // syncTheme applies the theme the operator asked for: a /theme choice when one
@@ -922,10 +956,17 @@ func (m *Model) apply(ev sessions.Event) {
 		m.append("> " + ev.Text)
 	case sessions.KindTextDelta:
 		m.partial += ev.Text
+	case sessions.KindReasoningDelta:
+		// Reasoning streams dimmed above the answer. The deltas are superseded
+		// by the assembled assistant event's Reasoning, exactly as streamed
+		// text is superseded by its assembled Text.
+		m.reasoning += ev.Text
 	case sessions.KindAssistant:
 		// The assembled message supersedes any deltas already rendered, and it
 		// commits as rendered markdown: the deltas streamed raw above the
-		// prompt, the scrollback holds the formatted answer (§3).
+		// prompt, the scrollback holds the formatted answer (§3). Its reasoning
+		// commits first, dimmed, so the scrollback reads thinking-then-answer.
+		m.commitReasoning(ev.Reasoning)
 		m.partial = ""
 		if strings.TrimSpace(ev.Text) != "" {
 			m.append(m.markdown.render(ev.Text, m.styles, m.width))
@@ -1076,19 +1117,26 @@ func (m *Model) retire(key string) {
 func (m *Model) applySubagentEvent(ev sessions.Event) {
 	switch ev.Kind {
 	case sessions.KindTextDelta, sessions.KindReasoningDelta:
-		// Deltas are superseded by the assembled assistant event.
+		// Deltas are superseded by the assembled assistant event, which for a
+		// run carries both its text and its reasoning.
 		return
 	}
 	b := m.blockFor(runKey(ev))
 	if b == nil {
 		return
 	}
-	var rendered string
+	var rendered, previewText string
 	switch ev.Kind {
 	case sessions.KindAssistant:
 		// A subagent's answer is assistant output too, so it is formatted the
-		// same way — wrapped inside the block's own indentation.
-		rendered = m.markdown.render(ev.Text, m.styles, m.width-subagentIndent)
+		// same way — wrapped inside the block's own indentation — with its
+		// reasoning dimmed above it, as in the main stream. The header preview
+		// stays the answer's first line, not the thinking that preceded it.
+		answer := m.markdown.render(ev.Text, m.styles, m.width-subagentIndent)
+		rendered, previewText = answer, answer
+		if reasoning := strings.TrimSpace(ev.Reasoning); reasoning != "" {
+			rendered = renderReasoning(m.styles, reasoning) + "\n" + answer
+		}
 	case sessions.KindToolCall:
 		rendered = toolCallText(ev)
 	case sessions.KindToolResult:
@@ -1104,7 +1152,10 @@ func (m *Model) applySubagentEvent(ev sessions.Event) {
 		return
 	}
 	b.lines = append(b.lines, strings.Split(strings.TrimRight(rendered, "\n"), "\n")...)
-	if preview := firstLineText(stripANSI(rendered)); preview != "" {
+	if previewText == "" {
+		previewText = rendered
+	}
+	if preview := firstLineText(stripANSI(previewText)); preview != "" {
 		b.preview = preview
 	}
 }
@@ -1240,11 +1291,45 @@ func renderedRows(line string, width int) int {
 // markdown: a turn that ends without an assembled assistant event still prints
 // a formatted answer (§3).
 func (m *Model) commitPartial() {
+	// Reasoning always commits ahead of the text it explains, whether the turn
+	// finished, moved on to a tool call, or was cut short.
+	m.commitReasoning("")
 	if m.partial == "" {
 		return
 	}
 	m.append(m.markdown.render(m.partial, m.styles, m.width))
 	m.partial = ""
+}
+
+// commitReasoning commits the turn's reasoning to the scrollback, dimmed, and
+// clears it. assembled is the model's own assembled reasoning_content when the
+// caller has one (the assistant event); it supersedes the streamed deltas, the
+// same way the assembled answer supersedes streamed text. The block prints
+// whole: the cap that elides a pathological tool result points at the session
+// log, and an interrupted turn's reasoning deltas have no record there to
+// point at.
+func (m *Model) commitReasoning(assembled string) {
+	text := m.reasoning
+	m.reasoning = ""
+	if strings.TrimSpace(assembled) != "" {
+		text = assembled
+	}
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	m.append(renderReasoning(m.styles, text))
+}
+
+// renderReasoning renders a reasoning block for the transcript: every line
+// dimmed, so a committed answer stays visually distinct from the thinking that
+// preceded it. The terminal wraps a long line itself, as it does for tool
+// output.
+func renderReasoning(th theme, text string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	for i, ln := range lines {
+		lines[i] = th.reasoning.Render(strings.TrimRight(ln, " "))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // elidedLines applies the committed-output safety cap. Detail prints in full
