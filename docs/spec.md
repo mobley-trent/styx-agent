@@ -668,8 +668,12 @@ the missing variable (§1 fail on demand).
 ### 10.6 Engagement state
 
 - One schema-versioned JSON document per engagement, under
-  `~/.local/share/styx/engagements/<project>/<engagement-name>/state.json` — alongside the
+  `~/.local/share/styx/engagements/<project>/<engagement>/state.json` — alongside the
   session store and **never inside the repo**, because it holds credentials and loot.
+  `<project>` and `<engagement>` are directory components derived the way the session
+  store derives its own: the sanitized name plus a short hash of the raw value, so two
+  checkouts named alike, or two engagements whose names differ only in characters a file
+  name cannot hold, never share a record.
 - Writes are atomic (temp file + rename) and single-writer: a pid-checked lockfile guards
   them, a second concurrent session may read, and a write from it fails with a clear
   "locked by session X" error rather than clobbering a forensic record.
