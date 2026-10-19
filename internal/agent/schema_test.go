@@ -24,6 +24,8 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 		WebFetchTool(nil),
 		SSHLogsTool(nil),
 		ProposePlanTool(),
+		StateQueryTool(nil),
+		StateUpdateTool(nil),
 	}
 	if skillTool, ok := SkillTool(skillCatalog(t, map[string]string{
 		"demo": skillDoc("demo", "a demonstration skill", ""),

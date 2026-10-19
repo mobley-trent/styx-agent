@@ -41,6 +41,11 @@ type EngagementNotes struct {
 	Tools map[string]int
 	// Artifacts lists the workspace paths the session wrote.
 	Artifacts []string
+	// Findings is the engagement-state store's findings, one line each, as
+	// "severity · title (status, verification)". They come from the store, not
+	// from model recollection: the record is the source (§10.2,
+	// docs/engagement-state.md §9).
+	Findings []string
 }
 
 // AppendEngagementNotes appends a timestamped, structured engagement-notes
@@ -111,6 +116,12 @@ func renderEngagementNotes(n EngagementNotes) string {
 		arts := append([]string(nil), n.Artifacts...)
 		sort.Strings(arts)
 		line("- artifacts: %s", strings.Join(arts, ", "))
+	}
+	if len(n.Findings) > 0 {
+		line("- findings:")
+		for _, finding := range n.Findings {
+			line("  - %s", finding)
+		}
 	}
 	return b.String()
 }

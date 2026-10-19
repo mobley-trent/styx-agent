@@ -93,12 +93,18 @@ var exploitDevSection string
 //go:embed promptdata/log-triage.md
 var logTriageSection string
 
+// stateTools are the engagement-state tools every preset receives (§5.4 of
+// the spec, docs/engagement-state.md §7): parsers run inside subagents, so the
+// write path must reach them, and provenance already carries subagent
+// attribution.
+var stateTools = []string{"state_query", "state_update"}
+
 // presets is the built-in registry, in stable display order (§5.4).
 var presets = []Preset{
 	{
 		Name:        "coder",
 		Description: "Implement and modify code in the workspace, then build and test it.",
-		Tools:       []string{"read_file", "write_file", "edit_file", "glob", "grep", "bash", "code_exec"},
+		Tools:       append([]string{"read_file", "write_file", "edit_file", "glob", "grep", "bash", "code_exec"}, stateTools...),
 		MaxTurns:    DefaultMaxTurns,
 		Network:     NetworkNone,
 		section:     coderSection,
@@ -106,7 +112,7 @@ var presets = []Preset{
 	{
 		Name:        "recon",
 		Description: "Reconnaissance within the engagement scope: passive collection, then active probes.",
-		Tools:       []string{"web_fetch", "bash", "read_file", "glob", "grep"},
+		Tools:       append([]string{"web_fetch", "bash", "read_file", "glob", "grep"}, stateTools...),
 		MaxTurns:    DefaultMaxTurns,
 		Network:     NetworkScope,
 		section:     reconSection,
@@ -114,7 +120,7 @@ var presets = []Preset{
 	{
 		Name:            "exploit-dev",
 		Description:     "Develop and validate exploitation against authorized in-scope targets. Engagement-gated.",
-		Tools:           []string{"bash", "code_exec", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch"},
+		Tools:           append([]string{"bash", "code_exec", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch"}, stateTools...),
 		MaxTurns:        DefaultMaxTurns,
 		Network:         NetworkScope,
 		EngagementGated: true,
@@ -123,7 +129,7 @@ var presets = []Preset{
 	{
 		Name:        "log-triage",
 		Description: "Read-only log and forensic triage: correlate events, extract indicators, build a timeline.",
-		Tools:       []string{"read_file", "glob", "grep", "code_exec"},
+		Tools:       append([]string{"read_file", "glob", "grep", "code_exec"}, stateTools...),
 		MaxTurns:    DefaultMaxTurns,
 		Network:     NetworkNone,
 		section:     logTriageSection,

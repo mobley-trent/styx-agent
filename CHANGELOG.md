@@ -18,6 +18,17 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- Engagement state: a per-engagement record of what was observed — hosts,
+  services, credentials, access, segments, findings, and the typed relationship
+  graph over them — kept as one schema-versioned JSON document outside the
+  conversation, written atomically under a pid-checked lock. The model reaches
+  it through two audited tools, `state_query` and `state_update`, whose typed
+  ops are the only write path, so provenance is harness-stamped and a finding
+  cannot be verified before it has evidence. Because the record lives on disk,
+  compaction can never touch it; a digest of it is appended to the prompt when
+  state changes, and the engagement-end notes in STYX.md are generated from it.
+  Both tools are denied in safe mode, where there is no store to touch, and
+  allowed and audited in engagement mode. (#78)
 - Model reasoning prints dimmed inline as part of the transcript: thinking
   streams above the answer while a turn runs, commits to the scrollback ahead
   of the answer it explains, and stays visually distinct from both answers and

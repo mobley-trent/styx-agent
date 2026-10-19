@@ -39,6 +39,9 @@ func fullRegistry(t *testing.T, ran map[string]*int32) *agent.Registry {
 	names := []string{
 		"read_file", "write_file", "edit_file", "glob", "grep",
 		"bash", "code_exec", "web_fetch", "ssh_logs",
+		// Every preset receives the engagement-state tools (§5.4), so a
+		// session's registry must carry them for a run to start at all.
+		"state_query", "state_update",
 		agent.DispatchSubagentToolName,
 	}
 	tools := make([]agent.Tool, 0, len(names))

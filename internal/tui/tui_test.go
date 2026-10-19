@@ -916,6 +916,23 @@ func TestStreamRendersCompaction(t *testing.T) {
 	}
 }
 
+func TestStreamRendersStateDigestAsOneLine(t *testing.T) {
+	h := newHarness(t)
+	h.update(EventMsg{Event: sessions.Event{
+		Kind: sessions.KindStateDigest,
+		Text: "engagement state — revision 4\nhosts 2 · services 3\nfindings 1 (1 open, 1 unverified)",
+	}})
+	got := h.printedText()
+	if !strings.Contains(got, "engagement state — revision 4") {
+		t.Errorf("the digest's headline is not rendered:\n%s", got)
+	}
+	// The digest is a harness note, not model output: its body stays in the
+	// prompt and the session log, and the scrollback keeps one line.
+	if strings.Contains(got, "hosts 2") {
+		t.Errorf("the digest should commit as a single line:\n%s", got)
+	}
+}
+
 func TestThemeAutoSelectsFromBackground(t *testing.T) {
 	h := newHarness(t)
 

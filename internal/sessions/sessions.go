@@ -42,6 +42,12 @@ const (
 	KindToolResult Kind = "tool_result"
 	// KindCompaction is a compaction event (§4.5).
 	KindCompaction Kind = "compaction"
+	// KindStateDigest is the engagement-state digest appended to the
+	// conversation when state changes (docs/engagement-state.md §8). The record
+	// itself lives outside the conversation; the digest is a derived view, so
+	// it is ordinary persisted, evictable content — compaction may evict it,
+	// never the state it describes.
+	KindStateDigest Kind = "state_digest"
 	// KindEngagement is an engagement gate activation (§7.2).
 	KindEngagement Kind = "engagement"
 	// KindError is a turn-aborting failure (§4.4).

@@ -248,6 +248,12 @@ Three layers, in order:
    event. `/compact` remains the manual override and accepts a custom instruction.
 3. **Never compacted, ever:** system prompt, STYX.md, engagement context, ROE state, audit
    trail. The model may forget a file listing; never an authorization boundary.
+4. **Engagement state survives compaction by construction.** The record lives on disk
+   (§10.6), outside the conversation, so compaction operates on *views* of it at most — the
+   state digest is ordinary evictable content (§5.1, docs/engagement-state.md §8), and
+   losing it loses a view, never the record. Only the audited, schema-validated state ops
+   can write the store, so no model output reaches it through a summary either. (#74,
+   `docs/engagement-state.md`)
 
 Cache economics: compaction invalidates the exact-prefix cache once (~one-time cost); the
 hysteresis band, byte-stable prefix, low watermark, and no-rolling-summarization rule keep
@@ -271,6 +277,8 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `ssh_logs` | read-only remote log fetch over SSH; harness-enforced read-only command allowlist (cat/tail/grep/zgrep-class) | scope-checked |
 | `dispatch_subagent` | spawn a role-preset subagent | n/a (delegates to its tools) |
 | `skill` | invoke a loaded agent skill (§8.4) | delegates to its steps |
+| `state_query` | read engagement state: entities, findings, neighborhood reads over the relationship graph | no |
+| `state_update` | write engagement state through typed, atomic ops (upserts, evidence, status, verification, edges) | no |
 
 One exec surface per mechanism: `bash` for shell, `code_exec` for language runtimes.
 Strict mode applies to all built-ins; the repair layer validates their arguments.
@@ -312,10 +320,14 @@ Nothing bypasses this order — MCP tools included.
 
 | Preset | Tools | Network |
 |---|---|---|
-| `coder` | fs + bash/code_exec | none |
-| `recon` | web_fetch + bash + fs-read | scope-checked |
-| `exploit-dev` | exec + fs + web_fetch | scope-checked, engagement-gated |
-| `log-triage` | fs-read + code_exec | none |
+| `coder` | fs + bash/code_exec + state | none |
+| `recon` | web_fetch + bash + fs-read + state | scope-checked |
+| `exploit-dev` | exec + fs + web_fetch + state | scope-checked, engagement-gated |
+| `log-triage` | fs-read + code_exec + state | none |
+
+"state" is `state_query` + `state_update` (docs/engagement-state.md §7): parsers run inside
+subagents, so the write path must reach them, and provenance already carries subagent
+attribution.
 
 None receive `dispatch_subagent`. Presets are pack-agnostic (§8.5).
 
@@ -354,6 +366,12 @@ Every tool call resolves to exactly one verdict: **allow / prompt / deny**.
   may narrow defaults and may widen prompts to allows, but **may never weaken the ROE
   hard limits (§6.3) or engagement scope checks**.
 - The engagement file authorizes **scope only, never tool rules**.
+- `state_query` / `state_update` are the one deliberate mode difference:
+  **safe mode denies them** (there is no engagement, so there is no store to touch) and
+  **engagement mode allows them, audited** — writes included, because a prompt per state
+  write is unworkable volume once parsers and subagents are writing findings, and the audit
+  trail is the control. Neither tool carries scope targets, so this is a rule-table matter
+  alone. (docs/engagement-state.md §7)
 
 ### 6.2 Mode interaction
 
@@ -646,6 +664,26 @@ shadows global on name collision (§8.4).
 model context, never persisted by styx. Its absence is not a startup error: the harness
 starts degraded and the first prompt that needs the provider fails with a message naming
 the missing variable (§1 fail on demand).
+
+### 10.6 Engagement state
+
+- One schema-versioned JSON document per engagement, under
+  `~/.local/share/styx/engagements/<project>/<engagement>/state.json` — alongside the
+  session store and **never inside the repo**, because it holds credentials and loot.
+  `<project>` and `<engagement>` are directory components derived the way the session
+  store derives its own: the sanitized name plus a short hash of the raw value, so two
+  checkouts named alike, or two engagements whose names differ only in characters a file
+  name cannot hold, never share a record.
+- Writes are atomic (temp file + rename) and single-writer: a pid-checked lockfile guards
+  them, a second concurrent session may read, and a write from it fails with a clear
+  "locked by session X" error rather than clobbering a forensic record.
+- `schema_version` starts at 1; readers tolerate unknown additive keys (the same-major
+  contract as session JSONL and config), and an incompatible major refuses loudly, naming
+  the file. No automatic migration in v1.
+- The store persists until the operator deletes it: deactivation and session end keep it,
+  and nothing auto-prunes on engagement expiry.
+- Implementation: `internal/engagementstate`; model `docs/engagement-state.md`, rationale
+  ADR-0004.
 
 ---
 

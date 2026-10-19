@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"strings"
+
 	"github.com/mobley-trent/styx-agent/internal/model"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
 )
@@ -61,6 +63,14 @@ func Conversation(events []sessions.Event) []model.Message {
 				ToolCallID: ev.CallID,
 				Content:    content,
 			})
+		case sessions.KindStateDigest:
+			// A digest is a harness-appended view of engagement state, replayed
+			// where it was appended so a resumed session still sees the state its
+			// conversation carried (docs/engagement-state.md §8).
+			if strings.TrimSpace(ev.Text) == "" {
+				continue
+			}
+			messages = append(messages, model.Message{Role: model.RoleSystem, Content: digestMessage(ev.Text)})
 		}
 	}
 	return dropDanglingCalls(messages)
