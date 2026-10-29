@@ -25,6 +25,14 @@ func (r Result) Text() string {
 					describeNode(closest.Node), missingPhrase(closest.Missing), describeNode(r.Target))
 			}
 		}
+		if len(r.Opportunities) > 0 {
+			b.WriteString("  exploit opportunities (unrun findings on nodes you can already reach):\n")
+			for _, opportunity := range r.Opportunities {
+				fmt.Fprintf(&b, "    %s on %s · %s · confidence=%s\n",
+					describeNode(opportunity.Finding), describeNode(opportunity.Node),
+					opportunity.Verification, opportunity.Confidence)
+			}
+		}
 		if r.Note != "" {
 			fmt.Fprintf(&b, "  note: %s\n", r.Note)
 		}
@@ -45,12 +53,8 @@ func (r Result) Text() string {
 			continue
 		}
 		for _, step := range path.Steps {
-			fmt.Fprintf(&b, "   - %s · %s → %s · confidence=%s", step.Kind,
-				describeNode(step.From), describeNode(step.To), step.Confidence)
-			if step.Verification != "" {
-				fmt.Fprintf(&b, " · verification=%s", step.Verification)
-			}
-			fmt.Fprintf(&b, " · cost=%d\n", step.Cost)
+			fmt.Fprintf(&b, "   - %s · %s → %s · confidence=%s · cost=%d\n", step.Kind,
+				describeNode(step.From), describeNode(step.To), step.Confidence, step.Cost)
 			fmt.Fprintf(&b, "     basis: %s\n", describeBasis(step.Basis))
 		}
 	}
@@ -68,15 +72,8 @@ func describeNode(node Node) string {
 	return node.ID + " (" + node.Label + ")"
 }
 
-// describeBasis names the stored record a step derives from.
+// describeBasis names the stored edge a step derives from.
 func describeBasis(basis Basis) string {
-	if basis.FindingID != "" {
-		line := fmt.Sprintf("finding %s %q", basis.FindingID, basis.FindingTitle)
-		if basis.Verification != "" {
-			line += " (" + string(basis.Verification) + ")"
-		}
-		return line
-	}
 	return fmt.Sprintf("edge %s %s → %s", basis.EdgeType, basis.EdgeFrom, basis.EdgeTo)
 }
 
@@ -91,8 +88,6 @@ func missingPhrase(kind StepKind) string {
 		return "one admin step away"
 	case Pivot:
 		return "one pivot away"
-	case Exploit:
-		return "one exploit away"
 	}
 	return "one step away"
 }

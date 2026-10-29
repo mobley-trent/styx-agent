@@ -91,6 +91,7 @@ A captured secret — password, hash, key, or token — with its principal and w
 
 **Access**
 A foothold: an established principal operating on a target at a stated level (user, admin, system).
+Held, never prospective — a foothold an exploit produced is still one you have.
 
 **Segment**
 A labeled network range grouping hosts in engagement state.
@@ -105,12 +106,17 @@ for the model to act on. A suggestion, never an auto-executed step.
 
 **Capability step**
 A derived, actionable projection of a relationship-graph edge into a directed, costed action —
-pivot, harvest a credential, use one, become admin, or exploit. Derived on read; never a stored
-record.
+pivot, harvest a credential, use one, or become admin. Derived on read; never a stored record.
+Exploitation is not one: an exploit that ran is provenance on the foothold it produced.
+
+**Exploit opportunity**
+An unexploited finding on a host or service current access can already reach, offered as a hint
+beside an unreachable attack path. Not a step and never priced: the record does not say what
+foothold an unrun exploit would yield.
 
 **Path cost**
 The cost of an attack path: the sum of its capability steps' costs, each a base cost modified by
-the confidence, verification, and OPSEC-noise enums. A ranking, never a probability.
+the confidence and OPSEC-noise enums. A ranking, never a probability.
 
 **State digest**
 The compact, derived view of engagement state appended to the conversation when state changes — a view of the record, never the record itself.
