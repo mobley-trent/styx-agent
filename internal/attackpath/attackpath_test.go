@@ -42,9 +42,9 @@ func edgeOf(kind engagementstate.EdgeType, from, to string, confidence engagemen
 	return engagementstate.Edge{Type: kind, From: from, To: to, Confidence: confidence}
 }
 
-// costModelState is the state from docs/attack-paths.md §3 before the exploit
-// has run: one foothold, two credentials, and a vulnerable host. Its two
-// cheapest routes are 26 (admin via cred-aaaa) and 42 (cred-bbbb).
+// costModelState is the state from docs/attack-paths.md §3: one foothold, two
+// credentials, and a vulnerable host. Its two cheapest routes are 26 (admin
+// via cred-aaaa) and 42 (cred-bbbb).
 func costModelState() engagementstate.Snapshot {
 	return engagementstate.Snapshot{
 		SchemaVersion: engagementstate.SchemaVersion,
@@ -73,7 +73,7 @@ func costModelState() engagementstate.Snapshot {
 }
 
 // exploitedState is costModelState once finding-cccc has produced a foothold
-// on the target — the full state of the design doc's worked example.
+// on the target — the state the design doc's worked example ends at.
 func exploitedState() engagementstate.Snapshot {
 	snapshot := costModelState()
 	snapshot.Entities = append(snapshot.Entities, accessEntity("access-9f9f", "host-4444", engagementstate.LevelAdmin))
@@ -164,7 +164,6 @@ func TestProjectionPinsTheCostModel(t *testing.T) {
 		{"host-2222", HarvestCredential, "cred-aaaa", 4},
 		{"cred-aaaa", AdminVia, "host-4444", 2},
 		{"cred-bbbb", UseCredential, "host-4444", 18},
-		{"host-3333", Exploit, "access-9f9f", 288},
 	}
 	for _, tc := range cases {
 		step, ok := findStep(graph, tc.from, tc.kind, tc.to)
@@ -179,46 +178,27 @@ func TestProjectionPinsTheCostModel(t *testing.T) {
 	if _, ok := findStep(graph, "cred-aaaa", UseCredential, "host-4444"); ok {
 		t.Error("a credential with ADMIN_OF the target still yields a use_credential step; it must be subsumed")
 	}
-
-	verified := exploitedState()
-	verified.Findings[0].Verification = engagementstate.VerificationVerified
-	verified.Findings[0].Evidence = []engagementstate.Evidence{{Kind: engagementstate.EvidenceCLIOutput, Ref: "cli.txt"}}
-	graph, err = project(verified)
-	if err != nil {
-		t.Fatalf("project(verified) = %v", err)
-	}
-	step, ok := findStep(graph, "host-3333", Exploit, "access-9f9f")
-	if !ok {
-		t.Fatal("missing the exploit step of a verified finding")
-	}
-	if step.Cost != 96 {
-		t.Errorf("verified exploit cost = %d, want 96", step.Cost)
+	// A recorded exploitation is provenance on the foothold it produced, not a
+	// capability step (§2): nothing may enter access-9f9f, and it starts at
+	// cost 0 as a source instead.
+	if steps := graph.rev["access-9f9f"]; len(steps) != 0 {
+		t.Errorf("a recorded exploitation produced steps into its foothold: %+v", steps)
 	}
 }
 
-func TestProjectionExcludesRefutedFindingsAndInactiveNodes(t *testing.T) {
-	refuted := exploitedState()
-	refuted.Findings[0].Verification = engagementstate.VerificationRefuted
-	graph, err := project(refuted)
-	if err != nil {
-		t.Fatalf("project(refuted) = %v", err)
-	}
-	if _, ok := findStep(graph, "host-3333", Exploit, "access-9f9f"); ok {
-		t.Error("a refuted finding produced an exploit step")
-	}
-
+func TestProjectionExcludesInactiveNodesAndAttributeEdges(t *testing.T) {
 	inactiveHost := exploitedState()
 	for i := range inactiveHost.Entities {
 		if inactiveHost.Entities[i].ID == "host-3333" {
 			inactiveHost.Entities[i].Active = false
 		}
 	}
-	graph, err = project(inactiveHost)
+	graph, err := project(inactiveHost)
 	if err != nil {
 		t.Fatalf("project(inactive host) = %v", err)
 	}
-	if _, ok := findStep(graph, "host-3333", Exploit, "access-9f9f"); ok {
-		t.Error("an inactive host produced an exploit step")
+	if _, ok := findStep(graph, "access-1a2b", Pivot, "host-3333"); ok {
+		t.Error("an inactive host is still the target of a pivot step")
 	}
 
 	inactiveCred := exploitedState()
@@ -254,10 +234,10 @@ func TestProjectionExcludesRefutedFindingsAndInactiveNodes(t *testing.T) {
 	}
 }
 
-// TestComputeExploitDerivedFootholdIsHeld pins the consequence of §4's source
-// rule: an access recorded from an exploit is current access, so a write-up
-// that treats it as a future foothold (§3's third route) is a planning
-// fiction. The target is held, and the zero-step result wins.
+// TestComputeExploitDerivedFootholdIsHeld pins §4's source rule: an access
+// recorded from an exploit is current access, so a write-up that treats it as
+// a future foothold is a planning fiction. The target is held, the zero-step
+// result wins, and no route is priced around an exploit the record says ran.
 func TestComputeExploitDerivedFootholdIsHeld(t *testing.T) {
 	result, err := Compute(exploitedState(), "host-4444", DefaultK)
 	if err != nil {
@@ -376,8 +356,7 @@ func TestComputeTargetResolution(t *testing.T) {
 }
 
 func TestComputeUnreachable(t *testing.T) {
-	snapshot := costModelState()
-	snapshot.Entities = append(snapshot.Entities, hostEntity("host-5555", "10.0.0.55", "isolated"))
+	snapshot := unreachableState()
 
 	result, err := Compute(snapshot, "host-5555", DefaultK)
 	if err != nil {
@@ -394,6 +373,79 @@ func TestComputeUnreachable(t *testing.T) {
 	}
 	if !strings.Contains(result.Text(), "no node reachable from current access leads toward the target") {
 		t.Errorf("text = %q, want the empty-closest explanation", result.Text())
+	}
+}
+
+// unreachableState is costModelState plus a host nothing reaches: the shape
+// that produces the unreachable result and its opportunity hints.
+func unreachableState() engagementstate.Snapshot {
+	snapshot := costModelState()
+	snapshot.Entities = append(snapshot.Entities, hostEntity("host-5555", "10.0.0.55", "isolated"))
+	return snapshot
+}
+
+// TestComputeOffersUnexploitedFindings pins §5's opportunity hints: an
+// unreachable result names the unrun findings sitting on nodes current access
+// can already reach, and stops naming one as soon as it is exploited, refuted,
+// or sits somewhere the engagement cannot reach.
+func TestComputeOffersUnexploitedFindings(t *testing.T) {
+	result, err := Compute(unreachableState(), "host-5555", DefaultK)
+	if err != nil {
+		t.Fatalf("Compute() = %v", err)
+	}
+	if result.Outcome != OutcomeUnreachable {
+		t.Fatalf("outcome = %q, want unreachable", result.Outcome)
+	}
+	if len(result.Opportunities) != 1 {
+		t.Fatalf("opportunities = %+v, want the one unrun finding", result.Opportunities)
+	}
+	opportunity := result.Opportunities[0]
+	if opportunity.Finding.ID != "finding-cccc" || opportunity.Node.ID != "host-3333" {
+		t.Errorf("opportunity = %+v, want finding-cccc on host-3333", opportunity)
+	}
+	if opportunity.Verification != engagementstate.VerificationUnverified {
+		t.Errorf("verification = %q, want unverified", opportunity.Verification)
+	}
+	text := result.Text()
+	for _, want := range []string{
+		"exploit opportunities",
+		"finding-cccc (SMB signing disabled) on host-3333 (web02 10.0.0.33)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text should contain %q:\n%s", want, text)
+		}
+	}
+
+	exploited := unreachableState()
+	exploited.Entities = append(exploited.Entities, accessEntity("access-9f9f", "host-3333", engagementstate.LevelUser))
+	exploited.Edges = append(exploited.Edges,
+		edgeOf(engagementstate.EdgeExploitedVia, "finding-cccc", "access-9f9f", engagementstate.ConfidenceHigh))
+	result, err = Compute(exploited, "host-5555", DefaultK)
+	if err != nil {
+		t.Fatalf("Compute(exploited) = %v", err)
+	}
+	if len(result.Opportunities) != 0 {
+		t.Errorf("an exploited finding is still offered as an opportunity: %+v", result.Opportunities)
+	}
+
+	refuted := unreachableState()
+	refuted.Findings[0].Verification = engagementstate.VerificationRefuted
+	result, err = Compute(refuted, "host-5555", DefaultK)
+	if err != nil {
+		t.Fatalf("Compute(refuted) = %v", err)
+	}
+	if len(result.Opportunities) != 0 {
+		t.Errorf("a refuted finding is offered as an opportunity: %+v", result.Opportunities)
+	}
+
+	outOfReach := unreachableState()
+	outOfReach.Findings[0].Affected = []string{"host-5555"}
+	result, err = Compute(outOfReach, "host-5555", DefaultK)
+	if err != nil {
+		t.Fatalf("Compute(out-of-reach finding) = %v", err)
+	}
+	if len(result.Opportunities) != 0 {
+		t.Errorf("a finding on an unreachable node is offered as an opportunity: %+v", result.Opportunities)
 	}
 }
 

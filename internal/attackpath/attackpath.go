@@ -57,9 +57,13 @@ const (
 	AdminVia StepKind = "admin_via"
 	// Pivot is PIVOT_TO: this foothold reaches that host.
 	Pivot StepKind = "pivot"
-	// Exploit is EXPLOITED_VIA: run the vulnerability, gain the foothold.
-	Exploit StepKind = "exploit"
 )
+
+// The step set carries no exploit mechanism. A finding's EXPLOITED_VIA edge is
+// retrospective — it records the foothold an exploit already produced, which is
+// an active access and therefore a cost-0 source (docs/attack-paths.md §2).
+// Unexploited findings reach the model as opportunities beside an unreachable
+// result, never as priced steps.
 
 // Outcome is a result's shape. Every branch is named: the computation never
 // returns an empty result to mean "nothing".
@@ -87,20 +91,12 @@ type Node struct {
 	Label string
 }
 
-// Basis names what a step derives from: the stored edge, or — for an exploit
-// step — the finding whose verification priced it (docs/attack-paths.md §5).
+// Basis names the stored edge a step derives from (docs/attack-paths.md §5).
 type Basis struct {
-	// EdgeType, EdgeFrom, and EdgeTo identify the stored edge a non-exploit
-	// step derives from.
+	// EdgeType, EdgeFrom, and EdgeTo identify the stored edge.
 	EdgeType engagementstate.EdgeType
 	EdgeFrom string
 	EdgeTo   string
-	// FindingID and FindingTitle identify the finding an exploit step derives
-	// from.
-	FindingID    string
-	FindingTitle string
-	// Verification is that finding's verification state.
-	Verification engagementstate.Verification
 }
 
 // Step is one capability step in a route.
@@ -110,12 +106,8 @@ type Step struct {
 	To   Node
 	// Kind is the mechanism.
 	Kind StepKind
-	// Confidence is the stored edge's confidence, or the finding's confidence
-	// for an exploit step.
+	// Confidence is the stored edge's confidence.
 	Confidence engagementstate.Confidence
-	// Verification is the finding's verification for an exploit step, empty
-	// otherwise.
-	Verification engagementstate.Verification
 	// Cost is the integer price of the step (docs/attack-paths.md §3).
 	Cost int
 	// Basis is the stored record the step derives from.
@@ -132,6 +124,21 @@ type Path struct {
 	Rationale string
 	// Steps are the ordered capability steps.
 	Steps []Step
+}
+
+// Opportunity is one unexploited finding on a node current access can already
+// reach: a hint beside an unreachable result, never a priced step
+// (docs/attack-paths.md §5).
+type Opportunity struct {
+	// Finding is the unexploited finding.
+	Finding Node
+	// Node is the finding's affected host or service, reachable from current
+	// access.
+	Node Node
+	// Confidence is the finding's confidence.
+	Confidence engagementstate.Confidence
+	// Verification is the finding's verification state.
+	Verification engagementstate.Verification
 }
 
 // Closest is one bounded diagnostic line for an unreachable target: a node
@@ -158,6 +165,9 @@ type Result struct {
 	// Closest is the bounded unreachable diagnostic. Only OutcomeUnreachable
 	// carries any.
 	Closest []Closest
+	// Opportunities are unexploited findings on nodes current access can
+	// already reach: hints, never steps. Only OutcomeUnreachable carries any.
+	Opportunities []Opportunity
 	// Note is an ordinary caveat: fewer than K routes, or a truncated search.
 	Note string
 }
@@ -216,10 +226,11 @@ func Compute(snapshot engagementstate.Snapshot, target string, k int) (Result, e
 	records, capped := graph.paths(sources, resolved.ID, k)
 	if len(records) == 0 {
 		return Result{
-			Outcome: OutcomeUnreachable,
-			Target:  resolved,
-			Closest: graph.closest(sources, resolved.ID),
-			Note:    lengthCapNote(capped, ""),
+			Outcome:       OutcomeUnreachable,
+			Target:        resolved,
+			Closest:       graph.closest(sources, resolved.ID),
+			Opportunities: graph.opportunities(snapshot, sources),
+			Note:          lengthCapNote(capped, ""),
 		}, nil
 	}
 
@@ -256,7 +267,8 @@ type graph struct {
 
 // project derives the capability step set from the snapshot's stored edges
 // (docs/attack-paths.md §2). Attribute edges are never traversed, inactive
-// endpoints produce no steps, and a refuted finding produces no exploit step.
+// endpoints produce no steps, and a finding never produces one: EXPLOITED_VIA
+// is provenance on the foothold an exploit already produced.
 func project(snapshot engagementstate.Snapshot) (*graph, error) {
 	if len(snapshot.Entities)+len(snapshot.Findings) > MaxNodes {
 		return nil, fmt.Errorf("%w: the relationship graph has %d nodes; the cap is %d",
@@ -302,7 +314,7 @@ func project(snapshot engagementstate.Snapshot) (*graph, error) {
 		case engagementstate.EdgeCredentialFrom:
 			// Reversed: reaching where the secret came from makes it
 			// obtainable.
-			add(g.step(edge.To, edge.From, HarvestCredential, confidence, "", Basis{
+			add(g.step(edge.To, edge.From, HarvestCredential, confidence, Basis{
 				EdgeType: edge.Type, EdgeFrom: edge.From, EdgeTo: edge.To,
 			}))
 		case engagementstate.EdgeValidFor:
@@ -312,35 +324,17 @@ func project(snapshot engagementstate.Snapshot) (*graph, error) {
 				// escalation for the same pair.
 				continue
 			}
-			add(g.step(edge.From, edge.To, UseCredential, confidence, "", Basis{
+			add(g.step(edge.From, edge.To, UseCredential, confidence, Basis{
 				EdgeType: edge.Type, EdgeFrom: edge.From, EdgeTo: edge.To,
 			}))
 		case engagementstate.EdgeAdminOf:
-			add(g.step(edge.From, edge.To, AdminVia, confidence, "", Basis{
+			add(g.step(edge.From, edge.To, AdminVia, confidence, Basis{
 				EdgeType: edge.Type, EdgeFrom: edge.From, EdgeTo: edge.To,
 			}))
 		case engagementstate.EdgePivotTo:
-			add(g.step(edge.From, edge.To, Pivot, confidence, "", Basis{
+			add(g.step(edge.From, edge.To, Pivot, confidence, Basis{
 				EdgeType: edge.Type, EdgeFrom: edge.From, EdgeTo: edge.To,
 			}))
-		case engagementstate.EdgeExploitedVia:
-			finding, ok := snapshot.Finding(edge.From)
-			if !ok || finding.Verification == engagementstate.VerificationRefuted {
-				continue
-			}
-			// The exploit originates at the finding's affected host or
-			// service: the vulnerability can only be run from the vulnerable
-			// node.
-			for _, affected := range finding.Affected {
-				if !g.live[affected] {
-					continue
-				}
-				add(g.step(affected, edge.To, Exploit, defaultConfidence(finding.Confidence),
-					finding.Verification, Basis{
-						FindingID: finding.ID, FindingTitle: finding.Title,
-						Verification: finding.Verification,
-					}))
-			}
 		}
 		if g.steps > MaxSteps {
 			return nil, fmt.Errorf("%w: the capability projection has more than %d steps", ErrCap, MaxSteps)
@@ -357,16 +351,14 @@ func project(snapshot engagementstate.Snapshot) (*graph, error) {
 }
 
 // step builds one step with its priced cost and the record it derives from.
-func (g *graph) step(from, to string, kind StepKind, confidence engagementstate.Confidence,
-	verification engagementstate.Verification, basis Basis) Step {
+func (g *graph) step(from, to string, kind StepKind, confidence engagementstate.Confidence, basis Basis) Step {
 	return Step{
-		From:         g.nodes[from],
-		To:           g.nodes[to],
-		Kind:         kind,
-		Confidence:   confidence,
-		Verification: verification,
-		Cost:         stepCost(kind, confidence, verification),
-		Basis:        basis,
+		From:       g.nodes[from],
+		To:         g.nodes[to],
+		Kind:       kind,
+		Confidence: confidence,
+		Cost:       stepCost(kind, confidence),
+		Basis:      basis,
 	}
 }
 
@@ -389,28 +381,23 @@ var baseCost = map[StepKind]int{
 	AdminVia:          2,
 	UseCredential:     3,
 	Pivot:             5,
-	Exploit:           8,
 }
 
 // noiseFactor is the static per-mechanism OPSEC multiplier (§3): a login is
-// quiet, reading files and authenticating are visible, pivoting and exploiting
-// are noisy. Per-instance detectability needs a schema change and is not v1.
+// quiet, reading files and authenticating are visible, pivoting is noisy.
+// Per-instance detectability needs a schema change and is not v1.
 var noiseFactor = map[StepKind]int{
 	HarvestCredential: 2,
 	AdminVia:          1,
 	UseCredential:     2,
 	Pivot:             4,
-	Exploit:           4,
 }
 
-// stepCost prices one step: base × confidence × verification (exploit only) ×
-// noise, all integers (§3).
-func stepCost(kind StepKind, confidence engagementstate.Confidence, verification engagementstate.Verification) int {
-	cost := baseCost[kind] * confidenceFactor(confidence) * noiseFactor[kind]
-	if kind == Exploit {
-		cost *= verificationFactor(verification)
-	}
-	return cost
+// stepCost prices one step: base × confidence × noise, all integers (§3).
+// Nothing is priced by a finding, so verification does not enter the cost
+// model: a refuted finding is excluded from the diagnostics instead.
+func stepCost(kind StepKind, confidence engagementstate.Confidence) int {
+	return baseCost[kind] * confidenceFactor(confidence) * noiseFactor[kind]
 }
 
 // confidenceFactor maps the enum to its multiplier. An empty confidence is the
@@ -426,15 +413,12 @@ func confidenceFactor(c engagementstate.Confidence) int {
 	}
 }
 
-// verificationFactor prices an exploit's verification: verifying a finding
-// makes its route cheaper; refuted findings never enter the graph.
-func verificationFactor(v engagementstate.Verification) int {
-	switch v {
-	case engagementstate.VerificationVerified:
-		return 1
-	default:
-		return 3
+// defaultVerification replaces an empty verification with the store's default.
+func defaultVerification(v engagementstate.Verification) engagementstate.Verification {
+	if v == "" {
+		return engagementstate.VerificationUnverified
 	}
+	return v
 }
 
 // defaultConfidence replaces an empty edge confidence with the store's default.
@@ -493,8 +477,6 @@ func (g *graph) arrivalLevel(steps []Step) string {
 		return engagementstate.LevelAdmin
 	case UseCredential:
 		return engagementstate.LevelUser
-	case Exploit:
-		return g.levels[last.To.ID]
 	case Pivot:
 		return g.levels[last.From.ID]
 	}
@@ -524,8 +506,6 @@ func mechanismWords(kind StepKind) string {
 		return "admin access"
 	case Pivot:
 		return "pivot"
-	case Exploit:
-		return "exploit"
 	}
 	return string(kind)
 }
@@ -706,6 +686,48 @@ func (g *graph) closest(sources []string, target string) []Closest {
 			return out[i].Distance < out[j].Distance
 		}
 		return out[i].Node.ID < out[j].Node.ID
+	})
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
+}
+
+// opportunities lists up to three unexploited findings on nodes current access
+// can already reach (§5). They are hints, not steps: nothing is priced, and
+// nothing claims what foothold an exploit that has not run would yield.
+func (g *graph) opportunities(snapshot engagementstate.Snapshot, sources []string) []Opportunity {
+	reachable := g.reachable(sources)
+	exploited := make(map[string]bool, len(snapshot.Edges))
+	for _, edge := range snapshot.Edges {
+		if edge.Type == engagementstate.EdgeExploitedVia {
+			exploited[edge.From] = true
+		}
+	}
+
+	out := make([]Opportunity, 0, 3)
+	for _, finding := range snapshot.Findings {
+		if !finding.Active || exploited[finding.ID] ||
+			finding.Verification == engagementstate.VerificationRefuted {
+			continue
+		}
+		for _, affected := range finding.Affected {
+			if !g.live[affected] || !reachable[affected] {
+				continue
+			}
+			out = append(out, Opportunity{
+				Finding:      g.nodes[finding.ID],
+				Node:         g.nodes[affected],
+				Confidence:   defaultConfidence(finding.Confidence),
+				Verification: defaultVerification(finding.Verification),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Node.ID != out[j].Node.ID {
+			return out[i].Node.ID < out[j].Node.ID
+		}
+		return out[i].Finding.ID < out[j].Finding.ID
 	})
 	if len(out) > 3 {
 		out = out[:3]
