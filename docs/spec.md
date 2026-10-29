@@ -283,6 +283,7 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `state_query` | read engagement state: entities, findings, neighborhood reads over the relationship graph | no |
 | `state_update` | write engagement state through typed, atomic ops (upserts, evidence, status, verification, edges) | no |
 | `nmap_parse` / `nuclei_parse` / `sqlmap_parse` / `gobuster_parse` / `cme_parse` / `bloodhound_parse` | parse one scanner artifact into engagement state over one harness-side pipeline (per-format extractor → atomic op batch → receipt) | no |
+| `attack_path_suggest` | suggest the cheapest costed attack paths from current access to a target host or service; advisory text only, never scheduled | no |
 
 One exec surface per mechanism: `bash` for shell, `code_exec` for language runtimes.
 Strict mode applies to all built-ins; the repair layer validates their arguments. The six
@@ -331,10 +332,12 @@ Nothing bypasses this order — MCP tools included.
 | `exploit-dev` | exec + fs + web_fetch + state | scope-checked, engagement-gated |
 | `log-triage` | fs-read + code_exec + state | none |
 
-"state" is `state_query` + `state_update` (docs/engagement-state.md §7). All four presets
-also receive the six parser tools (docs/parser-tool-contracts.md §9): a subagent that runs
-a scanner must be able to parse what it produced, and provenance already carries subagent
-attribution.
+"state" is `state_query` + `state_update` + `attack_path_suggest` (docs/engagement-state.md
+§7, docs/attack-paths.md §6): parsers run inside subagents, so the write path must reach them,
+provenance already carries subagent attribution, and a subagent planning the next move reads
+the same path ranking the main loop does. All four presets also receive the six parser tools
+(docs/parser-tool-contracts.md §9): a subagent that runs a scanner must be able to parse what
+it produced.
 
 None receive `dispatch_subagent`. Presets are pack-agnostic (§8.5).
 
@@ -384,6 +387,11 @@ Every tool call resolves to exactly one verdict: **allow / prompt / deny**.
   them where there is no store. They carry no scope targets — the artifact is a local file
   and a parse reaches no network — so the rule table alone decides.
   (docs/parser-tool-contracts.md §9)
+- `attack_path_suggest` is gated identically — safe mode denies it, engagement mode allows it,
+  audited — because it is a read of the same local record. It is pure local computation with
+  no scope targets, and it never schedules or pre-authorizes a step it suggests: acting on a
+  route goes through the ordinary tools and the ordinary checks. (docs/attack-paths.md §6,
+  ADR-0006)
 
 ### 6.2 Mode interaction
 

@@ -141,6 +141,11 @@ func TestDefaultRules(t *testing.T) {
 		{name: "engagement: state_query allows", mode: ModeEngagement, tool: "state_query", want: VerdictAllow},
 		{name: "engagement: state_update allows", mode: ModeEngagement, tool: "state_update", want: VerdictAllow},
 
+		// The attack-path suggestion is a read of the local record, gated the
+		// same way (docs/attack-paths.md §6).
+		{name: "safe: attack_path_suggest denies", mode: ModeSafe, tool: "attack_path_suggest", want: VerdictDeny},
+		{name: "engagement: attack_path_suggest allows", mode: ModeEngagement, tool: "attack_path_suggest", want: VerdictAllow},
+
 		// The parser tools are the same mode difference, for the same reason: a
 		// parse writes engagement state, and safe mode has none
 		// (docs/parser-tool-contracts.md §9).
@@ -189,10 +194,11 @@ func TestDefaultRules(t *testing.T) {
 }
 
 // isStateTool reports whether a tool name writes or reads engagement state:
-// the state tools and the six parsers, which are denied together in safe mode
-// and allowed together in engagement mode.
+// the state tools, the advisory attack-path suggestion, and the six parsers,
+// which are denied together in safe mode and allowed together in engagement
+// mode.
 func isStateTool(tool string) bool {
-	if tool == "state_query" || tool == "state_update" {
+	if tool == "state_query" || tool == "state_update" || tool == "attack_path_suggest" {
 		return true
 	}
 	return parsers.Known(tool)

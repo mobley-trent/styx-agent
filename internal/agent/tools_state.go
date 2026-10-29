@@ -28,6 +28,9 @@ type StateStore interface {
 	// Update applies one batch of typed ops atomically, stamped with the
 	// harness's provenance.
 	Update(ctx context.Context, origin engagementstate.Origin, ops []engagementstate.Op) (engagementstate.Receipt, error)
+	// Snapshot returns the whole record as the read shape, complete and never
+	// truncated: the attack-path computation reasons over all of it.
+	Snapshot() engagementstate.Snapshot
 }
 
 // originKey carries a tool call's origin down to the handlers that mutate

@@ -485,6 +485,10 @@ func (h *Harness) configure() error {
 		// audited, in engagement mode (docs/engagement-state.md §7).
 		agent.StateQueryTool(stateStoreHandle(stateStore)),
 		agent.StateUpdateTool(stateStoreHandle(stateStore)),
+		// The attack-path suggestion is read-only and gated exactly like the
+		// state tools: denied in safe mode, allowed and audited in engagement
+		// mode (docs/attack-paths.md §6).
+		agent.AttackPathTool(stateStoreHandle(stateStore)),
 	}
 	// The six parser tools are registered the same way, and gated the same way:
 	// a parse writes engagement state, so safe mode denies it

@@ -15,6 +15,8 @@ type fakeStateStore struct {
 	queryResult engagementstate.Snapshot
 	queryErr    error
 
+	snapshotResult engagementstate.Snapshot
+
 	origins []engagementstate.Origin
 	ops     [][]engagementstate.Op
 	receipt engagementstate.Receipt
@@ -31,6 +33,8 @@ func (f *fakeStateStore) Update(_ context.Context, origin engagementstate.Origin
 	f.ops = append(f.ops, ops)
 	return f.receipt, f.update
 }
+
+func (f *fakeStateStore) Snapshot() engagementstate.Snapshot { return f.snapshotResult }
 
 func TestStateQueryParsesFilters(t *testing.T) {
 	store := &fakeStateStore{queryResult: engagementstate.Snapshot{Revision: 3}}
