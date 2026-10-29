@@ -145,9 +145,13 @@ func DefaultRules(mode Mode) *RuleTable {
 	if mode == ModeEngagement {
 		stateAction = VerdictAllow
 	}
+	// The attack-path suggestion is a read of the local record, so it follows
+	// the same mode difference and carries no scope targets either
+	// (docs/attack-paths.md §6).
 	rules = append(rules,
 		Rule{Tool: "state_query", Action: stateAction, Source: "default"},
 		Rule{Tool: "state_update", Action: stateAction, Source: "default"},
+		Rule{Tool: "attack_path_suggest", Action: stateAction, Source: "default"},
 	)
 
 	// The parser tools are engagement-gated the same way, and for the same

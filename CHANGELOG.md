@@ -30,6 +30,17 @@ file — is documented in [RELEASING.md](RELEASING.md).
   `pending parse: <artifact> → <parser>` directive in the state digest and a count in the
   status bar, a nudge and never a block. Denied in safe mode, allowed and audited in
   engagement mode, and available to every subagent preset. (#80)
+- Attack-path suggestions: `attack_path_suggest` answers the cheapest costed routes from the
+  access an engagement already holds to a target host or service, ranked by an integer model
+  (base cost × confidence × verification for exploits × static per-mechanism OPSEC noise) with
+  deterministic tie-breaking. It searches a capability projection derived on read from the
+  relationship graph — never a second record — using Dijkstra plus Yen's algorithm for the
+  three cheapest loopless routes, bounded by node, step, and per-path caps. An unresolvable
+  target is an error naming the candidates, and an unreachable one returns a structured
+  negative with the nodes closest to it instead of an empty list. The tool is advisory by
+  construction: it returns text, and the harness never schedules or pre-authorizes a suggested
+  step. Denied in safe mode, allowed and audited in engagement mode, and available to every
+  subagent preset. (#82)
 - Engagement state: a per-engagement record of what was observed — hosts,
   services, credentials, access, segments, findings, and the typed relationship
   graph over them — kept as one schema-versioned JSON document outside the

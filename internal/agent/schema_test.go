@@ -26,6 +26,7 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 		ProposePlanTool(),
 		StateQueryTool(nil),
 		StateUpdateTool(nil),
+		AttackPathTool(nil),
 	}
 	tools = append(tools, ParserTools(dir, nil, nil)...)
 	if skillTool, ok := SkillTool(skillCatalog(t, map[string]string{

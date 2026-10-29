@@ -99,8 +99,10 @@ var logTriageSection string
 // write path must reach them, and provenance already carries subagent
 // attribution. The parser tools come with them — all four presets receive the
 // six (docs/parser-tool-contracts.md §9), because the subagent that runs a
-// scanner is the one that should parse its output.
-var stateTools = append([]string{"state_query", "state_update"}, parsers.Names()...)
+// scanner is the one that should parse its output — and so does the advisory
+// attack-path suggestion (docs/attack-paths.md §6): a subagent planning the
+// next move reads the same ranking the main loop does.
+var stateTools = append([]string{"state_query", "state_update", "attack_path_suggest"}, parsers.Names()...)
 
 // presets is the built-in registry, in stable display order (§5.4).
 var presets = []Preset{
