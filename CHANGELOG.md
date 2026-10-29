@@ -12,6 +12,11 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Changed
 
+- Attack paths rank only the footholds an engagement actually holds. An exploit already in the
+  record is provenance on the foothold it produced, so `attack_path_suggest` no longer prices an
+  exploit step — nor the verification multiplier that step carried — and its worked example now
+  prices a route the record can actually produce. An unreachable target instead names the unrun
+  findings sitting on nodes you can already reach: a hint, never a recommendation. (#95)
 - The TUI builds against Bubble Tea v2.1.0. Earlier v2 releases left the rows a
   shrinking live region gave up as stale text on screen, which the new command
   menu and pickers would show on every keystroke; v2.1.0 clears them.
