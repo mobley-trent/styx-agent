@@ -487,8 +487,13 @@ func (h *Harness) configure() error {
 		agent.StateUpdateTool(stateStoreHandle(stateStore)),
 		// The attack-path suggestion is read-only and gated exactly like the
 		// state tools: denied in safe mode, allowed and audited in engagement
-		// mode (docs/attack-paths.md §6).
-		agent.AttackPathTool(stateStoreHandle(stateStore)),
+		// mode (docs/attack-paths.md §6). It reads the ROE at call time for the
+		// one policy input the computation needs: whether a finding target's
+		// terminal exploit step may be priced (§7).
+		agent.AttackPathTool(stateStoreHandle(stateStore), func() bool {
+			_, eng := h.modeAndEngagement()
+			return eng != nil && eng.ROE().ExploitAllowed
+		}),
 	}
 	// The six parser tools are registered the same way, and gated the same way:
 	// a parse writes engagement state, so safe mode denies it

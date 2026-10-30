@@ -57,13 +57,19 @@ const (
 	AdminVia StepKind = "admin_via"
 	// Pivot is PIVOT_TO: this foothold reaches that host.
 	Pivot StepKind = "pivot"
+	// Exploit is the terminal step of a route whose target is a finding: the
+	// exploit the engagement would have to run (docs/attack-paths.md §3.1). It
+	// is the one mechanism outside the projection — nothing follows it, and its
+	// basis is the finding record rather than an edge.
+	Exploit StepKind = "exploit"
 )
 
-// The step set carries no exploit mechanism. A finding's EXPLOITED_VIA edge is
-// retrospective — it records the foothold an exploit already produced, which is
-// an active access and therefore a cost-0 source (docs/attack-paths.md §2).
-// Unexploited findings reach the model as opportunities beside an unreachable
-// result, never as priced steps.
+// The capability projection (§2) carries no exploit mechanism. A finding's
+// EXPLOITED_VIA edge is retrospective — it records the foothold an exploit
+// already produced, which is an active access and therefore a cost-0 source —
+// so an interior "exploit this and land over there" step would invent the
+// foothold, its level, and its reach. Exploitation is priced as a terminal
+// step instead (Exploit, §3.1).
 
 // Outcome is a result's shape. Every branch is named: the computation never
 // returns an empty result to mean "nothing".
@@ -78,7 +84,17 @@ const (
 	// OutcomeUnreachable is a structured negative result: no route leads to
 	// the target from the access currently held.
 	OutcomeUnreachable Outcome = "unreachable"
+	// OutcomeAlreadyExploited is a finding target the record says was already
+	// exploited: it is excluded from pricing, and its foothold is a source.
+	OutcomeAlreadyExploited Outcome = "already-exploited"
+	// OutcomeIneligible is a finding target that is not exploitable at all:
+	// inactive, closed as a false positive or fixed, or refuted (§5).
+	OutcomeIneligible Outcome = "ineligible-target"
 )
+
+// ExploitYield is what an unrun exploit yields: unknown, never derived from
+// severity and never assumed to be user-level (§3.1).
+const ExploitYield = "unknown"
 
 // Node is one graph node, identified by its harness id and labelled for the
 // reader.
@@ -91,12 +107,16 @@ type Node struct {
 	Label string
 }
 
-// Basis names the stored edge a step derives from (docs/attack-paths.md §5).
+// Basis names the stored record a step derives from (docs/attack-paths.md §5).
 type Basis struct {
-	// EdgeType, EdgeFrom, and EdgeTo identify the stored edge.
+	// EdgeType, EdgeFrom, and EdgeTo identify the stored edge. All three are
+	// empty when the basis is a node rather than an edge.
 	EdgeType engagementstate.EdgeType
 	EdgeFrom string
 	EdgeTo   string
+	// Node is the finding id when the basis is a node rather than an edge: the
+	// terminal exploit step is the one step priced by a record, not by an edge.
+	Node string
 }
 
 // Step is one capability step in a route.
@@ -116,10 +136,24 @@ type Step struct {
 
 // Path is one suggested route, cheapest first in a Result.
 type Path struct {
-	// TotalCost is the sum of the steps' costs.
+	// TotalCost is the sum of the steps' costs: for a finding target that is
+	// Positioning + Exploit, since the terminal exploit step is in Steps.
 	TotalCost int
-	// Level is the arrival level: the privilege the final step lands at.
+	// Positioning is the cost of the capability route that gets the engagement
+	// into position for the exploit. Zero for a host or service target, where
+	// there is no separate positioning route.
+	Positioning int
+	// Exploit is the terminal exploit step's price. Zero for a host or service
+	// target, and zero for a finding target the rules of engagement refuse to
+	// price (§8).
+	Exploit int
+	// Level is the arrival level: the privilege the positioning route lands at.
+	// An exploit's own yield is never claimed (§3.1).
 	Level string
+	// Landing is the node the route positions on: the affected host or service
+	// a finding target's exploit would run against. Zero for a host or service
+	// target, whose target is the landing node.
+	Landing Node
 	// Rationale is the one-line mechanism summary.
 	Rationale string
 	// Steps are the ordered capability steps.
@@ -153,6 +187,24 @@ type Closest struct {
 	Distance int
 }
 
+// FindingTarget is the finding a finding target resolved to (§4): the labels
+// the result reports beside its prices. Severity is a label and never enters a
+// price; verification and confidence do price the terminal step. A zero value
+// means the target was a host or service.
+type FindingTarget struct {
+	// Node is the finding record.
+	Node Node
+	// Severity is reported, never multiplied into a cost.
+	Severity engagementstate.Severity
+	// Verification and Confidence are the finding's own, the mapping
+	// docs/engagement-state.md §5 reserves for the exploit step.
+	Verification engagementstate.Verification
+	Confidence   engagementstate.Confidence
+	// ExploitAllowed reports whether the rules of engagement permitted the
+	// exploit step to be priced.
+	ExploitAllowed bool
+}
+
 // Result is Compute's answer: a named outcome, the resolved target, and
 // whichever of routes, diagnostics, or a note applies.
 type Result struct {
@@ -160,6 +212,9 @@ type Result struct {
 	Outcome Outcome
 	// Target is the resolved target node.
 	Target Node
+	// Finding is the resolved finding when the target is a finding: its labels
+	// and whether exploitation was permitted. Nil for a host or service target.
+	Finding *FindingTarget
 	// Paths are the routes, cheapest first. Only OutcomePaths carries any.
 	Paths []Path
 	// Closest is the bounded unreachable diagnostic. Only OutcomeUnreachable
@@ -172,18 +227,28 @@ type Result struct {
 	Note string
 }
 
+// Options is the one policy input the computation takes from the tool layer
+// (docs/attack-paths.md §7). The package stays pure: it never reads an
+// engagement's rules of engagement itself, it is told the answer.
+type Options struct {
+	// AllowExploit reports whether the rules of engagement permit
+	// exploitation. When false, a finding target prices its positioning routes
+	// and omits the exploit step (§8); a host or service target is unaffected.
+	AllowExploit bool
+}
+
 // Compute answers the cheapest routes from the engagement's current access to
 // a target (docs/attack-paths.md §4–§5). k is the number of distinct routes;
 // k <= 0 uses DefaultK.
 //
 // It reads the snapshot only: no step is scheduled, pre-authorized, or
 // executed (ADR-0006).
-func Compute(snapshot engagementstate.Snapshot, target string, k int) (Result, error) {
+func Compute(snapshot engagementstate.Snapshot, target string, k int, opts Options) (Result, error) {
 	if snapshot.Truncated {
 		return Result{}, errors.New("attackpath: the state snapshot is truncated; attack paths need the full record")
 	}
 	if strings.TrimSpace(target) == "" {
-		return Result{}, fmt.Errorf("%w: a target host or service is required", ErrTarget)
+		return Result{}, fmt.Errorf("%w: a target host, service, or finding is required", ErrTarget)
 	}
 	if k <= 0 {
 		k = DefaultK
@@ -205,14 +270,21 @@ func Compute(snapshot engagementstate.Snapshot, target string, k int) (Result, e
 		}
 	}
 	sort.Strings(sources)
-	if len(sources) == 0 {
-		return Result{Outcome: OutcomeNoFootholds, Target: resolved}, nil
+
+	// A finding target is priced differently (§3.1, §4): its route ends in the
+	// terminal exploit step, and the finding's own labels ride beside the price.
+	if resolved.finding != nil {
+		return graph.findingTarget(snapshot, sources, resolved, opts), nil
 	}
 
-	if held, ok := holdingAccess(snapshot, resolved.ID); ok {
+	if len(sources) == 0 {
+		return Result{Outcome: OutcomeNoFootholds, Target: resolved.node}, nil
+	}
+
+	if held, ok := holdingAccess(snapshot, resolved.node.ID); ok {
 		return Result{
 			Outcome: OutcomePaths,
-			Target:  resolved,
+			Target:  resolved.node,
 			Paths: []Path{{
 				TotalCost: 0,
 				Level:     held.Level,
@@ -223,12 +295,12 @@ func Compute(snapshot engagementstate.Snapshot, target string, k int) (Result, e
 		}, nil
 	}
 
-	records, capped := graph.paths(sources, resolved.ID, k)
+	records, capped := graph.paths(sources, resolved.node.ID, k)
 	if len(records) == 0 {
 		return Result{
 			Outcome:       OutcomeUnreachable,
-			Target:        resolved,
-			Closest:       graph.closest(sources, resolved.ID),
+			Target:        resolved.node,
+			Closest:       graph.closest(sources, resolved.node.ID),
 			Opportunities: graph.opportunities(snapshot, sources),
 			Note:          lengthCapNote(capped, ""),
 		}, nil
@@ -238,12 +310,172 @@ func Compute(snapshot engagementstate.Snapshot, target string, k int) (Result, e
 	for _, record := range records {
 		paths = append(paths, graph.path(record))
 	}
-	result := Result{Outcome: OutcomePaths, Target: resolved, Paths: paths}
+	result := Result{Outcome: OutcomePaths, Target: resolved.node, Paths: paths}
 	if len(paths) < k {
 		result.Note = fmt.Sprintf("%d route(s) exist; no further distinct routes were found", len(paths))
 	}
 	result.Note = lengthCapNote(capped, result.Note)
 	return result, nil
+}
+
+// targetRef is a resolved target: a host or service node, or a finding.
+type targetRef struct {
+	node    Node
+	finding *engagementstate.Finding
+}
+
+// findingTarget answers a finding target (§3.1, §4): the cheapest positioning
+// route to each affected node the engagement can reach, ranked by total cost,
+// each ending in the terminal exploit step when the rules of engagement permit
+// it. k does not apply: a finding yields one route per affected node, not the K
+// cheapest routes, so the ranking is the nodes'. A finding is never a source:
+// only access is.
+func (g *graph) findingTarget(snapshot engagementstate.Snapshot, sources []string, ref targetRef, opts Options) Result {
+	finding := *ref.finding
+	confidence := defaultConfidence(finding.Confidence)
+	verification := defaultVerification(finding.Verification)
+	result := Result{
+		Target: ref.node,
+		Finding: &FindingTarget{
+			Node:           ref.node,
+			Severity:       finding.Severity,
+			Verification:   verification,
+			Confidence:     confidence,
+			ExploitAllowed: opts.AllowExploit,
+		},
+	}
+
+	// A recorded exploitation is provenance: the exploit already ran, so the
+	// finding leaves the ranking and the foothold it produced is a cost-0
+	// source (§8). Named, never an error and never an empty result.
+	if footholds, ok := exploitationFootholds(snapshot, finding.ID); ok {
+		labels := make([]string, 0, len(footholds))
+		for _, id := range footholds {
+			labels = append(labels, describeNode(g.nodes[id]))
+		}
+		result.Outcome = OutcomeAlreadyExploited
+		result.Note = fmt.Sprintf("the exploit already ran: the record holds the foothold it produced (%s)",
+			strings.Join(labels, ", "))
+		return result
+	}
+	if !exploitable(finding, exploitedFindings(snapshot)) {
+		result.Outcome = OutcomeIneligible
+		result.Note = ineligibleReason(finding)
+		return result
+	}
+	if len(sources) == 0 {
+		result.Outcome = OutcomeNoFootholds
+		return result
+	}
+
+	landings := g.affectedNodes(finding)
+	routes := make([]Path, 0, len(landings))
+	capped := false
+	for _, affected := range landings {
+		positioning := g.positioning(snapshot, sources, affected)
+		capped = capped || positioning.capped
+		if !positioning.ok {
+			continue
+		}
+		path := Path{
+			Positioning: sumCosts(positioning.steps),
+			Level:       positioning.level,
+			Landing:     g.nodes[affected],
+			Steps:       positioning.steps,
+		}
+		if opts.AllowExploit {
+			path.Steps = appendStep(positioning.steps, g.exploitStep(finding, affected))
+			path.Exploit = exploitCost(confidence, verification)
+		}
+		path.TotalCost = sumCosts(path.Steps)
+		path.Rationale = rationale(path.Steps)
+		routes = append(routes, path)
+	}
+
+	// One route per reachable affected node, ranked together by total cost and
+	// then by landing node, the same determinism the route signature gives (§5).
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i].TotalCost != routes[j].TotalCost {
+			return routes[i].TotalCost < routes[j].TotalCost
+		}
+		return routes[i].Landing.ID < routes[j].Landing.ID
+	})
+
+	if len(routes) == 0 {
+		result.Outcome = OutcomeUnreachable
+		result.Closest = g.closestToAny(sources, landings)
+		result.Opportunities = g.opportunities(snapshot, sources)
+		result.Note = lengthCapNote(capped, "")
+		return result
+	}
+	result.Outcome = OutcomePaths
+	result.Paths = routes
+	note := ""
+	if !opts.AllowExploit {
+		note = "the rules of engagement do not permit exploitation (exploit_allowed: false): positioning only, the exploit step is omitted"
+	}
+	result.Note = lengthCapNote(capped, note)
+	return result
+}
+
+// positioningRoute is the capability route that puts the engagement in
+// position for a terminal exploit.
+type positioningRoute struct {
+	steps  []Step
+	level  string
+	capped bool
+	ok     bool
+}
+
+// positioning returns the cheapest route to a node a finding is exploitable on.
+// A node already held positions for free at the strongest held level: the
+// exploit is what is left to do there.
+func (g *graph) positioning(snapshot engagementstate.Snapshot, sources []string, affected string) positioningRoute {
+	if held, ok := holdingAccess(snapshot, affected); ok {
+		return positioningRoute{level: held.Level, ok: true}
+	}
+	records, capped := g.paths(sources, affected, 1)
+	if len(records) == 0 {
+		return positioningRoute{capped: capped}
+	}
+	route := g.path(records[0])
+	return positioningRoute{steps: route.Steps, level: route.Level, capped: capped, ok: true}
+}
+
+// affectedNodes lists the active host or service nodes a finding concerns, in
+// id order: one route per reachable affected node (§4). An inactive node
+// produces no step, so it is not a landing either.
+func (g *graph) affectedNodes(finding engagementstate.Finding) []string {
+	seen := make(map[string]bool, len(finding.Affected))
+	out := make([]string, 0, len(finding.Affected))
+	for _, id := range finding.Affected {
+		if seen[id] || !g.live[id] {
+			continue
+		}
+		node, ok := g.nodes[id]
+		if !ok || (node.Kind != engagementstate.KindHost && node.Kind != engagementstate.KindService) {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// exploitStep is the terminal step of a finding target (§3.1): priced by the
+// finding's own confidence and verification, ending the route. Nothing follows
+// it, it claims no foothold, and its basis is the finding record itself.
+func (g *graph) exploitStep(finding engagementstate.Finding, affected string) Step {
+	confidence := defaultConfidence(finding.Confidence)
+	return Step{
+		From:       g.nodes[affected],
+		To:         g.nodes[finding.ID],
+		Kind:       Exploit,
+		Confidence: confidence,
+		Cost:       exploitCost(confidence, defaultVerification(finding.Verification)),
+		Basis:      Basis{Node: finding.ID},
+	}
 }
 
 // pathRecord is one candidate route inside the search: its steps, total cost,
@@ -374,8 +606,9 @@ func stepOrder(a, b Step) bool {
 }
 
 // baseCost is the per-mechanism base price (§3). Ranking intent: a route
-// already holding the credential beats lateral movement, which beats
-// exploitation.
+// already holding the credential beats lateral movement. The terminal exploit
+// step is priced separately (§3.1), never in this table: it is not a capability
+// step of the projection, and nothing follows it.
 var baseCost = map[StepKind]int{
 	HarvestCredential: 2,
 	AdminVia:          2,
@@ -393,11 +626,36 @@ var noiseFactor = map[StepKind]int{
 	Pivot:             4,
 }
 
-// stepCost prices one step: base × confidence × noise, all integers (§3).
-// Nothing is priced by a finding, so verification does not enter the cost
-// model: a refuted finding is excluded from the diagnostics instead.
+// The terminal exploit step's base and noise (§3.1). Exploitation is the
+// loudest thing the model can do: louder than moving laterally, which is pivot
+// ×4 at base 5.
+const (
+	exploitBaseCost = 3
+	exploitNoise    = 4
+)
+
+// stepCost prices one capability step: base × confidence × noise, all integers
+// (§3). No projection step is priced by a finding, so verification never enters
+// its cost: the only step a finding prices is the terminal exploit (§3.1), and
+// a refuted finding is excluded before pricing (§5) rather than multiplied into
+// silence.
 func stepCost(kind StepKind, confidence engagementstate.Confidence) int {
 	return baseCost[kind] * confidenceFactor(confidence) * noiseFactor[kind]
+}
+
+// exploitCost prices the terminal step: base × confidence(finding) ×
+// verification(finding) × noise (§3.1). Severity is a label, never a price.
+func exploitCost(confidence engagementstate.Confidence, verification engagementstate.Verification) int {
+	return exploitBaseCost * confidenceFactor(confidence) * verificationFactor(verification) * exploitNoise
+}
+
+// verificationFactor maps the enum to its multiplier: an unverified exploit
+// costs three times a verified one. A refuted finding never reaches here.
+func verificationFactor(v engagementstate.Verification) int {
+	if v == engagementstate.VerificationVerified {
+		return 1
+	}
+	return 3
 }
 
 // confidenceFactor maps the enum to its multiplier. An empty confidence is the
@@ -479,6 +737,13 @@ func (g *graph) arrivalLevel(steps []Step) string {
 		return engagementstate.LevelUser
 	case Pivot:
 		return g.levels[last.From.ID]
+	case Exploit:
+		// The exploit's own yield is never claimed (§3.1): the arrival level is
+		// the positioning route's, and a route with no positioning has none.
+		if len(steps) < 2 {
+			return ""
+		}
+		return g.arrivalLevel(steps[:len(steps)-1])
 	}
 	return ""
 }
@@ -506,6 +771,8 @@ func mechanismWords(kind StepKind) string {
 		return "admin access"
 	case Pivot:
 		return "pivot"
+	case Exploit:
+		return "exploit"
 	}
 	return string(kind)
 }
@@ -693,22 +960,102 @@ func (g *graph) closest(sources []string, target string) []Closest {
 	return out
 }
 
-// opportunities lists up to three unexploited findings on nodes current access
-// can already reach (§5). They are hints, not steps: nothing is priced, and
-// nothing claims what foothold an exploit that has not run would yield.
-func (g *graph) opportunities(snapshot engagementstate.Snapshot, sources []string) []Opportunity {
-	reachable := g.reachable(sources)
+// closestToAny merges the bounded unreachable diagnostic for several affected
+// nodes of one finding target: a finding can be exploitable on more than one
+// node, so "closest we got" is stated against each.
+func (g *graph) closestToAny(sources []string, targets []string) []Closest {
+	seen := make(map[string]bool, len(targets))
+	out := make([]Closest, 0, 3)
+	for _, target := range targets {
+		for _, closest := range g.closest(sources, target) {
+			if seen[closest.Node.ID] {
+				continue
+			}
+			seen[closest.Node.ID] = true
+			out = append(out, closest)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Distance != out[j].Distance {
+			return out[i].Distance < out[j].Distance
+		}
+		return out[i].Node.ID < out[j].Node.ID
+	})
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
+}
+
+// exploitable is the one eligibility predicate (§5): a finding is exploitable
+// when it is active, its status is neither a false positive nor fixed, its
+// verification is not refuted, and it carries no recorded exploitation of its
+// own. The exploit step and the opportunity hints share it, so a finding can
+// never be hinted at while being unpriceable as a target, or the reverse.
+func exploitable(finding engagementstate.Finding, exploited map[string]bool) bool {
+	if !finding.Active || exploited[finding.ID] {
+		return false
+	}
+	if finding.Status == engagementstate.StatusFalsePositive || finding.Status == engagementstate.StatusFixed {
+		return false
+	}
+	return finding.Verification != engagementstate.VerificationRefuted
+}
+
+// exploitedFindings indexes the findings a recorded EXPLOITED_VIA edge names:
+// the exploit already ran, so the finding is excluded before pricing (§5).
+func exploitedFindings(snapshot engagementstate.Snapshot) map[string]bool {
 	exploited := make(map[string]bool, len(snapshot.Edges))
 	for _, edge := range snapshot.Edges {
 		if edge.Type == engagementstate.EdgeExploitedVia {
 			exploited[edge.From] = true
 		}
 	}
+	return exploited
+}
+
+// exploitationFootholds lists the footholds a finding's recorded exploitation
+// produced, in id order.
+func exploitationFootholds(snapshot engagementstate.Snapshot, findingID string) ([]string, bool) {
+	var ids []string
+	for _, edge := range snapshot.Edges {
+		if edge.Type == engagementstate.EdgeExploitedVia && edge.From == findingID {
+			ids = append(ids, edge.To)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, false
+	}
+	sort.Strings(ids)
+	return ids, true
+}
+
+// ineligibleReason names why a finding cannot be exploited, so the refusal is
+// never silent.
+func ineligibleReason(finding engagementstate.Finding) string {
+	switch {
+	case !finding.Active:
+		return "the finding is inactive, so there is nothing left to exploit"
+	case finding.Status == engagementstate.StatusFalsePositive:
+		return "the finding's status is false_positive, so there is nothing left to exploit"
+	case finding.Status == engagementstate.StatusFixed:
+		return "the finding's status is fixed, so there is nothing left to exploit"
+	case finding.Verification == engagementstate.VerificationRefuted:
+		return "the finding's verification is refuted, so it is excluded before pricing"
+	}
+	return "the finding is not exploitable"
+}
+
+// opportunities lists up to three unexploited findings on nodes current access
+// can already reach (§5). They are hints, not steps: nothing is priced, and
+// nothing claims what foothold an exploit that has not run would yield.
+func (g *graph) opportunities(snapshot engagementstate.Snapshot, sources []string) []Opportunity {
+	reachable := g.reachable(sources)
+	exploited := exploitedFindings(snapshot)
 
 	out := make([]Opportunity, 0, 3)
 	for _, finding := range snapshot.Findings {
-		if !finding.Active || exploited[finding.ID] ||
-			finding.Verification == engagementstate.VerificationRefuted {
+		if !exploitable(finding, exploited) {
 			continue
 		}
 		for _, affected := range finding.Affected {
@@ -827,21 +1174,21 @@ func levelRank(level string) int {
 	return 0
 }
 
-// resolveTarget resolves the target string to exactly one host or service
-// (§4): entity id first, then address, then hostname. An ambiguous or
-// unmatched target is a hard error naming what was found, never a guess.
-func resolveTarget(snapshot engagementstate.Snapshot, raw string) (Node, error) {
+// resolveTarget resolves the target string to exactly one host or service, or
+// to a finding (§4): entity id first, then address, then hostname, then finding
+// id. A finding resolves by id only, never by title — titles are neither unique
+// nor stable, and a fuzzy match on one would be exactly the guess these rules
+// forbid. An ambiguous or unmatched target is a hard error naming what was
+// found, never a guess.
+func resolveTarget(snapshot engagementstate.Snapshot, raw string) (targetRef, error) {
 	want := strings.TrimSpace(raw)
 	nodes := buildNodes(snapshot)
 
 	if e, ok := snapshot.Entity(want); ok {
 		if e.Kind != engagementstate.KindHost && e.Kind != engagementstate.KindService {
-			return Node{}, fmt.Errorf("%w: %q names a %s; want a host or service", ErrTarget, raw, e.Kind)
+			return targetRef{}, fmt.Errorf("%w: %q names a %s; want a host, service, or finding", ErrTarget, raw, e.Kind)
 		}
-		return nodes[e.ID], nil
-	}
-	if _, ok := snapshot.Finding(want); ok {
-		return Node{}, fmt.Errorf("%w: %q names a finding; want a host or service", ErrTarget, raw)
+		return targetRef{node: nodes[e.ID]}, nil
 	}
 
 	for _, match := range []struct {
@@ -861,18 +1208,21 @@ func resolveTarget(snapshot engagementstate.Snapshot, raw string) (Node, error) 
 		case 0:
 			continue
 		case 1:
-			return nodes[matches[0].ID], nil
+			return targetRef{node: nodes[matches[0].ID]}, nil
 		default:
 			sort.Slice(matches, func(i, j int) bool { return matches[i].ID < matches[j].ID })
 			ids := make([]string, 0, len(matches))
 			for _, e := range matches {
 				ids = append(ids, e.ID)
 			}
-			return Node{}, fmt.Errorf("%w: %q matches %d hosts by %s (%s); name the id",
+			return targetRef{}, fmt.Errorf("%w: %q matches %d hosts by %s (%s); name the id",
 				ErrTarget, raw, len(matches), match.by, strings.Join(ids, ", "))
 		}
 	}
-	return Node{}, fmt.Errorf("%w: %q matches no host or service by id, address, or hostname", ErrTarget, raw)
+	if finding, ok := snapshot.Finding(want); ok {
+		return targetRef{node: nodes[finding.ID], finding: &finding}, nil
+	}
+	return targetRef{}, fmt.Errorf("%w: %q matches no host, service, or finding by id, address, or hostname", ErrTarget, raw)
 }
 
 // hasAddress reports whether a host records an address.
