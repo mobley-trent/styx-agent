@@ -3,6 +3,8 @@ package attackpath
 import (
 	"fmt"
 	"strings"
+
+	"github.com/mobley-trent/styx-agent/internal/engagementstate"
 )
 
 // Text renders a result as text for the model: the routes cheapest first, or
@@ -15,6 +17,12 @@ func (r Result) Text() string {
 		fmt.Fprintf(&b, "no attack paths: %s is not reachable because the engagement has no active access (foothold) to start from",
 			describeNode(r.Target))
 		return b.String()
+	case OutcomeAlreadyExploited:
+		fmt.Fprintf(&b, "already exploited: %s\n  %s\n", describeNode(r.Target), r.Note)
+		return strings.TrimRight(b.String(), "\n")
+	case OutcomeIneligible:
+		fmt.Fprintf(&b, "not exploitable: %s\n  %s\n", describeNode(r.Target), r.Note)
+		return strings.TrimRight(b.String(), "\n")
 	case OutcomeUnreachable:
 		fmt.Fprintf(&b, "unreachable from current access: %s\n", describeNode(r.Target))
 		if len(r.Closest) == 0 {
@@ -41,8 +49,25 @@ func (r Result) Text() string {
 
 	fmt.Fprintf(&b, "attack paths to %s: %d route(s), cheapest first\n",
 		describeNode(r.Target), len(r.Paths))
+	if r.Finding != nil {
+		// Severity, verification, and confidence are labels beside the price,
+		// and the exploit's yield is never derived from severity (§3.1).
+		fmt.Fprintf(&b, "  finding: severity=%s · verification=%s · confidence=%s · yield=%s\n",
+			severityLabel(r.Finding.Severity), r.Finding.Verification, r.Finding.Confidence, ExploitYield)
+	}
 	for i, path := range r.Paths {
-		fmt.Fprintf(&b, "%d. cost %d", i+1, path.TotalCost)
+		if r.Finding != nil {
+			fmt.Fprintf(&b, "%d. positioning %d", i+1, path.Positioning)
+			if r.Finding.ExploitAllowed {
+				fmt.Fprintf(&b, " · exploit %d", path.Exploit)
+			}
+			fmt.Fprintf(&b, " · total %d", path.TotalCost)
+			if path.Landing.ID != "" {
+				fmt.Fprintf(&b, " · lands on %s", describeNode(path.Landing))
+			}
+		} else {
+			fmt.Fprintf(&b, "%d. cost %d", i+1, path.TotalCost)
+		}
 		if path.Level != "" {
 			fmt.Fprintf(&b, " · arrives at %s", path.Level)
 		}
@@ -72,9 +97,22 @@ func describeNode(node Node) string {
 	return node.ID + " (" + node.Label + ")"
 }
 
-// describeBasis names the stored edge a step derives from.
+// describeBasis names the stored record a step derives from: an edge, or the
+// finding record itself for the terminal exploit step.
 func describeBasis(basis Basis) string {
+	if basis.Node != "" {
+		return "finding " + basis.Node
+	}
 	return fmt.Sprintf("edge %s %s → %s", basis.EdgeType, basis.EdgeFrom, basis.EdgeTo)
+}
+
+// severityLabel renders a severity for the result line, with a name for the
+// empty severity an unset record carries: a label is never invented.
+func severityLabel(severity engagementstate.Severity) string {
+	if severity == "" {
+		return "unset"
+	}
+	return string(severity)
 }
 
 // missingPhrase renders the step an unreachable diagnostic says is missing.

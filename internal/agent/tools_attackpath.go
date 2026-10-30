@@ -21,7 +21,7 @@ const attackPathSchema = `{
   "properties": {
     "target": {
       "type": "string",
-      "description": "Entity id, address, or hostname of the host or service to reach."
+      "description": "Entity id, address, or hostname of the host or service to reach, or a finding id to price exploiting it."
     }
   },
   "required": ["target"],
@@ -31,6 +31,11 @@ const attackPathSchema = `{
 // AttackPathTool is the §5.1 `attack_path_suggest` tool: the cheapest costed
 // routes from current access to a target, as text.
 //
+// exploitAllowed reads the engagement's rules of engagement at call time — the
+// one policy input the pure computation cannot derive (docs/attack-paths.md
+// §7). A nil read, or a refusal, returns positioning routes with the terminal
+// exploit step omitted; it never refuses the whole suggestion.
+//
 // It is advisory by construction (ADR-0006): it reads a snapshot, computes,
 // and returns a suggestion. The harness never schedules, pre-authorizes, or
 // executes a suggested step; when the model acts on one it does so through the
@@ -38,10 +43,10 @@ const attackPathSchema = `{
 // no scope targets — pure local computation, no network — so the default rule
 // table denies it in safe mode (there is no store to read) and allows it,
 // audited, in engagement mode, exactly like `state_query` (§6.1).
-func AttackPathTool(store StateStore) Tool {
+func AttackPathTool(store StateStore, exploitAllowed func() bool) Tool {
 	return Tool{
 		Name:        AttackPathToolName,
-		Description: "Suggest the cheapest costed attack paths from the access currently held to a target host or service, ranked by an integer cost model. Advisory only: it returns suggested routes as text, and the harness never schedules, pre-authorizes, or executes a step of them.",
+		Description: "Suggest the cheapest costed attack paths from the access currently held to a target host or service, or price the terminal exploit of a finding target, ranked by an integer cost model. Advisory only: it returns suggested routes as text, and the harness never schedules, pre-authorizes, or executes a step of them.",
 		Parameters:  json.RawMessage(attackPathSchema),
 		Handler: func(_ context.Context, args map[string]any) (string, error) {
 			if store == nil {
@@ -52,9 +57,11 @@ func AttackPathTool(store StateStore) Tool {
 				return "", err
 			}
 			if strings.TrimSpace(target) == "" {
-				return "", errors.New("attack_path_suggest: target is required: name a host or service")
+				return "", errors.New("attack_path_suggest: target is required: name a host, service, or finding")
 			}
-			result, err := attackpath.Compute(store.Snapshot(), target, attackpath.DefaultK)
+			allowExploit := exploitAllowed != nil && exploitAllowed()
+			result, err := attackpath.Compute(store.Snapshot(), target, attackpath.DefaultK,
+				attackpath.Options{AllowExploit: allowExploit})
 			if err != nil {
 				return "", err
 			}

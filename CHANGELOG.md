@@ -23,6 +23,18 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- `attack_path_suggest` takes a finding as a target and prices exploitation as a **terminal** step
+  of the route: base 3 × the finding's confidence × its verification (×1 verified, ×3 unverified)
+  × a static ×4 OPSEC noise, reported beside the positioning price and the total, with severity
+  carried as a label and never charged. Nothing follows the exploit, because the record says
+  nothing about what an unrun exploit yields — the arrival level stays the positioning route's,
+  the yield is unknown, and the model records the real foothold afterwards. A finding affected on
+  several nodes yields one route per reachable node, ranked by total cost and naming its landing
+  node, and one eligibility predicate (active, not `false_positive` or `fixed`, not `refuted`, no
+  exploitation of its own) now governs both the price and the opportunity hints, so a closed
+  finding is no longer hinted at. An exploited finding is named as already run with its foothold
+  rather than priced, and an ineligible one says which condition refused it. `exploit_allowed:
+  false` returns the positioning routes with the exploit step omitted. (#99)
 - Parser tools: the six artifacts a red team actually produces — nmap XML, nuclei JSONL,
   sqlmap logs, gobuster output, CrackMapExec/NetExec logs, and BloodHound collector JSON —
   are read by harness-side tools (`nmap_parse`, `nuclei_parse`, `sqlmap_parse`,

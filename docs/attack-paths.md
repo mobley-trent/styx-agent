@@ -265,12 +265,15 @@ One tool, registered always, named as the roadmap and #75 already reserve it.
 `internal/attackpath`, a pure package behind one entry point:
 
 ```
-Compute(snapshot Snapshot, target string, k int) (Result, error)
+Compute(snapshot Snapshot, target string, k int, opts Options) (Result, error)
 ```
 
 No store handle, no IO, no clock, no randomness, no globals — the tool layer loads the state
-snapshot and hands it in, and the store never depends on this package. That is what keeps the
-computation testable in isolation and re-derivable after any state change. `Snapshot` is the
+snapshot and hands it in, and the store never depends on this package. `Options` carries the one
+policy input the computation cannot derive: whether the rules of engagement permit exploitation
+(`exploit_allowed`, §8). The package stays pure — the tool layer reads the ROE and passes the
+answer in. That is what keeps the computation testable in isolation and re-derivable after any
+state change. `Snapshot` is the
 same read shape `state_query` serves, so the two consumers land once, coherently (#78).
 
 Held to: golden tests over fixture states; determinism (same snapshot → identical result);
@@ -293,6 +296,10 @@ ineligible findings from both the ranking and the diagnostics, §5).
 - **Already-exploited finding target** (an `EXPLOITED_VIA` edge of its own) → a named
   `already-exploited` outcome naming the foothold it produced, never an error and never an empty
   result: the finding is excluded before pricing (§5), and the foothold is already a source.
+- **Ineligible finding target** (inactive, `false_positive`, `fixed`, or `refuted`) → a named
+  `ineligible-target` outcome saying which condition refused it: never a price, never silence. The
+  same predicate keeps it out of the opportunity hints (§5), so a hint and a price can never
+  disagree.
 - **Exploitation refused by the ROE** (`exploit_allowed: false`) → the positioning routes come
   back with the exploit step omitted and a note saying so. The positioning answer is still true
   and useful, so the refusal is never a fatal error.

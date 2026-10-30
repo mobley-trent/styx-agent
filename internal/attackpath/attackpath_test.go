@@ -32,9 +32,10 @@ func accessEntity(id, target, level string) engagementstate.Entity {
 	return engagementstate.Entity{ID: id, Kind: engagementstate.KindAccess, Active: true, Target: target, Level: level}
 }
 
-func findingRecord(id, title string, confidence engagementstate.Confidence, verification engagementstate.Verification, affected ...string) engagementstate.Finding {
+func findingRecord(id, title string, severity engagementstate.Severity, confidence engagementstate.Confidence, verification engagementstate.Verification, affected ...string) engagementstate.Finding {
 	return engagementstate.Finding{
-		ID: id, Active: true, Title: title, Confidence: confidence, Verification: verification, Affected: affected,
+		ID: id, Active: true, Title: title, Severity: severity,
+		Confidence: confidence, Verification: verification, Affected: affected,
 	}
 }
 
@@ -58,8 +59,8 @@ func costModelState() engagementstate.Snapshot {
 			credEntity("cred-bbbb", `ACME\bob`, engagementstate.CredentialPassword),
 		},
 		Findings: []engagementstate.Finding{
-			findingRecord("finding-cccc", "SMB signing disabled", engagementstate.ConfidenceMedium,
-				engagementstate.VerificationUnverified, "host-3333"),
+			findingRecord("finding-cccc", "SMB signing disabled", engagementstate.SeverityMedium,
+				engagementstate.ConfidenceMedium, engagementstate.VerificationUnverified, "host-3333"),
 		},
 		Edges: []engagementstate.Edge{
 			edgeOf(engagementstate.EdgePivotTo, "access-1a2b", "host-2222", engagementstate.ConfidenceHigh),
@@ -88,7 +89,7 @@ func exploitedState() engagementstate.Snapshot {
 }
 
 func TestComputeCheapestRoutes(t *testing.T) {
-	result, err := Compute(costModelState(), "host-4444", DefaultK)
+	result, err := Compute(costModelState(), "host-4444", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -146,8 +147,8 @@ func TestComputeCheapestRoutes(t *testing.T) {
 }
 
 // TestProjectionPinsTheCostModel checks every mechanism's arithmetic from
-// docs/attack-paths.md §3, including the exploit's 8 × 3 × 3 × 4 = 288 and its
-// verified 8 × 3 × 1 × 4 = 96.
+// docs/attack-paths.md §3. The terminal exploit step is not a projection step:
+// its 3 × 3 × 3 × 4 = 108 is pinned by TestComputePricesTheTerminalExploit.
 func TestProjectionPinsTheCostModel(t *testing.T) {
 	graph, err := project(exploitedState())
 	if err != nil {
@@ -239,7 +240,7 @@ func TestProjectionExcludesInactiveNodesAndAttributeEdges(t *testing.T) {
 // a future foothold is a planning fiction. The target is held, the zero-step
 // result wins, and no route is priced around an exploit the record says ran.
 func TestComputeExploitDerivedFootholdIsHeld(t *testing.T) {
-	result, err := Compute(exploitedState(), "host-4444", DefaultK)
+	result, err := Compute(exploitedState(), "host-4444", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -259,7 +260,7 @@ func TestComputeExploitDerivedFootholdIsHeld(t *testing.T) {
 }
 
 func TestComputeIsDeterministic(t *testing.T) {
-	first, err := Compute(costModelState(), "host-4444", DefaultK)
+	first, err := Compute(costModelState(), "host-4444", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -270,7 +271,7 @@ func TestComputeIsDeterministic(t *testing.T) {
 	slices.Reverse(shuffled.Entities)
 	slices.Reverse(shuffled.Findings)
 	slices.Reverse(shuffled.Edges)
-	second, err := Compute(shuffled, "host-4444", DefaultK)
+	second, err := Compute(shuffled, "host-4444", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute(shuffled) = %v", err)
 	}
@@ -286,7 +287,7 @@ func TestComputeNoFootholds(t *testing.T) {
 			snapshot.Entities[i].Active = false
 		}
 	}
-	result, err := Compute(snapshot, "host-4444", DefaultK)
+	result, err := Compute(snapshot, "host-4444", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -302,7 +303,7 @@ func TestComputeNoFootholds(t *testing.T) {
 }
 
 func TestComputeAlreadyHaveAccess(t *testing.T) {
-	result, err := Compute(costModelState(), "host-1111", DefaultK)
+	result, err := Compute(costModelState(), "host-1111", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -320,7 +321,7 @@ func TestComputeTargetResolution(t *testing.T) {
 
 	for _, target := range []string{"host-4444", "10.0.0.44", "DC01", "dc01.", "service-7777"} {
 		t.Run(target, func(t *testing.T) {
-			result, err := Compute(snapshot, target, DefaultK)
+			result, err := Compute(snapshot, target, DefaultK, Options{})
 			if err != nil {
 				t.Fatalf("Compute(%q) = %v", target, err)
 			}
@@ -335,7 +336,7 @@ func TestComputeTargetResolution(t *testing.T) {
 		hostEntity("host-8888", "10.0.9.9", "shared"),
 		hostEntity("host-9999", "10.0.9.9", "shared2"),
 	)
-	_, err := Compute(ambiguous, "10.0.9.9", DefaultK)
+	_, err := Compute(ambiguous, "10.0.9.9", DefaultK, Options{})
 	if !errors.Is(err, ErrTarget) {
 		t.Fatalf("Compute(ambiguous address) = %v, want ErrTarget", err)
 	}
@@ -346,11 +347,11 @@ func TestComputeTargetResolution(t *testing.T) {
 	}
 
 	for _, target := range []string{"10.9.9.9", "nope.example"} {
-		if _, err := Compute(snapshot, target, DefaultK); !errors.Is(err, ErrTarget) {
+		if _, err := Compute(snapshot, target, DefaultK, Options{}); !errors.Is(err, ErrTarget) {
 			t.Errorf("Compute(%q) = %v, want ErrTarget", target, err)
 		}
 	}
-	if _, err := Compute(snapshot, "cred-aaaa", DefaultK); !errors.Is(err, ErrTarget) {
+	if _, err := Compute(snapshot, "cred-aaaa", DefaultK, Options{}); !errors.Is(err, ErrTarget) {
 		t.Errorf("Compute(credential id) = %v, want ErrTarget", err)
 	}
 }
@@ -358,7 +359,7 @@ func TestComputeTargetResolution(t *testing.T) {
 func TestComputeUnreachable(t *testing.T) {
 	snapshot := unreachableState()
 
-	result, err := Compute(snapshot, "host-5555", DefaultK)
+	result, err := Compute(snapshot, "host-5555", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -389,7 +390,7 @@ func unreachableState() engagementstate.Snapshot {
 // can already reach, and stops naming one as soon as it is exploited, refuted,
 // or sits somewhere the engagement cannot reach.
 func TestComputeOffersUnexploitedFindings(t *testing.T) {
-	result, err := Compute(unreachableState(), "host-5555", DefaultK)
+	result, err := Compute(unreachableState(), "host-5555", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -420,7 +421,7 @@ func TestComputeOffersUnexploitedFindings(t *testing.T) {
 	exploited.Entities = append(exploited.Entities, accessEntity("access-9f9f", "host-3333", engagementstate.LevelUser))
 	exploited.Edges = append(exploited.Edges,
 		edgeOf(engagementstate.EdgeExploitedVia, "finding-cccc", "access-9f9f", engagementstate.ConfidenceHigh))
-	result, err = Compute(exploited, "host-5555", DefaultK)
+	result, err = Compute(exploited, "host-5555", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute(exploited) = %v", err)
 	}
@@ -430,7 +431,7 @@ func TestComputeOffersUnexploitedFindings(t *testing.T) {
 
 	refuted := unreachableState()
 	refuted.Findings[0].Verification = engagementstate.VerificationRefuted
-	result, err = Compute(refuted, "host-5555", DefaultK)
+	result, err = Compute(refuted, "host-5555", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute(refuted) = %v", err)
 	}
@@ -440,7 +441,7 @@ func TestComputeOffersUnexploitedFindings(t *testing.T) {
 
 	outOfReach := unreachableState()
 	outOfReach.Findings[0].Affected = []string{"host-5555"}
-	result, err = Compute(outOfReach, "host-5555", DefaultK)
+	result, err = Compute(outOfReach, "host-5555", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute(out-of-reach finding) = %v", err)
 	}
@@ -471,7 +472,7 @@ func TestComputePathCap(t *testing.T) {
 	snapshot.Edges = append(snapshot.Edges,
 		edgeOf(engagementstate.EdgePivotTo, "access-0001", "host-0000", engagementstate.ConfidenceHigh))
 
-	result, err := Compute(snapshot, "host-0007", DefaultK)
+	result, err := Compute(snapshot, "host-0007", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -493,7 +494,7 @@ func TestComputeCapsRefuse(t *testing.T) {
 	for i := 0; i <= MaxNodes; i++ {
 		tooManyNodes.Entities = append(tooManyNodes.Entities, hostEntity(fmt.Sprintf("host-%05d", i), "", ""))
 	}
-	if _, err := Compute(tooManyNodes, "host-4444", DefaultK); !errors.Is(err, ErrCap) {
+	if _, err := Compute(tooManyNodes, "host-4444", DefaultK, Options{}); !errors.Is(err, ErrCap) {
 		t.Errorf("node cap = %v, want ErrCap", err)
 	}
 
@@ -509,7 +510,7 @@ func TestComputeCapsRefuse(t *testing.T) {
 		tooManySteps.Edges = append(tooManySteps.Edges,
 			edgeOf(engagementstate.EdgeValidFor, "cred-0001", "host-0001", engagementstate.ConfidenceHigh))
 	}
-	if _, err := Compute(tooManySteps, "host-0001", DefaultK); !errors.Is(err, ErrCap) {
+	if _, err := Compute(tooManySteps, "host-0001", DefaultK, Options{}); !errors.Is(err, ErrCap) {
 		t.Errorf("step cap = %v, want ErrCap", err)
 	}
 }
@@ -517,7 +518,7 @@ func TestComputeCapsRefuse(t *testing.T) {
 func TestComputeRefusesATruncatedSnapshot(t *testing.T) {
 	snapshot := costModelState()
 	snapshot.Truncated = true
-	if _, err := Compute(snapshot, "host-4444", DefaultK); err == nil {
+	if _, err := Compute(snapshot, "host-4444", DefaultK, Options{}); err == nil {
 		t.Fatal("Compute(truncated) = nil error, want a refusal")
 	}
 }
@@ -536,7 +537,7 @@ func TestComputeFewerThanKAndLoopless(t *testing.T) {
 			edgeOf(engagementstate.EdgePivotTo, "access-0001", "host-0003", engagementstate.ConfidenceHigh),
 		},
 	}
-	result, err := Compute(snapshot, "host-0003", DefaultK)
+	result, err := Compute(snapshot, "host-0003", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -560,7 +561,7 @@ func TestComputeFewerThanKAndLoopless(t *testing.T) {
 }
 
 func TestComputeAddingAStepNeverRaisesAnExistingCost(t *testing.T) {
-	before, err := Compute(costModelState(), "host-4444", DefaultK)
+	before, err := Compute(costModelState(), "host-4444", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute() = %v", err)
 	}
@@ -574,7 +575,7 @@ func TestComputeAddingAStepNeverRaisesAnExistingCost(t *testing.T) {
 		edgeOf(engagementstate.EdgeCredentialFrom, "cred-zzzz", "host-2222", engagementstate.ConfidenceLow),
 		edgeOf(engagementstate.EdgeValidFor, "cred-zzzz", "host-4444", engagementstate.ConfidenceLow),
 	)
-	after, err := Compute(more, "host-4444", DefaultK)
+	after, err := Compute(more, "host-4444", DefaultK, Options{})
 	if err != nil {
 		t.Fatalf("Compute(more) = %v", err)
 	}
