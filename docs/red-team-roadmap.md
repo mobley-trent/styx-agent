@@ -116,5 +116,7 @@ Graduated as tickets on the map, or still in its fog. The **v1.1 substrate desig
 decided**: the findings/state schema in [`docs/engagement-state.md`](engagement-state.md),
 the parser tool contracts in [`docs/parser-tool-contracts.md`](parser-tool-contracts.md), and
 the relationship-graph and attack-path computation in
-[`docs/attack-paths.md`](attack-paths.md). Still open: headless severity-gating details and
-sandbox-image contents (operating surface); and the reach and provider designs.
+[`docs/attack-paths.md`](attack-paths.md), and the non-interactive run in
+[`docs/headless-ci.md`](headless-ci.md). Still open: the headless findings artifact and severity
+gate, diff scoping, the USD budget, and sandbox-image contents (operating surface); and the reach
+and provider designs.
