@@ -20,10 +20,11 @@ build on. Keystone rationale: [`docs/adr/0004-engagement-state-lives-outside-the
   `state_update`. A second concurrent session on the same engagement may read; writes
   fail with a clear "engagement state is locked by session X" error. No silent
   last-writer-wins clobbering of a forensic record.
-- **Versioning:** a top-level `schema_version` (starts at 1). Same-major readers
-  tolerate unknown additive keys — the same contract as session JSONL and config
-  (§10.1, §10.3). An incompatible major refuses loudly with a message naming the file;
-  no automatic migration in v1.
+- **Versioning:** a top-level `schema_version` (starts at 1). A build reads exactly the
+  version it writes: any other value refuses loudly with a message naming the file, and v1
+  has no automatic migration. Unknown additive keys still decode, so a document carrying
+  extra fields loads — the same additive contract as session JSONL and config (§10.1,
+  §10.3).
 - **Retention:** the store persists until the operator deletes it. Deactivation
   (`/mode`) and session end keep it; nothing auto-prunes on engagement expiry.
 

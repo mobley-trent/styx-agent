@@ -22,7 +22,8 @@ Six harness-owned parser tools, one per scanner:
 
 Per `docs/engagement-state.md` §3, AD domain/user/group entities are **deferred**, so
 `bloodhound_parse` writes through the identity subset it can express: `access`, `credential`,
-and the `ADMIN_OF` / `PIVOT_TO` / `EXPLOITED_VIA` edges. Everything else in Pentestcode's
+and the `ADMIN_OF` / `PIVOT_TO` edges. It writes no `EXPLOITED_VIA`: that edge runs from a
+finding, and an identity graph carries no findings for it to come from. Everything else in Pentestcode's
 18-tool set (`xss_detect`, `jwt_analyze`, `cred_spray`, `ensure_tools`, …) is **out of this
 ticket**; `state_query` / `state_update` are owned by [#74](https://github.com/mobley-trent/styx-agent/issues/74) ([`docs/engagement-state.md`](engagement-state.md)), and `attack_path_suggest` by [#76](https://github.com/mobley-trent/styx-agent/issues/76) ([`docs/attack-paths.md`](attack-paths.md)).
 
@@ -99,8 +100,8 @@ Enforcement is **structural + tracked, never a hard block**:
    - **Surfaced** in the **state digest** (a `pending parse: <artifact> → <parser>` line,
      see `docs/engagement-state.md` §8) and in the status bar; and as a directive text in
      the turn following detection.
-   - **Cleared** when the matching parser successfully parses that artifact, the artifact is
-     removed, or the obligation is explicitly waived. A parsed artifact stays on disk — it
+   - **Cleared** when the matching parser successfully parses that artifact, or when the
+     artifact is removed: removal is the operator's waiver. A parsed artifact stays on disk — it
      is evidence — so the clear is remembered by the artifact's write stamp (size and mtime):
      that version is never nudged again, while a rewrite by another scan is a new, unread
      artifact.
@@ -156,17 +157,20 @@ never dangle. Natural keys are `docs/engagement-state.md` §3's.
 
 | Parser | Entities | Edges | Findings? | Severity / confidence source | Evidence |
 |---|---|---|---|---|---|
-| `nmap_parse` | `host` (addresses, hostname, os), `service` (port/proto/product/version, state=open), `segment` from a scanned CIDR | `RUNS_ON`, `RESOLVES_TO`, `IN_SEGMENT` | **No** — ports are facts, not vulnerabilities | n/a (facts) | none (findings only carry evidence; hosts don't) |
+| `nmap_parse` | `host` (addresses, hostname, os), `service` (port/proto/product/version, state=open), `segment` from a scanned CIDR | `RUNS_ON`, `IN_SEGMENT` | **No** — ports are facts, not vulnerabilities | n/a (facts) | none (findings only carry evidence; hosts don't) |
 | `nuclei_parse` | `host`, `service` (matched port) | `RUNS_ON` | Yes, one per template match | severity from nuclei `info.severity`; confidence `medium` | `http-response` (request/response excerpt) + `artifact` |
 | `sqlmap_parse` | `host`/`service`, `credential` (dumped users/hashes), `access` (DB admin) | `CREDENTIAL_FROM`, `VALID_FOR`, `EXPLOITED_VIA` | Yes, one per injectable parameter | severity `high` (confirmed injection); confidence `high` | `cli-output` (payload/log excerpt) + `artifact` |
 | `gobuster_parse` | `host`, `service` | `RESOLVES_TO` (dns/vhost modes) | **dir mode:** one `info`-severity finding **per host**, carrying the discovered-path list as evidence | none in output → `info` / `low` | `cli-output` + `artifact` |
-| `cme_parse` | `host`/`service`, `credential`, `access` | `VALID_FOR`, `ADMIN_OF`, `PIVOT_TO` | Yes, per positive module result (e.g. SMB signing off) | severity from module; confidence `high` for a valid-login result | `cli-output` + `artifact` |
-| `bloodhound_parse` | `access` (user→host at a level), `credential` | `ADMIN_OF`, `PIVOT_TO`, `EXPLOITED_VIA` | No (it is an identity graph, not a vuln list) | n/a | `artifact` |
+| `cme_parse` | `host`/`service`, `credential`, `access` | `VALID_FOR`, `ADMIN_OF`, `PIVOT_TO` | Yes, per positive module result (e.g. SMB signing off) | the log names no severity, so a module result is `info` with a warning; confidence `high` for a valid-login result | `cli-output` + `artifact` |
+| `bloodhound_parse` | `access` (user→host at a level), `credential` | `ADMIN_OF`, `PIVOT_TO` | No (it is an identity graph, not a vuln list) | n/a | `artifact` |
 
 Notes on the text-shaped parsers: `sqlmap_parse` and `cme_parse` parse their per-target
 `log` files with strict line patterns and accept reduced field fidelity (no JSON path in
 v1). `gobuster_parse` collapses all discovered paths for a host into one info finding
-rather than one finding per path — a dir listing is context, not N findings.
+rather than one finding per path — a dir listing is context, not N findings. `nmap_parse`
+records a discovered hostname as an attribute of the host, not as a `RESOLVES_TO` edge: the
+artifact names no second host for the name to resolve to, and an edge from a host to itself
+would be noise in the graph.
 
 ## 7. Failure & malformed output
 
