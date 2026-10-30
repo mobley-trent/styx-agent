@@ -152,7 +152,8 @@ one per scanner (nmap, nuclei, sqlmap, gobuster, cme, bloodhound). The only path
 output into state.
 
 **Artifact**
-A preserved raw tool output file that a parser reads and a finding cites as evidence.
+A preserved raw tool output file that a parser reads and a finding cites as evidence. Raw input to
+styx, never a rendering out of it.
 
 **Artifact directory**
 `.styx/out/` at the project root: where scanners are asked to write raw output. Activation
@@ -165,6 +166,21 @@ the model sees the result without re-reading the raw output.
 **Pending-parse obligation**
 The harness-tracked record that a scanner artifact has not yet been parsed, surfaced in the
 state digest. Advisory, never a block.
+
+## Reporting
+
+**Findings export**
+The machine-readable rendering of a run's reportable findings — JSON, CSV, and SARIF — written at
+the end of a non-interactive run. A view of engagement state at one moment: deterministic, and
+never a second record.
+
+**Reportable finding**
+A finding an export carries and the severity gate reads: active, not `false_positive` or `fixed`,
+and not `refuted`.
+
+**Report**
+The human-facing narrative generated from engagement state: remediation prose and a viewer. Prose
+for a reader, as distinct from a findings export's records for a machine.
 
 ## Agents
 
