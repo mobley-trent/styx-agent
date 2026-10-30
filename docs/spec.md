@@ -283,7 +283,7 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `state_query` | read engagement state: entities, findings, neighborhood reads over the relationship graph | no |
 | `state_update` | write engagement state through typed, atomic ops (upserts, evidence, status, verification, edges) | no |
 | `nmap_parse` / `nuclei_parse` / `sqlmap_parse` / `gobuster_parse` / `cme_parse` / `bloodhound_parse` | parse one scanner artifact into engagement state over one harness-side pipeline (per-format extractor → atomic op batch → receipt) | no |
-| `attack_path_suggest` | suggest the cheapest costed attack paths from current access to a target host or service; advisory text only, never scheduled | no |
+| `attack_path_suggest` | suggest the cheapest costed attack paths from current access to a target host or service, or the positioning routes plus the priced exploit for a target finding; advisory text only, never scheduled | no |
 
 One exec surface per mechanism: `bash` for shell, `code_exec` for language runtimes.
 Strict mode applies to all built-ins; the repair layer validates their arguments. The six
