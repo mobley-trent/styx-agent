@@ -10,7 +10,10 @@ the engagement-state model decided in [#74](https://github.com/mobley-trent/styx
 Keystone rationale: [`docs/adr/0006-attack-paths-are-advisory.md`](adr/0006-attack-paths-are-advisory.md).
 Reconciled with the shipped computation by
 [#95](https://github.com/mobley-trent/styx-agent/issues/95): an `EXPLOITED_VIA` access is current
-access, so exploitation is provenance on a foothold rather than a capability step.
+access, so exploitation is provenance on a foothold rather than a capability step. Extended by
+[#98](https://github.com/mobley-trent/styx-agent/issues/98): exploitation is priced as a
+**terminal** step on a finding target (§3.1) — never an interior one, so the projection in §2 is
+unchanged.
 
 ## 1. Scope
 
@@ -46,11 +49,13 @@ Rules:
   traversed.
 - **Excluded.** `active: false` entities produce no steps at all — a step is dropped if either
   endpoint is inactive.
-- **Findings are not steps.** `EXPLOITED_VIA` is retrospective: it records the exploit that *ran*
-  and the foothold it produced. That foothold is an active `access`, so it is a cost-0 source
-  (§4) and its target is already held (§8). The record never holds a foothold the engagement does
-  not have, so a step priced "exploit this and land over there" would be inventing state. Unrun
-  findings reach the model as hints beside an unreachable result (§5), never as priced steps.
+- **Findings are not traversable steps.** `EXPLOITED_VIA` is retrospective: it records the
+  exploit that *ran* and the foothold it produced. That foothold is an active `access`, so it is a
+  cost-0 source (§4) and its target is already held (§8). The record never holds a foothold the
+  engagement does not have, so an *interior* step priced "exploit this and land over there" would
+  invent the foothold, its level, and what that foothold could then reach. Exploitation is
+  therefore priced as a **terminal** step only (§3.1): the route ends in the exploit, and the
+  model records the real foothold afterwards.
 - **Subsumption.** A credential with `ADMIN_OF` a target yields one `admin_via` step, never
   `use_credential` + `admin_via`; privileged routes must not pay twice and lose to the
   unprivileged ones. Reaching a target at admin level satisfies the goal.
@@ -71,10 +76,10 @@ Ranking intent: a route already holding the credential is cheaper than lateral m
 **Confidence** — high ×1 · medium ×3 · low ×9, taken from the **stored edge the step derives
 from** — the mapping `engagement-state.md` §4 reserves for this design.
 
-**No verdict multiplier.** Nothing is priced by a finding, so `verified`/`unverified` do not enter
-the cost model at all. Verification still governs what a diagnostic may surface — a `refuted`
-finding is never offered as an exploit opportunity (§5) — but it does not rank a route, because no
-route is priced by a finding's existence.
+**No verdict multiplier on capability steps.** None of the four steps is priced by a finding, so
+`verified` and `unverified` do not touch their cost. Verification ranks exactly one thing: the
+terminal exploit step (§3.1), which *is* priced by a finding's existence. A `refuted` finding is
+never ranked at all — it is excluded before pricing (§5), not multiplied into silence.
 
 **OPSEC noise** — a *static per-mechanism* multiplier: `admin_via` ×1 (a login) ·
 `harvest_credential` ×2 (reading files) · `use_credential` ×2 (an authenticated access) ·
@@ -84,6 +89,38 @@ v1.
 
 The gaps between multipliers are deliberately wide: confidence dominates a route's ranking, so a
 low-confidence route does not win on rounding.
+
+### The exploit step (terminal)
+
+One more step is priced, and it is not part of the projection: `exploit`, appended to a route
+whose target is a **finding** (§4).
+
+```
+exploit_cost = base(exploit) × confidence(finding) × verification(finding) × noise(exploit)
+```
+
+- **Base 3, noise ×4.** Exploitation is the loudest thing the model can do — louder than moving
+  laterally, which is `pivot` ×4 at base 5. A route that uses something already in the record wins
+  wherever one exists: the worked example reaches a held target for 26 and prices one exploit at
+  128.
+- **Confidence and verification come from the finding** — the mapping `engagement-state.md` §5
+  reserved for this design. Verification is ×1 `verified` · ×3 `unverified`; a `refuted` finding is
+  excluded before pricing (§5), so no multiplier can make one cheap.
+- **Severity is not a price.** Cost measures effort and risk; severity measures payoff. They are
+  reported side by side and never multiplied, so a `critical` label cannot buy a discount on a
+  noisy exploit.
+- **Terminal by construction.** Nothing follows the step. Nothing in the record says what foothold
+  an unrun exploit yields or what that foothold would reach, so a continuation would be invented
+  state. Once the exploit runs, the model records the real `access` and its `EXPLOITED_VIA` edge,
+  the finding stops being rankable, and the foothold becomes a cost-0 source for the next query.
+  That loop is what keeps the step honest.
+- **Yield unknown.** The result reports the arrival level the *positioning* route achieves and says
+  the exploit's yield is unknown. It is never derived from severity and never assumed to be
+  `user`.
+- **The price does not reorder a finding's own routes.** It is the same constant for every
+  positioning route to one finding, so within a target the ranking is the projection's. The number
+  exists to make two findings comparable, and to give the v1.2 exploitation-phase planner a
+  positioning price to compose instead of re-deriving.
 
 ### Worked example
 
@@ -106,6 +143,11 @@ exploitation. Target: `host-4444`.
 The token route wins on privilege, not distance: one admin step beats an authenticated login. K=3
 returns both, with a note that no third distinct route exists.
 
+Ask for `finding-cccc` instead and the terminal step is priced: the cheapest positioning route is
+the same pivot (20), the finding is medium and unverified, so the exploit is 3×3×3×4 = 108 and the
+total 128 — `positioning 20 · exploit 108 · total 128`. The arrival level is `user` (the pivot's
+foothold), and the exploit's yield is unknown until it runs.
+
 Now exploit `finding-cccc` and record what it produced — `access-9f9f`, admin on `host-4444`, with
 `EXPLOITED_VIA` from the finding. The target is held, so §8 returns the zero-step result at admin
 level and §3 prices no route at all: the exploit in the record is one that already ran. The
@@ -122,9 +164,15 @@ you already hold is *access*. The earlier draft of this section asked one record
   the foothold is. A finding is never a source.
 - **No footholds** — an engagement with no active `access` returns a structured *no-footholds*
   result, never an invented start and never an empty list.
-- **Target** — exactly one required `target` string, naming a **host or service**. Resolution
-  order: entity id → address → hostname. **An ambiguous or unmatched target is a hard error**,
-  never a guess (the parser tools' "inferred-nothing is an error" discipline).
+- **Target** — exactly one required `target` string, naming a **host or service**, or a
+  **finding**. Resolution order: entity id → address → hostname → finding id. A finding resolves
+  by **id only**, never by title: titles are neither unique nor stable, and a fuzzy match on one
+  would be exactly the guess these rules forbid. **An ambiguous or unmatched target is a hard
+  error**, never a guess (the parser tools' "inferred-nothing is an error" discipline).
+- **A finding target** — the cheapest positioning routes to its affected node(s), each ending in
+  the exploit step (§3.1). A finding affected on several nodes yields one route per reachable
+  affected node, ranked together by total cost, each naming the node it lands on. Findings are
+  never sources: only `access` is.
 - **Reaching the target** — a path succeeds when its final node is the resolved target entity.
   Its arrival *level* (from the last step) is reported, never persisted: writing an implied
   `access` entity would make this a state mutation, and it is not one.
@@ -150,21 +198,34 @@ Dijkstra for the cheapest route, Yen's algorithm for the **K = 3** cheapest loop
   intersected with the forward-reachable set — up to three "closest we got" nodes with the
   missing step named ("`host-2222` is one credential away from `host-4444`"). That is the
   difference between a suggestion and a dead end.
-- **Exploit opportunities** — an unreachable result also names up to three **unexploited findings
-  on nodes current access can already reach**: active, not `refuted`, carrying no `EXPLOITED_VIA`
-  edge of their own, with an affected node in the forward-reachable set. They are hints, not
-  steps: nothing prices them, nothing schedules them, and nothing claims what foothold an unrun
-  exploit would yield. That is the difference between "you cannot get there" and "you cannot get
-  there *yet*".
+- **Exploit opportunities** — an unreachable result also names up to three **exploitable findings
+  on nodes current access can already reach**, under the same eligibility rule as the exploit step
+  (§5) and with an affected node in the forward-reachable set. They are hints, not priced steps:
+  naming one as a target is what prices it (§4). That is the difference between "you cannot get
+  there" and "you cannot get there *yet*".
 - **Read-only.** The computation writes nothing to the store, ever.
+
+### Eligibility
+
+One predicate decides what is exploitable, so a finding can never be hinted at as an opportunity
+while being unpriceable as a target, or the reverse. A finding is exploitable when **all** hold:
+
+- it is `active`;
+- its `status` is not `false_positive` or `fixed` — there is nothing left to exploit;
+- its `verification` is not `refuted`;
+- it carries no `EXPLOITED_VIA` edge of its own — the exploit already ran, and its foothold is a
+  cost-0 source.
 
 ### The result shape
 
 Per path: `total_cost`, the arrival level, a one-line rationale, and the ordered `steps[]`,
 each carrying `from`/`to` (id plus human label), `step` (mechanism), `confidence`, `cost`, and
-`basis` — the stored edge it derives from. An unreachable result carries `closest[]` and
-`opportunities[]` instead. Truncation follows ordinary tool-output rules (capture truncation with
-a `state_query` pointer).
+`basis` — the stored record it derives from. For a finding target the result carries the
+positioning `steps[]` plus `positioning`, `exploit`, and `total` costs, the finding's `severity`,
+`verification`, and `confidence` as labels, and `yield: unknown`; the exploit step's `basis` is the
+finding record itself, the one step whose basis is a node rather than an edge. An unreachable
+result carries `closest[]` and `opportunities[]` instead. Truncation follows ordinary tool-output
+rules (capture truncation with a `state_query` pointer).
 
 ## 6. The tool: `attack_path_suggest`
 
@@ -176,7 +237,7 @@ One tool, registered always, named as the roadmap and #75 already reserve it.
   "properties": {
     "target": {
       "type": "string",
-      "description": "Entity id, address, or hostname of the host or service to reach."
+      "description": "Entity id, address, or hostname of the host or service to reach, or a finding id to price exploiting it."
     }
   },
   "required": ["target"],
@@ -213,8 +274,10 @@ computation testable in isolation and re-derivable after any state change. `Snap
 same read shape `state_query` serves, so the two consumers land once, coherently (#78).
 
 Held to: golden tests over fixture states; determinism (same snapshot → identical result);
-monotonicity (adding a step never increases a path's cost); `cost = Σ step costs`; looplessness;
-and the exclusions (inactive entities from the graph, `refuted` findings from the diagnostics).
+monotonicity (adding a step never increases a path's cost); `cost = Σ step costs`, which for a
+finding target is `positioning + exploit` with the exploit price the same whichever positioning
+route it follows; looplessness; and the exclusions (inactive entities from the graph, and
+ineligible findings from both the ranking and the diagnostics, §5).
 
 ## 8. Failure & edge cases
 
@@ -227,12 +290,22 @@ and the exclusions (inactive entities from the graph, `refuted` findings from th
   target is held so the omission cannot be read as "nothing found".
 - **Unreachable** → the closest-nodes diagnostic and the exploit-opportunity hints (§5), never an
   empty response.
+- **Already-exploited finding target** (an `EXPLOITED_VIA` edge of its own) → a named
+  `already-exploited` outcome naming the foothold it produced, never an error and never an empty
+  result: the finding is excluded before pricing (§5), and the foothold is already a source.
+- **Exploitation refused by the ROE** (`exploit_allowed: false`) → the positioning routes come
+  back with the exploit step omitted and a note saying so. The positioning answer is still true
+  and useful, so the refusal is never a fatal error.
+- **Ranking is autonomy-blind.** The exploitation autonomy level does not exist until v1.2
+  (ADR-0003), so nothing at pricing time can know which exploits the phase planner would refuse;
+  the ranking never pretends otherwise, and the ordinary policy gate refuses them when acted on.
 - Empty graph, target == source, cap exceeded → each a named structured outcome; never a panic.
 - Every error is an ordinary tool result: audit-logged, non-fatal, never a loop crash.
 
 ## 9. Spec touchpoints (applied by the implementation ticket)
 
-- **§5.1** — add `attack_path_suggest` to the built-in tool table.
+- **§5.1** — add `attack_path_suggest` to the built-in tool table, with a one-line purpose that
+  names a finding target as well as a host or service.
 - **§5.4** — add it to all four preset allowlists.
 - **§6.1** — mode defaults: safe = deny, engagement = allow (audit-logged).
 
@@ -241,10 +314,12 @@ The state digest is unchanged, so §4.5 and §10 are untouched.
 ## 10. Explicitly not in v1
 
 Outcome-shaped goals (AD domain/user/group entities, deferred by #74) · per-instance
-detectability/OPSEC fields · level-qualified targets and a `level` parameter · exploitation as a
-priced capability step (the record holds footholds, not intentions; it needs the v1.2
-exploitation phases, and is ticketed separately) · optional parameters of any kind · a
-`state_query` op in place of a tool · auto-execution or pre-authorization of suggested steps ·
+detectability/OPSEC fields · level-qualified targets and a `level` parameter · exploitation as an
+**interior** priced capability step (it would have to invent the foothold, its level, and its
+reach; §3.1 prices the terminal step instead) · autonomy-aware ranking (the exploitation autonomy
+level does not exist yet, so ranking is autonomy-blind by construction — ADR-0003) · optional
+parameters of any kind · a `state_query` op in place of a tool · auto-execution or
+pre-authorization of suggested steps ·
 phase auto-advance (v1.2, ADR-0003) · cross-engagement path reuse (deferred with cross-engagement
 learning) · path persistence or history · a TUI path renderer (it prints as an ordinary tool
 result) · automatic verification of the findings an opportunity names (a hint, never a claim).

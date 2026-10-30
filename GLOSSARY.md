@@ -107,12 +107,23 @@ for the model to act on. A suggestion, never an auto-executed step.
 **Capability step**
 A derived, actionable projection of a relationship-graph edge into a directed, costed action —
 pivot, harvest a credential, use one, or become admin. Derived on read; never a stored record.
-Exploitation is not one: an exploit that ran is provenance on the foothold it produced.
+Exploitation is not one: an exploit that ran is provenance on the foothold it produced, and one
+still unrun is a terminal exploit step.
+
+**Exploit step**
+The priced, terminal step of a route whose target is a finding: the exploit you would have to run,
+costed by the finding's confidence and verification. It ends the route and claims no foothold —
+the record says nothing about what an unrun exploit yields, so the model records the real access
+afterwards and the step disappears.
+
+**Positioning route**
+The capability route that puts the engagement in position to run an exploit, reported beside the
+exploit step as its price. Its arrival level is real; the exploit's yield is not.
 
 **Exploit opportunity**
-An unexploited finding on a host or service current access can already reach, offered as a hint
-beside an unreachable attack path. Not a step and never priced: the record does not say what
-foothold an unrun exploit would yield.
+An exploitable finding on a host or service current access can already reach, offered as a hint
+beside an unreachable attack path. A hint rather than a priced step: naming the finding as a
+target is what prices it.
 
 **Path cost**
 The cost of an attack path: the sum of its capability steps' costs, each a base cost modified by
