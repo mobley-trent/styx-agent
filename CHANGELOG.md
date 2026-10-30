@@ -92,6 +92,17 @@ file — is documented in [RELEASING.md](RELEASING.md).
   output (a multi-megabyte read, say) elides behind a marker that points at the
   session log, so one call cannot flood the terminal. (#70)
 
+### Fixed
+
+- Re-detecting a finding no longer overrules the operator. A parser's re-scan sends a finding
+  without a status or verification, and `upsert_finding` read those absences as `detected` and
+  `unverified`: a confirmed, verified finding was silently demoted on the next scan, and a
+  `fixed`, `false_positive` or `risk_accepted` one made the transition illegal, which refused
+  the whole atomic batch — losing the hosts and services that scan had just observed. An
+  omitted status or verification now leaves an existing finding's judgement alone while a new
+  one still starts `detected` and `unverified`, so a re-scan refreshes `last_seen` and appends
+  evidence, exactly as the parser contract promises.
+
 ## [v0.2.1] - 2026-10-07
 
 ### Changed

@@ -91,7 +91,9 @@ type Op struct {
 	CIDRs     []string `json:"cidrs,omitempty"`
 
 	// Title, Severity, CVSSVector, Status, Confidence, Verification, and
-	// Affected are the finding attributes.
+	// Affected are the finding attributes. An absent Status or Verification
+	// leaves an existing finding's value alone; a new finding starts detected
+	// and unverified.
 	Title        string       `json:"title,omitempty"`
 	Severity     Severity     `json:"severity,omitempty"`
 	CVSSVector   string       `json:"cvss_vector,omitempty"`
@@ -518,6 +520,12 @@ func (s *Store) upsertSegment(d *document, op Op, prov Provenance, now time.Time
 // and its evidence. Status and verification move only along their legal
 // transitions, and verification can never advance past `unverified` without
 // evidence (§5).
+//
+// An omitted status or verification is not a reset: it leaves an existing
+// finding's judgement alone, so a parser re-detecting a finding refreshes
+// `last_seen` and appends evidence without reopening a `fixed` one or discarding
+// a `verified` verdict (docs/parser-tool-contracts.md §8). A new finding still
+// starts `detected` and `unverified`.
 func (s *Store) upsertFinding(d *document, op Op, prov Provenance, now time.Time) (Effect, error) {
 	title := strings.TrimSpace(op.Title)
 	if title == "" {
@@ -530,11 +538,11 @@ func (s *Store) upsertFinding(d *document, op Op, prov Provenance, now time.Time
 	if err != nil {
 		return Effect{}, err
 	}
+	// Status and verification are optional: a caller that names neither is
+	// refreshing an observation, not asserting a judgement. They are applied
+	// only when named, so an existing finding keeps what an operator decided.
 	status := op.Status
-	if status == "" {
-		status = StatusDetected
-	}
-	if !status.valid() {
+	if status != "" && !status.valid() {
 		return Effect{}, fmt.Errorf("%w: upsert_finding: status %q: want one of %s", ErrOp, op.Status, statusList())
 	}
 	confidence := op.Confidence
@@ -545,10 +553,7 @@ func (s *Store) upsertFinding(d *document, op Op, prov Provenance, now time.Time
 		return Effect{}, fmt.Errorf("%w: upsert_finding: confidence %q: want low, medium, or high", ErrOp, op.Confidence)
 	}
 	verification := op.Verification
-	if verification == "" {
-		verification = VerificationUnverified
-	}
-	if !verification.valid() {
+	if verification != "" && !verification.valid() {
 		return Effect{}, fmt.Errorf("%w: upsert_finding: verification %q: want unverified, verified, or refuted", ErrOp, op.Verification)
 	}
 
@@ -557,13 +562,13 @@ func (s *Store) upsertFinding(d *document, op Op, prov Provenance, now time.Time
 		if f.Title != title || !slices.Equal(sortedCopy(f.Affected), sortedCopy(affected)) {
 			continue
 		}
-		if status != f.Status {
+		if status != "" && status != f.Status {
 			if err := checkTransition(f.Status, status); err != nil {
 				return Effect{}, err
 			}
 			f.Status = status
 		}
-		if verification != f.Verification {
+		if verification != "" && verification != f.Verification {
 			if err := checkVerification(verification, len(f.Evidence)); err != nil {
 				return Effect{}, err
 			}
@@ -580,9 +585,15 @@ func (s *Store) upsertFinding(d *document, op Op, prov Provenance, now time.Time
 		return Effect{Op: op.Op, Kind: string(KindFinding), ID: f.ID}, nil
 	}
 
+	if status == "" {
+		status = StatusDetected
+	}
 	if status != StatusDetected {
 		return Effect{}, fmt.Errorf("%w: upsert_finding: a new finding starts %s; use set_status to move it to %s",
 			ErrOp, StatusDetected, status)
+	}
+	if verification == "" {
+		verification = VerificationUnverified
 	}
 	if err := checkVerification(verification, 0); err != nil {
 		return Effect{}, err

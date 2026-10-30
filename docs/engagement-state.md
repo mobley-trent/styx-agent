@@ -130,6 +130,11 @@ schema validation → verdict → audit-before-execution → dispatch):
 | `set_verification` | ≥1 evidence item required |
 | `add_edge` / `remove_edge` | type ∈ closed enum; typed endpoints; confidence enum |
 
+An omitted `status` or `verification` on an existing finding leaves its value alone: a parser
+re-detection refreshes `last_seen` and appends evidence without reopening a `fixed` finding or
+discarding a `verified` verdict (`docs/parser-tool-contracts.md` §8). A new finding starts
+`detected` and `unverified`.
+
 There are **no delete ops** in v1: entities go `active: false`; edges may be removed
 without dangling anything. The model never writes the document wholesale — every
 mutation is a typed op through this API, which is what makes "never model-invented"
