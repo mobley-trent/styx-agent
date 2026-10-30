@@ -274,7 +274,7 @@ func Compute(snapshot engagementstate.Snapshot, target string, k int, opts Optio
 	// A finding target is priced differently (§3.1, §4): its route ends in the
 	// terminal exploit step, and the finding's own labels ride beside the price.
 	if resolved.finding != nil {
-		return graph.findingTarget(snapshot, sources, resolved, k, opts), nil
+		return graph.findingTarget(snapshot, sources, resolved, opts), nil
 	}
 
 	if len(sources) == 0 {
@@ -327,8 +327,10 @@ type targetRef struct {
 // findingTarget answers a finding target (§3.1, §4): the cheapest positioning
 // route to each affected node the engagement can reach, ranked by total cost,
 // each ending in the terminal exploit step when the rules of engagement permit
-// it. A finding is never a source: only access is.
-func (g *graph) findingTarget(snapshot engagementstate.Snapshot, sources []string, ref targetRef, k int, opts Options) Result {
+// it. k does not apply: a finding yields one route per affected node, not the K
+// cheapest routes, so the ranking is the nodes'. A finding is never a source:
+// only access is.
+func (g *graph) findingTarget(snapshot engagementstate.Snapshot, sources []string, ref targetRef, opts Options) Result {
 	finding := *ref.finding
 	confidence := defaultConfidence(finding.Confidence)
 	verification := defaultVerification(finding.Verification)
