@@ -77,10 +77,16 @@ awk '/^## \[Unreleased\]/ { found = 1 } END { exit !found }' <<<"$head_changelog
 
 # A set difference, not a presence check: an entry that was already unreleased
 # before this change does not cover it.
+#
+# LC_ALL=C on both the sort and the comm: this is a set operation over opaque
+# lines, and glibc's UTF-8 collations order some entries in a way comm then
+# reports as unsorted (an em dash or a curly quote is enough), which fails the
+# gate on a machine the entries are perfectly fine on. Byte order is the one
+# collation both halves agree on.
 added="$(
-	comm -13 \
-		<(unreleased_entries "$base_changelog" | sort) \
-		<(unreleased_entries "$head_changelog" | sort)
+	LC_ALL=C comm -13 \
+		<(unreleased_entries "$base_changelog" | LC_ALL=C sort) \
+		<(unreleased_entries "$head_changelog" | LC_ALL=C sort)
 )" || die "cannot compare the [Unreleased] sections of $base and $head"
 
 if [ -z "$added" ]; then
