@@ -605,3 +605,96 @@ func TestStoreRefusesWritesAfterClose(t *testing.T) {
 		t.Errorf("a closed store should not have written anything")
 	}
 }
+
+// TestUpsertFindingKeepsAnOperatorsJudgement covers §8 of the parser contract:
+// a re-detected finding refreshes the observation, and an omitted status or
+// verification leaves what an operator decided alone.
+func TestUpsertFindingKeepsAnOperatorsJudgement(t *testing.T) {
+	store := openTestStore(t)
+	mustUpdate(t, store, Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}})
+	first := mustUpdate(t, store,
+		Op{Op: OpUpsertFinding, Title: "SMB signing disabled", Severity: SeverityMedium, Affected: []string{"10.0.0.7"}},
+	)
+	id := first.Effects[0].ID
+
+	mustUpdate(t, store, Op{Op: OpSetStatus, Finding: id, Status: StatusConfirmed})
+	mustUpdate(t, store, Op{Op: OpAttachEvidence, Finding: id, EvidenceKind: EvidenceArtifact, Ref: ".styx/out/cme-10.0.0.7.log"})
+	mustUpdate(t, store, Op{Op: OpSetVerification, Finding: id, Verification: VerificationVerified})
+
+	// The parser's re-detection: title, severity, and affected only.
+	rescan := mustUpdate(t, store,
+		Op{Op: OpUpsertFinding, Title: "SMB signing disabled", Severity: SeverityHigh, Affected: []string{"10.0.0.7"}},
+	)
+	if rescan.Effects[0].ID != id || rescan.Effects[0].Created {
+		t.Fatalf("re-scan effect = %+v, want the existing finding reused", rescan.Effects[0])
+	}
+
+	finding, ok := store.Snapshot().Finding(id)
+	if !ok {
+		t.Fatalf("finding %s vanished", id)
+	}
+	if finding.Status != StatusConfirmed {
+		t.Errorf("status = %s, want the confirmed an operator set", finding.Status)
+	}
+	if finding.Verification != VerificationVerified {
+		t.Errorf("verification = %s, want the verified verdict preserved", finding.Verification)
+	}
+	if finding.Severity != SeverityHigh {
+		t.Errorf("severity = %s, want the re-scan's observation", finding.Severity)
+	}
+	if finding.EvidenceCount() != 1 {
+		t.Errorf("evidence = %d, want the one item still attached", finding.EvidenceCount())
+	}
+}
+
+// TestRescanOfAFixedFindingLandsTheWholeBatch covers the batch-refusal half:
+// re-detecting a finding an operator marked fixed used to abort the batch on an
+// illegal fixed -> detected transition, losing everything else the parse saw.
+func TestRescanOfAFixedFindingLandsTheWholeBatch(t *testing.T) {
+	store := openTestStore(t)
+	mustUpdate(t, store, Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}})
+	first := mustUpdate(t, store,
+		Op{Op: OpUpsertFinding, Title: "SMB signing disabled", Severity: SeverityMedium, Affected: []string{"10.0.0.7"}},
+	)
+	id := first.Effects[0].ID
+	mustUpdate(t, store, Op{Op: OpSetStatus, Finding: id, Status: StatusConfirmed})
+	mustUpdate(t, store, Op{Op: OpSetStatus, Finding: id, Status: StatusFixed})
+
+	receipt, err := store.Update(context.Background(), Origin{Tool: "cme_parse"}, []Op{
+		{Op: OpUpsertEntity, Kind: KindService, Host: "10.0.0.7", Port: 445, Proto: "tcp", State: StateOpen},
+		{Op: OpUpsertFinding, Title: "SMB signing disabled", Severity: SeverityMedium, Affected: []string{"10.0.0.7"}},
+	})
+	if err != nil {
+		t.Fatalf("re-scan of a fixed finding = %v, want the batch accepted", err)
+	}
+	if len(receipt.Effects) != 2 {
+		t.Errorf("effects = %+v, want both ops landed", receipt.Effects)
+	}
+	finding, ok := store.Snapshot().Finding(id)
+	if !ok {
+		t.Fatalf("finding %s vanished", id)
+	}
+	if finding.Status != StatusFixed {
+		t.Errorf("status = %s, want the fixed an operator set", finding.Status)
+	}
+}
+
+// TestUpsertFindingStillRefusesAnIllegalStatus keeps the other direction
+// honest: naming a status still runs it through the lifecycle.
+func TestUpsertFindingStillRefusesAnIllegalStatus(t *testing.T) {
+	store := openTestStore(t)
+	mustUpdate(t, store, Op{Op: OpUpsertEntity, Kind: KindHost, Addresses: []string{"10.0.0.7"}})
+	first := mustUpdate(t, store,
+		Op{Op: OpUpsertFinding, Title: "SMB signing disabled", Severity: SeverityMedium, Affected: []string{"10.0.0.7"}},
+	)
+	id := first.Effects[0].ID
+	mustUpdate(t, store, Op{Op: OpSetStatus, Finding: id, Status: StatusConfirmed})
+	mustUpdate(t, store, Op{Op: OpSetStatus, Finding: id, Status: StatusFalsePositive})
+
+	_, err := store.Update(context.Background(), Origin{Tool: "state_update"}, []Op{
+		{Op: OpUpsertFinding, Title: "SMB signing disabled", Severity: SeverityMedium, Status: StatusDetected, Affected: []string{"10.0.0.7"}},
+	})
+	if !errors.Is(err, ErrOp) || !strings.Contains(err.Error(), "false_positive -> detected") {
+		t.Fatalf("Update(explicit illegal status) = %v, want the lifecycle refusal", err)
+	}
+}

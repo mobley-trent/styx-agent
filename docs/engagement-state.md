@@ -20,10 +20,11 @@ build on. Keystone rationale: [`docs/adr/0004-engagement-state-lives-outside-the
   `state_update`. A second concurrent session on the same engagement may read; writes
   fail with a clear "engagement state is locked by session X" error. No silent
   last-writer-wins clobbering of a forensic record.
-- **Versioning:** a top-level `schema_version` (starts at 1). Same-major readers
-  tolerate unknown additive keys — the same contract as session JSONL and config
-  (§10.1, §10.3). An incompatible major refuses loudly with a message naming the file;
-  no automatic migration in v1.
+- **Versioning:** a top-level `schema_version` (starts at 1). A build reads exactly the
+  version it writes: any other value refuses loudly with a message naming the file, and v1
+  has no automatic migration. Unknown additive keys still decode, so a document carrying
+  extra fields loads — the same additive contract as session JSONL and config (§10.1,
+  §10.3).
 - **Retention:** the store persists until the operator deletes it. Deactivation
   (`/mode`) and session end keep it; nothing auto-prunes on engagement expiry.
 
@@ -129,6 +130,11 @@ schema validation → verdict → audit-before-execution → dispatch):
 | `attach_evidence` | provenance stamped by the harness, not passed in |
 | `set_verification` | ≥1 evidence item required |
 | `add_edge` / `remove_edge` | type ∈ closed enum; typed endpoints; confidence enum |
+
+An omitted `status` or `verification` on an existing finding leaves its value alone: a parser
+re-detection refreshes `last_seen` and appends evidence without reopening a `fixed` finding or
+discarding a `verified` verdict (`docs/parser-tool-contracts.md` §8). A new finding starts
+`detected` and `unverified`.
 
 There are **no delete ops** in v1: entities go `active: false`; edges may be removed
 without dangling anything. The model never writes the document wholesale — every
