@@ -66,6 +66,11 @@ project config overlay.
 The live TUI ask when the policy engine returns *prompt*: allow-once, allow-this-session,
 or deny-this-session. Session-scoped only; never writes persistent config.
 
+**Non-interactive run**
+A run with no terminal and no operator (`-n`): one task, one turn, every promptable verdict denied,
+and output split between an answer stream and an operational transcript. A prompt here is a
+refusal, never a permission; authority comes only from what a human wrote down before the run.
+
 **Degraded isolation**
 Container execution when the harness cannot enforce container egress at the host's network
 edge: the container gets no external network plus a harness-mediated egress path scoped to
