@@ -51,6 +51,11 @@ type Options struct {
 	Engagement string
 	// ProjectDir is the project root; empty means the working directory.
 	ProjectDir string
+	// NonInteractive runs exactly one task in one turn with no terminal and no
+	// command surface (docs/headless-ci.md §2). Task is that one task: with
+	// NonInteractive set, stdin is never read and there is no second prompt.
+	NonInteractive bool
+	Task           string
 	// Version is the running binary's version, shown in the status line.
 	Version string
 	// SourceBuild marks an unstamped (go build / go install) binary. The update
@@ -122,6 +127,13 @@ type Harness struct {
 	// Version is the binary version.
 	Version string
 
+	// headless marks a non-interactive run (docs/headless-ci.md). It selects
+	// the line printer instead of the TUI, installs no prompt sink, and makes
+	// an engagement run refuse a store another live session holds (§5.4).
+	headless bool
+	// task is the single task a headless run submits (§2.1).
+	task string
+
 	// model is the pinned model ID currently in force. /model swaps it without
 	// touching the byte-stable prompt prefix (§3.1).
 	model string
@@ -148,8 +160,11 @@ type Harness struct {
 	mcp           *mcpclient.Manager
 	compactor     *agent.Compactor
 	out           io.Writer
-	now           func() time.Time
-	warned        bool
+	// errOut is stderr: the harness's own voice and, headless, the whole
+	// transcript (docs/headless-ci.md §6.1). stdout stays the answer alone.
+	errOut io.Writer
+	now    func() time.Time
+	warned bool
 	// updateNotified records that the notifier has emitted its one notice for
 	// this session, so a second CheckForUpdate never re-renders it.
 	updateNotified bool
@@ -198,6 +213,9 @@ type Harness struct {
 // that needs the provider fails on demand with an actionable, recoverable
 // error (§1 "fail on demand").
 func Run(ctx context.Context, opts Options) error {
+	if opts.NonInteractive && strings.TrimSpace(opts.Task) == "" {
+		return errors.New("styx: a non-interactive run needs one task")
+	}
 	h, err := Build(ctx, opts)
 	if err != nil {
 		return err
@@ -207,6 +225,9 @@ func Run(ctx context.Context, opts Options) error {
 	runner := opts.Runner
 	if runner == nil {
 		runner = runTUI
+		if opts.NonInteractive {
+			runner = runHeadless
+		}
 	}
 	return runner(ctx, h)
 }
@@ -222,6 +243,10 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 	out := opts.Stdout
 	if out == nil {
 		out = os.Stdout
+	}
+	errOut := opts.Stderr
+	if errOut == nil {
+		errOut = os.Stderr
 	}
 	now := opts.Now
 	if now == nil {
@@ -303,6 +328,9 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		sessions:       store,
 		audit:          auditWriter,
 		out:            out,
+		errOut:         errOut,
+		headless:       opts.NonInteractive,
+		task:           strings.TrimSpace(opts.Task),
 		now:            now,
 		session:        session,
 		client:         client,
@@ -322,6 +350,11 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		h.engagementStart = now()
 	}
 	if err := h.configure(); err != nil {
+		// The session never ran, so it leaves no engagement notes behind: the
+		// resources are released, not the record of a run that did not happen.
+		h.mu.Lock()
+		h.Engagement = nil
+		h.mu.Unlock()
 		_ = h.Close()
 		return nil, err
 	}
@@ -335,10 +368,11 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 	// and engagement state (§12.3). When it is not permitted, no notifier is
 	// constructed and nothing ever fetches.
 	gate := update.Gate{
-		ConfigEnabled: cfg.UpdateNotifier,
-		SourceBuild:   opts.SourceBuild,
-		Engagement:    eng != nil,
-		Env:           env,
+		ConfigEnabled:  cfg.UpdateNotifier,
+		SourceBuild:    opts.SourceBuild,
+		Engagement:     eng != nil,
+		NonInteractive: opts.NonInteractive,
+		Env:            env,
 	}
 	if gate.Active() {
 		h.notifier = update.NewNotifier(opts.Version, opts.UpdateFetcher)
@@ -445,6 +479,19 @@ func (h *Harness) configure() error {
 			_ = container.Close()
 		}
 		return err
+	}
+
+	// A headless run must be the only writer on its engagement: a store another
+	// live session holds opens read-only, and a CI scan that records nothing
+	// while exiting successfully is the worst outcome a pipeline can be handed
+	// (docs/headless-ci.md §5.4). Interactive keeps the readable store, whose
+	// digest says the state is locked and a human can act on it.
+	if h.headless && stateStore != nil && !stateStore.Writable() {
+		if container != nil {
+			_ = container.Close()
+		}
+		_ = stateStore.Close()
+		return fmt.Errorf("refusing to start: engagement state is locked by %s; a headless run records nothing while another session holds it", stateStore.Holder())
 	}
 
 	// The pending-parse watch arrives with the store: an engagement's artifacts
@@ -722,16 +769,26 @@ func (h *Harness) mcpTools(manager *mcpclient.Manager) []agent.Tool {
 
 // loopOptions are the loop options shared by every mode's loop.
 func (h *Harness) loopOptions() []agent.LoopOption {
-	return []agent.LoopOption{
+	opts := []agent.LoopOption{
 		agent.WithModelResolver(h.currentModel),
 		agent.WithClock(h.now),
 		agent.WithEmitter(h.emit),
-		agent.WithPrompter(operator{h}),
-		agent.WithDiffReviewer(operator{h}),
-		agent.WithPlanApprover(operator{h}),
 		agent.WithIsolationProvider(func() audit.Isolation { return h.isolation() }),
 		agent.WithCompactor(h.compactor),
 	}
+	if h.headless {
+		// No operator is attached, and that is structural rather than a special
+		// case in the operator adapter: the loop resolves every prompt to a
+		// deny carrying no-operator, applies a diff only when the call was
+		// already allowed, and never pre-approves a plan
+		// (docs/headless-ci.md §3, §4). Subagent loops reuse these options.
+		return append(opts, agent.WithNoOperator())
+	}
+	return append(opts,
+		agent.WithPrompter(operator{h}),
+		agent.WithDiffReviewer(operator{h}),
+		agent.WithPlanApprover(operator{h}),
+	)
 }
 
 // newCompactor builds the session's context compactor from the merged config
@@ -1115,6 +1172,14 @@ func engagementContext(eng *engagement.Engagement) *agent.EngagementContext {
 // conversation with the run's result: the loop returns the full post-run
 // conversation, already compacted if it crossed the threshold (§4.5).
 func (h *Harness) Submit(ctx context.Context, text string) error {
+	_, err := h.SubmitResult(ctx, text)
+	return err
+}
+
+// SubmitResult is Submit with the loop's own accounting returned alongside the
+// error. The headless runner needs the run's turns and answer text, which the
+// interactive caller never reads (docs/headless-ci.md §6.3).
+func (h *Harness) SubmitResult(ctx context.Context, text string) (agent.Result, error) {
 	h.mu.Lock()
 	history := append([]model.Message(nil), h.messages...)
 	// Capture the loop so a concurrent /mode switch cannot swap it mid-turn.
@@ -1129,7 +1194,7 @@ func (h *Harness) Submit(ctx context.Context, text string) error {
 	h.mu.Lock()
 	h.messages = append([]model.Message(nil), result.Messages...)
 	h.mu.Unlock()
-	return err
+	return result, err
 }
 
 // Compact runs the manual /compact override (§4.5): it compacts the session
@@ -1295,6 +1360,16 @@ func (h *Harness) MCPServers() []mcpclient.ServerStatus {
 	return mcp.Statuses()
 }
 
+// errWriter is the harness's stderr, defaulting to the process's when a caller
+// wired none. Harness-owned messages belong on it: headless, stdout is the
+// answer alone (docs/headless-ci.md §6.1).
+func (h *Harness) errWriter() io.Writer {
+	if h.errOut != nil {
+		return h.errOut
+	}
+	return os.Stderr
+}
+
 // setUI installs the live event sink (the TUI). Events are still persisted
 // whether or not a UI is attached.
 func (h *Harness) setUI(ui func(sessions.Event)) {
@@ -1447,7 +1522,7 @@ func (h *Harness) emit(ev sessions.Event) {
 	if session != nil {
 		if err := session.Record(ev); err != nil && !h.warned {
 			h.warned = true
-			_, _ = fmt.Fprintf(h.out, "styx: session log is not recording: %v\n", err)
+			_, _ = fmt.Fprintf(h.errWriter(), "styx: session log is not recording: %v\n", err)
 		}
 	}
 	if ui != nil {

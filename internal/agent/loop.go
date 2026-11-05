@@ -199,12 +199,17 @@ type Loop struct {
 	prompter      Prompter
 	reviewer      DiffReviewer
 	planner       PlanApprover
-	emit          func(sessions.Event)
-	isolation     func() audit.Isolation
-	now           func() time.Time
-	subagent      string
-	subagentRun   string
-	compactor     *Compactor
+	// operatorless marks a loop whose prompts have nobody to answer them
+	// (docs/headless-ci.md §3): a prompt resolves to a deny carrying
+	// no-operator, and a diff is applied only when the call was already
+	// allowed (§4.1).
+	operatorless bool
+	emit         func(sessions.Event)
+	isolation    func() audit.Isolation
+	now          func() time.Time
+	subagent     string
+	subagentRun  string
+	compactor    *Compactor
 	// digest supplies the engagement-state digest the loop tail-appends when
 	// state changes (docs/engagement-state.md §8). Nil appends none, which is
 	// what a subagent run gets: a subagent consumes state through state_query
@@ -293,6 +298,15 @@ func WithPlanApprover(p PlanApprover) LoopOption {
 			l.planner = p
 		}
 	}
+}
+
+// WithNoOperator marks a loop with no interactive operator attached
+// (docs/headless-ci.md §3). A prompt verdict then resolves to a deny carrying
+// ReasonNoOperator instead of reaching a prompter, and a diff-class call is
+// applied only when its resolved verdict was allow (§4.1). Subagent loops are
+// built from the same options, so a nested run inherits it.
+func WithNoOperator() LoopOption {
+	return func(l *Loop) { l.operatorless = true }
 }
 
 // WithEmitter sets the session event bus (§4.3). Every event the loop
@@ -670,9 +684,13 @@ func (l *Loop) streamTurn(ctx context.Context, messages []model.Message, turn in
 // is cleared to execute, or it already has the result text the model will see
 // (a validation failure, a denial, or a fail-closed audit error).
 type admission struct {
-	call     model.ToolCall
-	tool     Tool
-	params   map[string]any
+	call   model.ToolCall
+	tool   Tool
+	params map[string]any
+	// verdict is the resolved audit verdict the call ran under. Headless diff
+	// review reads it: a change is applied only when the call was already
+	// allowed (docs/headless-ci.md §4.1).
+	verdict  audit.Verdict
 	exec     bool
 	content  string
 	resolved bool
@@ -799,7 +817,7 @@ func (l *Loop) admit(ctx context.Context, repairer *repair.Repairer, call model.
 	})
 
 	// 3. Resolve a prompt live (§6.4).
-	auditVerdict, err := l.resolve(ctx, verdict, call, params)
+	auditVerdict, reason, err := l.resolve(ctx, verdict, call, params)
 	if err != nil {
 		adm.content = fmt.Sprintf("tool call not executed: %v", err)
 		l.emitEvent(sessions.Event{Kind: sessions.KindToolResult, Turn: turn, Tool: call.Name, CallID: call.ID, Failure: adm.content})
@@ -807,7 +825,7 @@ func (l *Loop) admit(ctx context.Context, repairer *repair.Repairer, call model.
 	}
 
 	// 4. Audit write, before execution. Fail closed (§6.5).
-	if err := l.writeAudit(call, params, auditVerdict, verdict.Reason); err != nil {
+	if err := l.writeAudit(call, params, auditVerdict, reason); err != nil {
 		adm.content = fmt.Sprintf("tool call denied: the audit trail could not be written (%v)", err)
 		l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Tool: call.Name, Failure: adm.content})
 		l.emitEvent(sessions.Event{Kind: sessions.KindToolResult, Turn: turn, Tool: call.Name, CallID: call.ID, Failure: adm.content})
@@ -822,29 +840,33 @@ func (l *Loop) admit(ctx context.Context, repairer *repair.Repairer, call model.
 		Params:    params,
 		Arguments: call.Arguments,
 		Verdict:   string(auditVerdict),
-		Reason:    string(verdict.Reason),
+		Reason:    string(reason),
 	})
 
 	if auditVerdict == audit.VerdictDeny || auditVerdict == audit.VerdictHardDeny {
-		adm.content = denialText(call.Name, verdict.Reason)
+		adm.content = denialText(call.Name, reason)
 		l.emitEvent(sessions.Event{Kind: sessions.KindToolResult, Turn: turn, Tool: call.Name, CallID: call.ID, Failure: adm.content})
 		return adm, nil
 	}
 
 	adm.tool = tool
 	adm.params = params
+	adm.verdict = auditVerdict
 	adm.exec = true
 	return adm, nil
 }
 
 // resolve turns a policy verdict into the audit verdict, asking the prompter
-// when the engine returned a prompt.
-func (l *Loop) resolve(ctx context.Context, verdict policy.VerdictResult, call model.ToolCall, params map[string]any) (audit.Verdict, error) {
+// when the engine returned a prompt. The returned reason is the audit-facing
+// justification: it is the engine's reason except when no operator is attached,
+// where it becomes no-operator so the record says which silence refused the
+// call (docs/headless-ci.md §3).
+func (l *Loop) resolve(ctx context.Context, verdict policy.VerdictResult, call model.ToolCall, params map[string]any) (audit.Verdict, policy.Reason, error) {
 	switch verdict.Verdict {
 	case policy.VerdictDeny:
-		return audit.VerdictHardDeny, nil
+		return audit.VerdictHardDeny, verdict.Reason, nil
 	case policy.VerdictAllow:
-		return audit.VerdictAllow, nil
+		return audit.VerdictAllow, verdict.Reason, nil
 	}
 
 	// Plan pre-authorization (§9.2) skips the per-step prompt for exactly the
@@ -852,14 +874,22 @@ func (l *Loop) resolve(ctx context.Context, verdict policy.VerdictResult, call m
 	// an ROE violation (also a deny), or a scope check: an out-of-scope
 	// target still prompts even when a plan lists it.
 	if verdict.Reason != policy.ReasonOutOfScope && l.planAllows(call.Name, params) {
-		return audit.VerdictAllowPlan, nil
+		return audit.VerdictAllowPlan, verdict.Reason, nil
 	}
 
 	// A session allow covers the tool for the rest of the session, but it is
 	// never a scope grant or a detonation approval: an out-of-scope target and
 	// a destructive call still prompt on every attempt (§6.2, §8.3).
 	if verdict.Reason != policy.ReasonOutOfScope && verdict.Reason != policy.ReasonDestructive && l.sessionAllowed(call.Name) {
-		return audit.VerdictAllowSession, nil
+		return audit.VerdictAllowSession, verdict.Reason, nil
+	}
+
+	// No operator is attached (docs/headless-ci.md §3). A prompt never becomes
+	// an allow: nothing was asked, so nothing was granted. The row stays a
+	// deny, the reason names the silence, and the turn continues as it would
+	// after a human's deny.
+	if l.operatorless {
+		return audit.VerdictDeny, policy.ReasonNoOperator, nil
 	}
 
 	decision, err := l.prompter.Prompt(ctx, PromptRequest{
@@ -869,16 +899,16 @@ func (l *Loop) resolve(ctx context.Context, verdict policy.VerdictResult, call m
 		Subagent: l.subagent,
 	})
 	if err != nil {
-		return audit.VerdictDeny, fmt.Errorf("permission prompt for %q: %w", call.Name, err)
+		return audit.VerdictDeny, verdict.Reason, fmt.Errorf("permission prompt for %q: %w", call.Name, err)
 	}
 	switch decision {
 	case DecisionAllowOnce:
-		return audit.VerdictAllowOnce, nil
+		return audit.VerdictAllowOnce, verdict.Reason, nil
 	case DecisionAllowSession:
 		l.rememberSession(call.Name)
-		return audit.VerdictAllowSession, nil
+		return audit.VerdictAllowSession, verdict.Reason, nil
 	default:
-		return audit.VerdictDeny, nil
+		return audit.VerdictDeny, verdict.Reason, nil
 	}
 }
 
@@ -972,6 +1002,18 @@ func (l *Loop) reviewDiff(ctx context.Context, adm *admission, turn int) (string
 		Path:   fd.Path,
 		Diff:   fd,
 	})
+
+	// With no operator the card's authorizer is absent, not its authorization:
+	// the human already authorized this class of change in a committed rule or
+	// an engagement scope, so the change applies only when the call's resolved
+	// verdict was allow (docs/headless-ci.md §4.1). A prompt was denied
+	// upstream, so it never stages a diff at all.
+	if l.operatorless {
+		if adm.verdict != audit.VerdictAllow {
+			return "", fmt.Errorf("rejected %s (no operator)", fd.Path)
+		}
+		return adm.tool.Handler(ctx, adm.params)
+	}
 
 	decision, err := l.review(ctx, adm, fd)
 	if err != nil {
@@ -1118,6 +1160,8 @@ func denialText(tool string, reason policy.Reason) string {
 		return fmt.Sprintf("tool call %q was hard-denied by the engagement's rules of engagement; this refusal is not promptable", tool)
 	case policy.ReasonOutOfScope:
 		return fmt.Sprintf("tool call %q was denied: the target is outside the engagement scope", tool)
+	case policy.ReasonNoOperator:
+		return fmt.Sprintf("tool call %q was denied: no operator is attached, so a prompted action cannot be authorized; only a project rule or an engagement scope can allow it non-interactively", tool)
 	default:
 		return fmt.Sprintf("tool call %q was denied by the permission policy (%s)", tool, reason)
 	}

@@ -37,6 +37,11 @@ const (
 	// ReasonROE is the reason when a rules-of-engagement limit hard-denied
 	// the call.
 	ReasonROE Reason = "roe"
+	// ReasonNoOperator is the reason when a promptable call was resolved with
+	// no operator attached: a non-interactive run denies what it cannot ask
+	// about, and the audit record says which silence refused it
+	// (docs/headless-ci.md §3).
+	ReasonNoOperator Reason = "no-operator"
 )
 
 // VerdictResult is a verdict plus its justification. The verdict is the

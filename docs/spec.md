@@ -609,6 +609,10 @@ prompt cards, and system banners render inline in one stream. A persistent one-l
 bar always shows: operating mode (safe/engagement), active pack, model, isolation state
 (container ok / degraded), compaction level, and in-scope targets when engaged.
 
+**Two runners, one bus**: the TUI is one runner over the session event bus; the
+non-interactive line printer (`-n`, [`headless-ci.md`](headless-ci.md) §6) is the other.
+Neither renders anything the bus did not emit, so a second renderer cannot fork behaviour.
+
 ### 9.2 Diffs & plan flow
 
 - Every write/edit renders a syntax-highlighted diff inline with per-diff Accept / Reject

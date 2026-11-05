@@ -23,6 +23,14 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- `-n` / `--non-interactive <task>`: one task, one turn, no terminal, no command surface, and stdin
+  never read. A prompted action is denied with the audit reason `no-operator` — the turn continues,
+  and the run reports itself not clean — rather than manufactured into an allow; a diff applies only
+  when a committed rule or an engagement scope already allowed the call; and a plan is never
+  pre-approved. stdout carries the answer alone, stderr the transcript and the four-line end
+  summary, and the first SIGINT/SIGTERM cancels the turn with the teardown a normal end gets. An
+  engagement state store held by another live session refuses the run at startup instead of scanning
+  and recording nothing. (#120)
 - `attack_path_suggest` takes a finding as a target and prices exploitation as a **terminal** step
   of the route: base 3 × the finding's confidence × its verification (×1 verified, ×3 unverified)
   × a static ×4 OPSEC noise, reported beside the positioning price and the total, with severity
