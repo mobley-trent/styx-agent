@@ -262,10 +262,10 @@ styx: done — 3 turns
 styx: usage 41,203 tokens · $0.0182
 styx: denied 1 prompt (run not clean)
 styx: session 7f2a19c4 (audit styx-audit-20261030T101500Z.jsonl)
-```
-
-- **Turns and usage** come from the session's own accounting (`KindUsage`), so the summary and the
-  status bar never disagree.
+```- **Turns and usage** come from the session's own accounting (`KindUsage`), so the summary and
+  the status bar never disagree. A budgeted run names its ceiling on the same line —
+  `styx: usage 41,203 tokens · $0.0182 of $0.0500` — and announces it once before the run
+  ([`docs/budget-cap.md`](budget-cap.md) §7).
 - **The denial count is authoritative.** Zero means nothing was blocked; anything else means the run
   did not do all of what it was asked. It is repeated as `run not clean` precisely so a reader who
   never looks at the count still sees it.
@@ -457,7 +457,8 @@ One line, before the end summary, on §6.2's `! ` prefix:
 The findings artifact and its path ([#114](https://github.com/mobley-trent/styx-agent/issues/114)) ·
 diff scoping, deferred to v1.3 with its semantics settled (§11)
 ([#116](https://github.com/mobley-trent/styx-agent/issues/116)) · the USD budget cap
-([#117](https://github.com/mobley-trent/styx-agent/issues/117)) · the sandbox image
+([#117](https://github.com/mobley-trent/styx-agent/issues/117)), decided beside this document in
+[`docs/budget-cap.md`](budget-cap.md) · the sandbox image
 ([#118](https://github.com/mobley-trent/styx-agent/issues/118)) · a `-q`/`--verbose` level or a
 `--json` summary (one verbosity, one human-readable summary) · reading tasks from stdin or a file ·
 multi-task and multi-turn runs · a `--yes`/`--allow-prompted` flag (ADR-0007) · a CI preset that

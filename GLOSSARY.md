@@ -241,6 +241,15 @@ DeepSeek's schema-enforced tool-calling mode, applied uniformly to all built-in 
 **Compaction**
 Reduction of conversation context: tool-output truncation at capture, plus threshold-triggered compaction — old tool results are evicted first, and the oldest conversation segment is summarized into a state summary only if eviction isn't enough. Never touches the system prompt, engagement context, ROE state, or audit records. Manual `/compact` remains available as an override.
 
+**Budget cap**
+The per-run dollar ceiling a non-interactive run may spend on model turns, measured from the session's own usage accounting and priced by the configured per-model rates. One ceiling for the run, root and child agents alike; never an estimate made before a call, and never a per-engagement total.
+
+**Budget note**
+The harness-authored message appended to the conversation when a run passes a budget threshold: how much of the ceiling is spent, and that the model should wrap up. A view of the run's spend, announced once per level — ordinary transcript content, never part of the system prompt.
+
+**Unpriced turn**
+A completed model turn whose provider reported no usage, so the run's spend cannot be measured. A budgeted run ends rather than continue with a ceiling it cannot enforce.
+
 ## Terminal interface
 
 **Plan block**
