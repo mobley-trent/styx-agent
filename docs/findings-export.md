@@ -10,7 +10,7 @@ Keystone rationale: [`docs/adr/0008-findings-exports-render-state-not-the-run.md
 The rest of the CI surface is decided beside this document and is not repeated here: the run's
 shape, streams, and end conditions ([#113](https://github.com/mobley-trent/styx-agent/issues/113),
 [`docs/headless-ci.md`](headless-ci.md)), the severity gate and its exit codes
-([#115](https://github.com/mobley-trent/styx-agent/issues/115)), diff scoping
+([`docs/headless-ci.md`](headless-ci.md) §8), diff scoping
 ([#116](https://github.com/mobley-trent/styx-agent/issues/116)), the USD budget cap
 ([#117](https://github.com/mobley-trent/styx-agent/issues/117)), and the sandbox image
 ([#118](https://github.com/mobley-trent/styx-agent/issues/118)).
@@ -25,20 +25,21 @@ machine-readable forms, and adds no fact of its own:
 - **The export is not a second record.** It is a view of the store at the moment the run ends, and
   it is written to disk rather than kept (ADR-0004's discipline, arriving at a file).
 - **The export never states a verdict.** Whether the run failed on severity is the gate's decision
-  ([#115](https://github.com/mobley-trent/styx-agent/issues/115)), taken *after* the export is
-  written, and no export field anticipates it.
+  ([`docs/headless-ci.md`](headless-ci.md) §8), taken *after* the export is written, and no export
+  field anticipates it.
 
 ## 2. Which findings: the reportable predicate
 
-One predicate decides what an export carries, and the same predicate is what the severity gate
-reads. There is exactly one definition of "a finding this run reports":
+One predicate decides what an export carries, and the severity gate reads it minus `risk_accepted`,
+so there is exactly one definition of "a finding this run reports":
 
 > **reportable** = `active` **and** `status` ∈ {`detected`, `confirmed`, `risk_accepted`}
 > **and** `verification` ≠ `refuted`
 
-- **`risk_accepted` is reportable.** It is a real finding someone consciously accepted; a CI reader
-  should see it, and its `status` travels in the record so the gate can decide to exclude it. That
-  call belongs to [#115](https://github.com/mobley-trent/styx-agent/issues/115), not here.
+- **`risk_accepted` is reportable but never gated.** It is a real finding someone consciously
+  accepted; a CI reader should see it, and its `status` travels in the record so the gate can exclude
+  it — which it does ([`docs/headless-ci.md`](headless-ci.md) §8.2). A gate that failed on accepted
+  risk would leave editing the status as the only honest way past it.
 - **`false_positive`, `fixed`, and inactive records are omitted**, and the omission is counted
   twice: in the JSON envelope (`counts.omitted`) and on stderr (`styx: export 4 findings · 3
   omitted`). An omission is never silent.
@@ -163,8 +164,9 @@ anything.
   mixing reports into it would blur a distinction this document exists to keep (§8). styx also does
   not gitignore the operator's `--out` directory: where output goes, and whether it is committed, is
   the operator's call.
-- **The export is written before the run's exit status is decided.** The gate ([#115]) reads the
-  written file; the file never records the gate's verdict.
+- **The export is written before the run's exit status is decided.** The gate
+  ([`docs/headless-ci.md`](headless-ci.md) §8.5) evaluates the same in-process snapshot after the
+  write, so the file never records a verdict and a verdict never needs the file.
 
 ## 6. CSV — `vulnerabilities.csv`
 
@@ -335,7 +337,7 @@ Three words, three things, and the export exists so they never blur:
 Not here, and owned by v1.3's report generation: Markdown or HTML narrative, remediation prose, per-
 engagement styling and templates, the local `view`/run viewer over session and audit JSONL, SARIF
 baseline and suppression handling, cross-run diffing inside styx, and any `--fail-on` gating or
-exit-code meaning (that is [#115](https://github.com/mobley-trent/styx-agent/issues/115)). An export
+exit-code meaning (that is [`docs/headless-ci.md`](headless-ci.md) §8). An export
 that grew a narrative would be a report; a report that emitted these files would duplicate the
 rendering. One rendering, one owner.
 
@@ -348,15 +350,15 @@ rendering. One rendering, one owner.
   makes byte-identical output testable.
 - **`internal/app`** — after the turn returns, on the paths §5 names, write the three files through
   temp-and-rename before the run ends; a write failure is a run failure.
-- **`internal/policy`/gate** — [#115](https://github.com/mobley-trent/styx-agent/issues/115) reads
-  §2's predicate from one definition, not a second copy of it.
+- **`internal/findingsexport`** — exports §2's predicate and the gate's `risk_accepted` exclusion as
+  code, so the export's filter and the gate's filter are one definition
+  ([`docs/headless-ci.md`](headless-ci.md) §8.2).
 - **Tests** — golden files per format; two renders of the same snapshot compare byte-identical; an
   empty store and a store with dangling refs; a slug collision; a `risk_accepted` finding present in
   the export and its status readable by a gate.
 
 ## 11. Explicitly not in v1.2
 
-The severity gate and its exit codes ([#115](https://github.com/mobley-trent/styx-agent/issues/115)) ·
 diff scoping ([#116](https://github.com/mobley-trent/styx-agent/issues/116)) · the USD budget cap
 ([#117](https://github.com/mobley-trent/styx-agent/issues/117)) · the sandbox image
 ([#118](https://github.com/mobley-trent/styx-agent/issues/118)) · Markdown/HTML reports and the run
