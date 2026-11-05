@@ -120,9 +120,6 @@ type Status struct {
 type Config struct {
 	// Status returns the status line to render, read fresh each frame.
 	Status func() Status
-	// Version is the running binary's version, stamped beside the startup
-	// banner. Empty omits the stamp.
-	Version string
 	// Submit receives a non-slash input line.
 	Submit func(text string)
 	// Command handles a slash command and returns text to render. A non-nil
@@ -341,10 +338,6 @@ type Model struct {
 	print func(lines ...string) tea.Cmd
 	// spinning reports whether a spinner tick is scheduled.
 	spinning bool
-	// bannerPlaced reports whether the startup banner has been considered.
-	// Placement happens once, when the terminal width first arrives, so a
-	// later resize never re-adds a banner skipped at startup.
-	bannerPlaced bool
 
 	width  int
 	height int
@@ -388,7 +381,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.picker != nil {
 			m.picker.setSize(m.width, m.pickerHeight(m.picker.rows()))
 		}
-		m.placeBanner()
 		return m, m.flush()
 	case tea.BackgroundColorMsg:
 		m.termDark = msg.IsDark()
@@ -450,30 +442,6 @@ func (m *Model) hasRunningSubagent() bool {
 		}
 	}
 	return false
-}
-
-// placeBanner puts the startup wordmark at the top of the transcript once, on
-// the first terminal width. A terminal narrower than the art skips it entirely
-// — never wrapped or truncated (art-direction decision, issue #56). The lines
-// are stored unstyled and tinted with theme.banner at render time. The running
-// version rides to the bottom-right of the art when the terminal is wide enough
-// for both.
-func (m *Model) placeBanner() {
-	if m.bannerPlaced {
-		return
-	}
-	m.bannerPlaced = true
-	if m.width < bannerWidth {
-		return
-	}
-	lines := bannerLines()
-	if v := strings.TrimSpace(m.cfg.Version); v != "" && m.width >= bannerWidth+versionGap+lipgloss.Width(v) {
-		lines[len(lines)-1] += strings.Repeat(" ", versionGap) + v
-	}
-	// The banner belongs to the transcript: it prints once into scrollback.
-	for _, ln := range lines {
-		m.append(m.styles.banner.Render(ln))
-	}
 }
 
 // key handles one key press.

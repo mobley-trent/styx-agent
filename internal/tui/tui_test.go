@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"image/color"
@@ -466,8 +467,8 @@ func TestFlushChunksCommittedLinesToTerminalHeight(t *testing.T) {
 		batches = append(batches, append([]string(nil), lines...))
 		return nil
 	}
-	// Width below the banner guard, so the banner is skipped and the transcript
-	// is exactly the lines appended below.
+	// The wordmark is not the model's to print, so the transcript is exactly
+	// the lines appended below.
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 
 	lines := make([]string, 0, 25)
@@ -1039,9 +1040,11 @@ func TestClearResetsModelContextButKeepsScrollback(t *testing.T) {
 }
 
 func TestBannerRendersOnWideTerminal(t *testing.T) {
-	h := newHarness(t)
-	h.update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
-	got := h.printedText()
+	var buf bytes.Buffer
+	if err := WriteBanner(&buf, bannerWidth+11, ""); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
 	for _, want := range []string{"/$$$$$$$", "|  $$$$$$/", `\______/`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("wide terminal does not render the wordmark (%q):\n%s", want, got)
@@ -1050,10 +1053,12 @@ func TestBannerRendersOnWideTerminal(t *testing.T) {
 }
 
 func TestBannerSkippedOnNarrowTerminal(t *testing.T) {
-	h := newHarness(t)
-	h.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
-	if got := h.printedText(); strings.Contains(got, "/$$$$$$$") {
-		t.Errorf("narrow terminal rendered the wordmark instead of skipping it:\n%s", got)
+	var buf bytes.Buffer
+	if err := WriteBanner(&buf, bannerWidth-1, ""); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("narrow terminal rendered the wordmark instead of skipping it:\n%s", buf.String())
 	}
 }
 
@@ -1069,41 +1074,35 @@ func TestBannerWidthMatchesArt(t *testing.T) {
 	}
 
 	// Exactly at the guard it renders; one column under it does not.
-	at := newHarness(t)
-	at.update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
-	if !strings.Contains(at.printedText(), "/$$$$$$$") {
-		t.Errorf("the banner was skipped at its own %d-column width:\n%s", bannerWidth, at.printedText())
+	var at bytes.Buffer
+	if err := WriteBanner(&at, bannerWidth, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(at.String(), "/$$$$$$$") {
+		t.Errorf("the banner was skipped at its own %d-column width:\n%s", bannerWidth, at.String())
 	}
 }
 
-func TestBannerPlacedOnce(t *testing.T) {
-	// A resize below the guard after placement keeps the banner: it belongs to
-	// the transcript, not the live layout.
-	wide := newHarness(t)
-	wide.update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
-	wide.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
-	if !strings.Contains(wide.printedText(), "/$$$$$$$") {
-		t.Error("banner disappeared after a resize below the guard")
-	}
-
-	// A narrow startup skips it, and widening later does not resurrect it.
-	narrow := newHarness(t)
-	narrow.update(tea.WindowSizeMsg{Width: bannerWidth - 1, Height: 40})
-	narrow.update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
-	if strings.Contains(narrow.printedText(), "/$$$$$$$") {
-		t.Error("banner was added after a narrow startup")
+// The wordmark is written before the program starts, never through the UI's
+// print seam: Bubble Tea prints committed lines by scrolling the screen once
+// per line while it has no tracked cursor position, which leaves a blank
+// scrollback line above the art for every banner row.
+func TestBannerNotPrintedThroughScrollback(t *testing.T) {
+	m, printed := newCapturedModel(Config{Status: func() Status { return Status{Mode: "safe"} }})
+	m.Update(tea.WindowSizeMsg{Width: bannerWidth + 11, Height: 40})
+	if got := strings.Join(*printed, "\n"); strings.Contains(got, "/$$") {
+		t.Errorf("the wordmark travelled through the print seam:\n%s", got)
 	}
 }
 
 func TestBannerStampsVersionBottomRight(t *testing.T) {
-	m, printed := newCapturedModel(Config{
-		Version: "v9.9.9",
-		Status:  func() Status { return Status{Mode: "safe"} },
-	})
-	m.Update(tea.WindowSizeMsg{Width: bannerWidth + versionGap + 20, Height: 40})
-	got := strings.Join(*printed, "\n")
+	var buf bytes.Buffer
+	if err := WriteBanner(&buf, bannerWidth+versionGap+20, "v9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
 	var row string
-	for _, ln := range *printed {
+	for _, ln := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
 		if strings.Contains(ln, "v9.9.9") {
 			row = ln
 			break
@@ -1121,12 +1120,11 @@ func TestBannerStampsVersionBottomRight(t *testing.T) {
 }
 
 func TestBannerDropsVersionWhenTooNarrow(t *testing.T) {
-	m, printed := newCapturedModel(Config{
-		Version: "v9.9.9",
-		Status:  func() Status { return Status{Mode: "safe"} },
-	})
-	m.Update(tea.WindowSizeMsg{Width: bannerWidth, Height: 40})
-	got := strings.Join(*printed, "\n")
+	var buf bytes.Buffer
+	if err := WriteBanner(&buf, bannerWidth, "v9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
 	if !strings.Contains(got, "/$$$$$$$") {
 		t.Fatalf("banner skipped at its own width:\n%s", got)
 	}
