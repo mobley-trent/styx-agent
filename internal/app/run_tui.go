@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/mobley-trent/styx-agent/internal/sessions"
 	"github.com/mobley-trent/styx-agent/internal/skills"
@@ -98,9 +101,16 @@ func runTUI(ctx context.Context, h *Harness) error {
 		})
 	}
 
+	// The wordmark is written before the program starts, never through the
+	// UI's print seam: until the renderer has tracked a cursor position, every
+	// line it prints above the live region scrolls the screen and leaves a
+	// blank scrollback line behind — one per banner row.
+	if width, ok := terminalWidth(h.out); ok {
+		_ = tui.WriteBanner(h.out, width, h.Version)
+	}
+
 	model := tui.New(tui.Config{
 		Status:    func() tui.Status { return h.Status(turns.active()) },
-		Version:   h.Version,
 		Submit:    submit,
 		Clear:     h.ClearConversation,
 		Command:   h.command,
@@ -128,6 +138,21 @@ func runTUI(ctx context.Context, h *Harness) error {
 		return err
 	}
 	return nil
+}
+
+// terminalWidth reports the width of the terminal behind the harness's output.
+// It reports false when that output is not a terminal, so piped output and
+// tests skip the wordmark rather than guess a width.
+func terminalWidth(w io.Writer) (int, bool) {
+	f, ok := w.(*os.File)
+	if !ok {
+		return 0, false
+	}
+	width, _, err := term.GetSize(f.Fd())
+	if err != nil || width < 1 {
+		return 0, false
+	}
+	return width, true
 }
 
 // command handles a slash command line: a registry command (aliases included),

@@ -106,6 +106,12 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Fixed
 
+- The startup wordmark no longer leaves blank lines above it. The banner printed through
+  Bubble Tea's print-above path, which scrolls the screen once per printed line; before the first
+  frame the renderer has no tracked cursor position and the screen above is still empty, so every
+  banner row scrolled a blank line into the scrollback. The wordmark is now written directly to
+  the terminal before the program starts, keeping the 96-column guard and the bottom-right
+  version stamp.
 - Re-detecting a finding no longer overrules the operator. A parser's re-scan sends a finding
   without a status or verification, and `upsert_finding` read those absences as `detected` and
   `unverified`: a confirmed, verified finding was silently demoted on the next scan, and a
