@@ -41,9 +41,9 @@ implementations follow once each design is decided.
    egress-pinned by the existing firewall layer. The single highest-leverage match for
    Strix's out-of-the-box toolkit without adopting its weaker governance.
 5. **Headless / CI mode with severity gating.** `-n/--non-interactive`;
-   `--fail-on critical|high|medium|low|info` exiting `2` at/above threshold (exit codes
-   0/1/2); `vulnerabilities.json` / `.csv` and `findings.sarif` (SARIF 2.1.0); diff-scoped PR
-   scans (`--scope-mode diff`, `--diff-base`).
+   `--fail-on critical|high|medium|low|info` exiting `3` at/above threshold (exit codes
+   0/1/2/3/4, [`docs/headless-ci.md`](headless-ci.md) §8); `vulnerabilities.json` / `.csv` and
+   `findings.sarif` (SARIF 2.1.0); diff-scoped PR scans (`--scope-mode diff`, `--diff-base`).
 6. **USD budget cap.** A `--max-budget`-style cumulative ceiling across root and child agents
    with graduated wrap-up warnings, enforced on the cost signal styx already tracks.
 7. **Exploitation-phase orchestration within the ROE.** Exploitation runs as a state-driven

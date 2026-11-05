@@ -175,8 +175,17 @@ the end of a non-interactive run. A view of engagement state at one moment: dete
 never a second record.
 
 **Reportable finding**
-A finding an export carries and the severity gate reads: active, not `false_positive` or `fixed`,
-and not `refuted`.
+A finding an export carries: active, not `false_positive` or `fixed`, and not `refuted`. The
+severity gate reads these except the `risk_accepted` ones.
+
+**Severity gate**
+The CI threshold (`--fail-on <severity>`) that fails a non-interactive run when the engagement holds
+a gated finding at or above that severity. Reads the export's own set, never re-ranks or rewrites a
+finding, and exists only because the run asked for it.
+
+**Gated finding**
+A reportable finding the severity gate may fail a run on: reportable, but not `risk_accepted` — risk
+someone consciously took never fails a pipeline.
 
 **Report**
 The human-facing narrative generated from engagement state: remediation prose and a viewer. Prose

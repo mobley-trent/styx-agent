@@ -8,7 +8,6 @@ Keystone rationale: [`docs/adr/0007-non-interactive-runs-never-widen.md`](adr/00
 
 The rest of that CI surface is decided beside this document and is deliberately **not** repeated
 here: the machine-readable findings artifact ([#114](https://github.com/mobley-trent/styx-agent/issues/114)),
-the severity gate and its exit codes ([#115](https://github.com/mobley-trent/styx-agent/issues/115)),
 diff scoping ([#116](https://github.com/mobley-trent/styx-agent/issues/116)), the USD budget cap
 ([#117](https://github.com/mobley-trent/styx-agent/issues/117)), and the offensive sandbox image
 ([#118](https://github.com/mobley-trent/styx-agent/issues/118)).
@@ -271,7 +270,7 @@ styx: session 7f2a19c4 (audit styx-audit-20261030T101500Z.jsonl)
   never looks at the count still sees it.
 - **The session id** is what makes the run resumable: `styx` then `/resume <id>` picks the session
   up interactively, and the audit filename is the forensic record.
-- The summary is **human-readable only**. There is no `--json` run summary in v1.2 (§9).
+- The summary is **human-readable only**. There is no `--json` run summary in v1.2 (§10).
 
 ## 7. How the run ends
 
@@ -279,13 +278,15 @@ There is no ctrl-c and no `/quit`, so the run needs its own end conditions.
 
 | Event | Behaviour | Exit |
 |---|---|---|
-| The turn returns | normal end; summary printed | `0` |
+| The turn returns, gate passes or was not asked (§8) | normal end; summary printed | `0` |
+| The turn returns, the gate fails (§8) | `! gate failed: …`, summary printed | `3` |
+| The turn returns with denials, the gate passes | normal end; the summary says the run is not clean | `4` |
 | Turn returned an error (provider loss, loop failure) | `! <error>`, summary printed | `1` |
 | Turn cap reached | `! turn cap reached (200 turns without a final answer)` | `1` |
 | First `SIGINT` / `SIGTERM` | cancel the in-flight turn (the same cancel path Escape uses), `! interrupted`, flush and tear down | `1` |
 | Second `SIGINT` / `SIGTERM` | immediate exit, no further cleanup | `1` |
 | Container loss mid-run | per-tool failure, `! ` line, the run continues (degraded isolation was announced at start, spec §9.5) | unchanged |
-| A denied prompt | not a failure — the turn continues (§3); the run reports it as not clean | not clean (code: #115) |
+| A denied prompt | not a failure — the turn continues (§3); the run reports it as not clean | `4` |
 
 Rules:
 
@@ -295,12 +296,136 @@ Rules:
   at its point of use; a headless run does not loop against a provider that is not answering.
 - **Signals are a cancel, not a kill,** so the state store closes, its lock releases, and the
   engagement notes are appended — the same teardown a normal end gets.
-- **The code space is untouched.** `2` stays a usage error, `1` a failed run, `0` a completed one.
-  Whether the severity gate gets its own code, and what a not-clean run exits with, is
-  [#115](https://github.com/mobley-trent/styx-agent/issues/115)'s decision — this document only
-  requires that a blocked run be distinguishable from a clean one and from a broken one.
+- **The code space is fixed by §8.1.** `2` stays a usage error, `1` a broken run, `0` a clean one;
+  the gate takes `3` and a blocked run `4`. One outcome, one code, so a pipeline branches on what
+  happened instead of parsing a word of prose.
+- **Precedence, when a run holds more than one:** `broken > gate failed > not clean > clean`.
 
-## 8. Spec touchpoints (applied by the implementation ticket)
+## 8. The severity gate
+
+`--fail-on <severity>` turns a finished run's findings into a build verdict. It reads the findings
+export's own set ([`docs/findings-export.md`](findings-export.md) §2), it is evaluated after the
+export is written, and its verdict never enters the artifact.
+Keystone rationale:
+[`docs/adr/0009-a-severity-gate-has-its-own-exit-code.md`](adr/0009-a-severity-gate-has-its-own-exit-code.md).
+
+### 8.1 The five codes
+
+| Code | Meaning | Set by |
+|---|---|---|
+| `0` | **clean** — the turn returned, nothing was denied, the gate passed or was not asked | §7 |
+| `1` | **broken** — turn error, turn cap, or a signal | §7 |
+| `2` | **usage error** | §2 |
+| `3` | **gate failed** — a gated finding is at or above the threshold | §8.5 |
+| `4` | **not clean** — at least one prompt was denied `no-operator` | §3 |
+
+**Precedence: `broken > gate failed > not clean > clean`.** A run that fell over is never reported as
+a scan verdict: CI reacts to a crash and to a failing scan differently, and a crash says nothing
+about the target. `1` and `2` keep the meanings `cmd/styx/main.go` already gives them, and `styx
+update` keeps `1` for a check it could not complete.
+
+A code is an interface once a pipeline depends on it, so changing one later supersedes ADR-0009
+rather than extending it.
+
+### 8.2 Gated findings: reportable, minus accepted risk
+
+One predicate decides what may fail a build. It is the export's predicate with one exclusion:
+
+> **gated** = **reportable** (`active` · `status` ∈ {`detected`, `confirmed`, `risk_accepted`} ·
+> `verification` ≠ `refuted`) **and** `status` ≠ `risk_accepted`
+
+- **One implementation, two readers.** `internal/findingsexport` defines the predicate; the export
+  filters on it and the gate filters on it. Neither keeps a copy, so the artifact and the verdict
+  cannot disagree about which findings exist.
+- **`risk_accepted` is exported and never gated.** A human reviewed that finding and took the risk;
+  a gate that fails on it makes the acceptance meaningless and leaves editing the status to
+  something untrue as the only honest way past it.
+- **Nothing unreportable can fail a build.** `false_positive`, `fixed`, `refuted`, and inactive
+  records are not in the export (findings-export §2), so the gate never sees them.
+- **Verification and confidence never move the verdict.** An `unverified` critical still fails
+  `--fail-on high`: quietly dropping it would be the silent downgrade findings-export §7.4 refuses,
+  in its worst form — CI going green on the finding nobody looked at. The gate discloses instead of
+  downgrading, and §8.7 prints how many failing findings are `unverified`.
+
+### 8.3 The set is the store, not the run
+
+The gate reads every gated finding in engagement state at the end of the run — exactly the set the
+export renders. State is cumulative, so this is a deliberate consequence, stated plainly:
+
+- **A scheduled pipeline fails until the finding is `fixed`, `false_positive`, or `risk_accepted`.**
+  That is what a severity gate means for an engagement: the posture is red until someone acts.
+- **Why not run-scoped:** "the findings from this run" needs a run timestamp, which ADR-0008 keeps
+  out of the artifact. A run-scoped gate would read a set no artifact shows, and the two would then
+  describe different things.
+- **Deterministic state, deterministic verdict.** The same store yields the same exit code, which is
+  the whole reason a gate is reproducible in CI.
+
+### 8.4 The threshold
+
+**`--fail-on <severity>`**, a CI-shaped flag in §2.2's sense.
+
+- **The five store severities, lowercase:** `critical`, `high`, `medium`, `low`, `info`. Anything
+  else — `none` included — is a usage error (`2`). Omitting the flag is how a run asks for no gate.
+- **At or above, inclusive.** `--fail-on high` fails on `high` and `critical`.
+- **No rank gap exists.** The store refuses a finding without a valid severity, so there is no
+  unranked finding for the threshold to skip.
+- **Given without `-n` it is a usage error (`2`)**, never silently ignored (§2.2).
+- **`--out` is independent.** The gate works with or without an export on disk, because it reads the
+  snapshot rather than the file (§8.5).
+- **A safe-mode run passes.** Safe mode has no store, so the set is empty: an empty scan is not a
+  finding, and inventing a failure for it would make `-n` in safe mode useless.
+
+### 8.5 Where the verdict is computed
+
+**In process, over the same snapshot the export renders, after any export write has succeeded.**
+
+```
+turn returns → export written (if --out) → gate evaluated → teardown → exit
+```
+
+- **The gate never reads the written file.** Written bytes and verdict then cannot disagree, no parse
+  path can fail on its own, and the gate stays available without `--out`.
+- **A failed export write is `1`, and the gate does not run.** A pipeline that asked for an export
+  never receives a verdict about a half-written one.
+- **The verdict travels as a typed error.** `app.Run` returns a gate failure carrying the threshold
+  and the count; `cmd/styx` maps it to `3` ahead of its generic `1`. `main` stays the only caller of
+  `os.Exit`, and the run's own error path is untouched.
+- **A crash between the write and the exit cannot report success.** There is no window in which the
+  process has an artifact on disk and no verdict: the verdict is computed by the same call that
+  wrote the file, before teardown and before the exit status exists.
+
+### 8.6 What the gate does not do
+
+- **No diff-only gating.** Reporting only what a change touched is diff scoping's job
+  ([#116](https://github.com/mobley-trent/styx-agent/issues/116)); a severity gate narrows nothing.
+- **No auto-fix, no PR comment, no code-scanning upload.** styx writes files; the pipeline decides
+  what to do with them.
+- **No baseline, suppression, or cross-run diffing.** Dedupe is the consumer's job, and the SARIF
+  fingerprint is what it is given to do it with (findings-export §7.5–§7.6).
+- **It never mutates a finding** — not its status, severity, or verification. A gate that silences
+  itself by editing the record is the harness lying about the engagement.
+- **It never re-ranks.** No verification or confidence weighting and no composite score: severity is
+  the operator's judgement, and the gate applies it or nothing.
+- **It is a per-run flag, not a stored policy.** Nothing about a gate is remembered between runs, so
+  a pipeline's threshold lives where a reviewer can see it.
+
+### 8.7 stderr
+
+One line, before the end summary, on §6.2's `! ` prefix:
+
+```
+! gate failed: 2 findings at or above high (1 unverified)
+```
+
+- **One line and nothing per finding.** The export is the record and the session id points at the
+  audit trail; listing findings here would make the gate a second report renderer.
+- **The `unverified` count is §8.2's disclosure**, printed only when it is non-zero.
+- **The end summary still prints in full** (§6.3), so cost, denials, and the session id arrive with
+  the verdict rather than instead of it.
+- **The count covers gated findings only:** a `risk_accepted` finding is in the export and cannot be
+  in this number.
+
+## 9. Spec touchpoints (applied by the implementation ticket)
 
 - **`cmd/styx/main.go`** — parse `-n/--non-interactive` and the single positional task; document
   both in `usage`; keep `2` for usage errors and `1` for a failed run.
@@ -314,14 +439,22 @@ Rules:
 - **`internal/agent`** — an admission must carry its resolved verdict (it knows it at admit time
   and does not retain it today) so §4.1 can honour "accept iff allowed". Nothing else in the loop
   moves.
+- **`cmd/styx/main.go`** — parse `--fail-on <severity>`; usage error (`2`) without `-n` or with a
+  value outside the five severities; document the flag and the five exit codes of §8.1 in `usage`.
+- **`internal/findingsexport`** — export §8.2's two predicates as code, so the export's filter and
+  the gate's filter are one definition rather than two copies.
+- **`internal/app`** — evaluate the gate after any `--out` write has succeeded and before teardown;
+  return a typed gate failure (threshold and count) and the run's denial count, rather than an
+  integer.
+- **`cmd/styx/main.go`** — map the typed gate failure to `3` ahead of the generic `1`, and a run
+  with denials whose gate passed to `4`.
 - **spec §9.1** — the TUI is one of two runners; the event bus is the interface both consume. Worth
   saying once in the spec, since it is what keeps a second renderer from forking behaviour.
 
-## 9. Explicitly not in v1.2
+## 10. Explicitly not in v1.2
 
 The findings artifact and its path ([#114](https://github.com/mobley-trent/styx-agent/issues/114)) ·
-the severity gate and the exit-code space
-([#115](https://github.com/mobley-trent/styx-agent/issues/115)) · diff scoping
+diff scoping
 ([#116](https://github.com/mobley-trent/styx-agent/issues/116)) · the USD budget cap
 ([#117](https://github.com/mobley-trent/styx-agent/issues/117)) · the sandbox image
 ([#118](https://github.com/mobley-trent/styx-agent/issues/118)) · a `-q`/`--verbose` level or a
