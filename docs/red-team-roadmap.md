@@ -47,7 +47,8 @@ implementations follow once each design is decided.
    target-declaring artifact to narrow to, which item 9 introduces
    ([`docs/headless-ci.md`](headless-ci.md) §11).
 6. **USD budget cap.** A `--max-budget`-style cumulative ceiling across root and child agents
-   with graduated wrap-up warnings, enforced on the cost signal styx already tracks.
+   with graduated wrap-up warnings, enforced on the cost signal styx already tracks
+   ([`docs/budget-cap.md`](budget-cap.md)).
 7. **Exploitation-phase orchestration within the ROE.** Exploitation runs as a state-driven
    phase that is auto-allowed when in-scope + engagement mode (as every in-scope action
    already is), with destructive actions still prompting; plus an explicit engagement-file
@@ -121,7 +122,10 @@ decided**: the findings/state schema in [`docs/engagement-state.md`](engagement-
 the parser tool contracts in [`docs/parser-tool-contracts.md`](parser-tool-contracts.md), and
 the relationship-graph and attack-path computation in
 [`docs/attack-paths.md`](attack-paths.md), and the non-interactive run in
-[`docs/headless-ci.md`](headless-ci.md). Still open: the headless findings artifact and severity
-gate, the USD budget, sandbox-image contents (operating surface), and diff scoping — deferred to
-v1.3 because it needs the target-declaring artifacts that item 9 introduces
-([`docs/headless-ci.md`](headless-ci.md) §11) — and the reach and provider designs.
+[`docs/headless-ci.md`](headless-ci.md), with its findings export in
+[`docs/findings-export.md`](findings-export.md) and its severity gate and exit codes in
+[`docs/headless-ci.md`](headless-ci.md) §8. Of the v1.2 operating surface, the **USD budget cap**
+is decided in [`docs/budget-cap.md`](budget-cap.md); diff scoping is deferred to v1.3 because it
+needs the target-declaring artifacts that item 9 introduces
+([`docs/headless-ci.md`](headless-ci.md) §11). Still open: sandbox-image contents (operating
+surface) and the reach and provider designs.
