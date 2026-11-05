@@ -33,8 +33,8 @@ test: ## run tests with the race detector
 fmt: ## gofmt the tree in place
 	gofmt -l -w .
 
-clean: ## remove build artifacts
-	rm -f styx
+clean: ## remove build artifacts and session audit logs
+	rm -f styx styx-audit-*.jsonl
 
 # One command for the full CI gate, in CI's order, always sequential.
 .NOTPARALLEL: check
