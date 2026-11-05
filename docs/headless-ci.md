@@ -8,9 +8,10 @@ Keystone rationale: [`docs/adr/0007-non-interactive-runs-never-widen.md`](adr/00
 
 The rest of that CI surface is decided beside this document and is deliberately **not** repeated
 here: the machine-readable findings artifact ([#114](https://github.com/mobley-trent/styx-agent/issues/114)),
-diff scoping ([#116](https://github.com/mobley-trent/styx-agent/issues/116)), the USD budget cap
-([#117](https://github.com/mobley-trent/styx-agent/issues/117)), and the offensive sandbox image
-([#118](https://github.com/mobley-trent/styx-agent/issues/118)).
+the USD budget cap ([#117](https://github.com/mobley-trent/styx-agent/issues/117)), and the
+offensive sandbox image ([#118](https://github.com/mobley-trent/styx-agent/issues/118)). Diff
+scoping ([#116](https://github.com/mobley-trent/styx-agent/issues/116)) is decided in §11, which
+defers the flag to v1.3 and settles the semantics it lands with.
 
 ## 1. Scope
 
@@ -454,7 +455,7 @@ One line, before the end summary, on §6.2's `! ` prefix:
 ## 10. Explicitly not in v1.2
 
 The findings artifact and its path ([#114](https://github.com/mobley-trent/styx-agent/issues/114)) ·
-diff scoping
+diff scoping, deferred to v1.3 with its semantics settled (§11)
 ([#116](https://github.com/mobley-trent/styx-agent/issues/116)) · the USD budget cap
 ([#117](https://github.com/mobley-trent/styx-agent/issues/117)) · the sandbox image
 ([#118](https://github.com/mobley-trent/styx-agent/issues/118)) · a `-q`/`--verbose` level or a
@@ -464,3 +465,73 @@ widens the rule table · retry/backoff on provider loss · resume-in-place of a 
 session id is printed so an interactive `/resume` can pick it up instead) · parallel runs against one
 engagement store (§5.4) · a `styx view`-class log renderer (v1.3's run viewer) · Windows conventions
 for signals (out of platform scope, spec §13).
+
+## 11. Diff scoping — deferred to v1.3
+
+`--scope-mode diff` / `--diff-base` answer one question: **may a diff narrow what a run is
+authorized to test?** Yes — and only narrow (ADR-0007). What a diff cannot yet do in this build is
+supply the targets to narrow *to*, so the flag does not ship in v1.2.
+
+### 11.1 Why the flag waits for a source
+
+- **The parser tools declare no target.** `nmap_parse` and its five siblings take one `path` and
+  infer everything from the scanner artifact ([`docs/parser-tool-contracts.md`](parser-tool-contracts.md)
+  §2): a diff over source is not an artifact any of them reads.
+- **Engagement state cannot be diffed.** Findings cite evidence as `.styx/out/...` refs, and the
+  harness gitignores that directory precisely so evidence never lands in a repository
+  ([`docs/parser-tool-contracts.md`](parser-tool-contracts.md) §3). Those files cannot appear in a
+  PR.
+- **The first target-declaring artifact is v1.3's.** An OpenAPI/Postman document whose declared
+  base URLs the engagement authorizes is roadmap item 9, not item 5.
+
+Shipping the flag ahead of that source leaves two dishonest implementations: derive nothing, so a
+"diff-scoped" scan silently tests nothing or falls back to everything; or scrape target literals
+out of changed source, which the parser discipline forbids — an inferred-nothing target is an
+error, never a guess. **A scope flag is an assurance; it must not claim one the run cannot keep.**
+
+Consequence, recorded where the promise was made: roadmap item 5 no longer lists diff-scoped scans,
+and item 9 owns them.
+
+### 11.2 What is settled now, so the flag lands into a decision
+
+These are fixed; implementing `--scope-mode diff` is applying them, not re-deciding them.
+
+**Declarations, never literals.** A diff becomes targets only through a file type the harness
+already understands as *declaring* them, and only for declarations the engagement authorizes.
+Literals scraped from source are not targets. A changed file that declares nothing contributes
+nothing.
+
+**Intersection, never union.** Diff scope can only remove targets from the engagement's pool.
+`--scope-mode diff` requires `--engagement`: with no engagement file there is no scope to narrow to,
+so the combination is a usage error (`2`), never a safe-mode run. No preset and no flag adds a
+target; widening stays a human editing the engagement file.
+
+**The base is explicit and resolved.** `--diff-base <ref>` is required — no implicit `origin/main`,
+because a guessed base draws authorization from a branch nobody named. The ref is resolved to its
+**merge-base with `HEAD`** (the three-dot, PR-shaped diff), so base-branch drift since the fork
+cannot enter. A missing or malformed flag is a usage error (`2`); a ref that will not resolve —
+shallow clone, unknown ref, no common ancestor, not a repository — **refuses the run (`1`) before
+the container starts**, naming the ref. It never falls back to a default, and never to full scope.
+
+**An empty mapping is a successful no-op.** A diff that maps to no authorized target exits `0` with
+one line in §6.2's `styx: ` voice —
+
+```
+styx: diff scope: no authorized target matched the change
+```
+
+— the normal end summary, and nothing scanned. It is never a refusal (`1`) and never a full-scope
+run. The same case covers a diff that touches only out-of-scope targets, a deleted file, a binary
+file, and a changed file outside the project root; renames contribute both the old and new path,
+and an ignored path is named in a note rather than dropped silently.
+
+**The narrowing is legible.** The identity line carries the mode and the base commit, and the audit
+records the effective pool, so no reader has to infer whether a run was scoped. A scope narrower
+than the operator believes is the failure this section exists to prevent.
+
+**Reversal stays out.** A diff that *adds* targets is not part of this design, at any version:
+widening is the engagement file's job, performed by a human in a reviewed change.
+
+**Nothing else moves.** A prompt is still denied `no-operator`, the gate still reads the store, the
+five codes still apply, and §8.6 still holds: diff scoping narrows **authorization**, the severity
+gate narrows **nothing**. `--scope-mode` accepts only `diff`; any other value is a usage error (`2`).

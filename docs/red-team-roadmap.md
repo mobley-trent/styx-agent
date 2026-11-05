@@ -43,7 +43,9 @@ implementations follow once each design is decided.
 5. **Headless / CI mode with severity gating.** `-n/--non-interactive`;
    `--fail-on critical|high|medium|low|info` exiting `3` at/above threshold (exit codes
    0/1/2/3/4, [`docs/headless-ci.md`](headless-ci.md) §8); `vulnerabilities.json` / `.csv` and
-   `findings.sarif` (SARIF 2.1.0); diff-scoped PR scans (`--scope-mode diff`, `--diff-base`).
+   `findings.sarif` (SARIF 2.1.0). Diff-scoped PR scans are **not** in v1.2: the flag needs a
+   target-declaring artifact to narrow to, which item 9 introduces
+   ([`docs/headless-ci.md`](headless-ci.md) §11).
 6. **USD budget cap.** A `--max-budget`-style cumulative ceiling across root and child agents
    with graduated wrap-up warnings, enforced on the cost signal styx already tracks.
 7. **Exploitation-phase orchestration within the ROE.** Exploitation runs as a state-driven
@@ -57,7 +59,9 @@ implementations follow once each design is decided.
 8. **Browser + HTTP-proxy tooling.** A Playwright-class browser and a Caido/Burp-class
    interception/replay proxy, scope-checked like any network tool.
 9. **OpenAPI/Postman-driven API testing.** An API spec can be a target; its declared base
-   URLs are authorized inside the engagement.
+   URLs are authorized inside the engagement. It also supplies what diff-scoped PR scans need:
+   with a target-declaring artifact in the tree, `--scope-mode diff` / `--diff-base` can narrow a
+   run to the targets a change actually declares ([`docs/headless-ci.md`](headless-ci.md) §11).
 10. **Report generation + local run viewer.** Markdown/JSON (later SARIF) generated from
     engagement state; a `view`-class viewer over the existing session/audit JSONL.
 11. **Specialist subagents + parallel orchestration.** Add webapp, identity (AD), post-exploit,
@@ -118,5 +122,6 @@ the parser tool contracts in [`docs/parser-tool-contracts.md`](parser-tool-contr
 the relationship-graph and attack-path computation in
 [`docs/attack-paths.md`](attack-paths.md), and the non-interactive run in
 [`docs/headless-ci.md`](headless-ci.md). Still open: the headless findings artifact and severity
-gate, diff scoping, the USD budget, and sandbox-image contents (operating surface); and the reach
-and provider designs.
+gate, the USD budget, sandbox-image contents (operating surface), and diff scoping — deferred to
+v1.3 because it needs the target-declaring artifacts that item 9 introduces
+([`docs/headless-ci.md`](headless-ci.md) §11) — and the reach and provider designs.
