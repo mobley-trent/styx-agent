@@ -1,0 +1,168 @@
+name: Sandbox image
+
+# The sandbox image is content-addressed and signed (docs/sandbox-image.md §4–§5,
+# ADR-0011), so it is rebuilt on a schedule as well as on demand: the monthly
+# cadence is also what bounds the trivy databases' staleness (§8).
+on:
+  schedule:
+    # 06:17 on the first of the month: the tool data's age is the image's age.
+    - cron: "17 6 1 * *"
+  workflow_dispatch:
+    inputs:
+      patch:
+        description: "Patch number for sandbox-v1.YYYY.MM.PATCH (default: this run's number)"
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - "sandbox/**"
+      - ".github/workflows/sandbox-image.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/styx-sandbox
+
+jobs:
+  publish:
+    name: build / sign / verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Exactly these three: publish the image, prove who built it keylessly, and
+    # read the source. No long-lived signing key exists anywhere (§4.3).
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # Fail before a 20-minute build if a pin is malformed or the manifest the
+      # build will generate no longer satisfies its schema.
+      - name: Check the pinned artifacts
+        run: scripts/check-sandbox-image.sh
+
+      - name: Resolve the image version
+        id: version
+        run: |
+          set -eu
+          patch="${{ inputs.patch }}"
+          if [ -z "$patch" ]; then
+            patch="${GITHUB_RUN_NUMBER}"
+          fi
+          case "$patch" in
+            '' | *[!0-9]*)
+              echo "::error::patch must be numeric, got: $patch"
+              exit 1
+              ;;
+          esac
+          version="sandbox-v1.$(date -u +%Y.%m).${patch}"
+          echo "version=${version}" >>"$GITHUB_OUTPUT"
+          echo "::notice::publishing ${version}"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Build and push the index
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: sandbox
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # mode=max: the build's own inputs are attested, not just its result.
+          provenance: mode=max
+          sbom: true
+          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+
+      - name: Pull the published index
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: docker pull "$REF"
+
+      - name: Generate the SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          syft-version: v1.34.0
+
+      # The signature covers the manifest-list index digest, never a tag: docker
+      # selects the platform manifest from the signed index (§5).
+      - name: Sign the index digest
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$REF"
+
+      - name: Sign the SBOM attestation
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: cosign attest --yes --type spdxjson --predicate sbom.spdx.json "$REF"
+
+      # The image's own audit trail, taken from the image rather than regenerated
+      # here: what is published must be what the bytes actually declare.
+      - name: Collect the image's build information
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          docker run --rm "$REF" cat /etc/styx/build-info.json > build-info.json
+          docker run --rm "$REF" cat /etc/styx/toolset.json > toolset.json
+
+      - name: Sign the build information
+        run: |
+          set -eu
+          cosign sign-blob --yes \
+            --output-signature build-info.json.sig \
+            --output-certificate build-info.json.pem \
+            build-info.json
+
+      # Prove the published bytes against the pins: every declared tool at its
+      # declared version, the declaration byte-identical, the data baked.
+      - name: Verify the image against the pins
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: scripts/check-sandbox-image.sh --image "$REF"
+
+      - name: Record the published digest
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eu
+          {
+            echo "### Sandbox image ${VERSION}"
+            echo
+            echo '```'
+            echo "${REF}"
+            echo '```'
+            echo
+            echo 'Pin it with `scripts/sandbox-bump.sh --version '"${VERSION}"'`.'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the supply-chain artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: styx-sandbox-${{ steps.version.outputs.version }}
+          path: |
+            build-info.json
+            build-info.json.sig
+            build-info.json.pem
+            toolset.json
+            sbom.spdx.json
+          if-no-files-found: error

@@ -1,0 +1,45 @@
+styx sandbox — reading this image
+=================================
+
+This is the image a styx session runs `bash` and `code_exec` in. The harness's
+prompt is normative for how tools are run; this file mirrors, inside the
+container, the parts of that convention a command needs. Where the two
+disagree the prompt wins, and the parser contract is the normative version.
+
+Artifacts
+---------
+Write raw scanner output to the project's `.styx/out/` directory (bind-mounted
+at /workspace). The harness watches it and parses what appears; a scanner run
+whose output is hand-grepped never reaches the engagement record.
+
+  nmap          -oX .styx/out/<name>.xml
+  nuclei        -jsonl -o .styx/out/<name>.jsonl
+  gobuster      -o .styx/out/<name>.txt
+  sqlmap        --output-dir .styx/out
+  netexec       --log .styx/out/<name>.log
+  bloodhound.py --zip .styx/out/<name>.zip
+
+ffuf, semgrep and trivy have no parser: their output is read by the model, and
+findings enter engagement state through the audited state_update tool with the
+artifact attached as evidence.
+
+Wordlists
+---------
+STYX_WORDLISTS=/usr/share/wordlists/styx. The toolset manifest declares each
+list's sha256, so a swapped or truncated list is detectable.
+
+The toolset manifest
+--------------------
+/etc/styx/toolset.json declares every tool, its version, and the parser that
+understands its output (null for the tools the model parses itself).
+/etc/styx/build-info.json records the exact pinned inputs this image was built
+from: base digest, every package and version, the tool-data versions, the
+build clock, and the manifest's own hash.
+
+Offline by design
+-----------------
+Tool data is baked at build, never fetched at runtime: nuclei templates,
+semgrep rules, the trivy vulnerability and Java databases, and this wordlist
+subset. `nuclei -update-templates` and a trivy database update therefore fail at
+the session's egress boundary, by design. Updating any of them means a new
+image release.
