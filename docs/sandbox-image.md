@@ -188,8 +188,8 @@ digest", and the toolset manifest is a rendering of a subset of it.
 
 ### 4.3 Pipeline
 
-`.github/workflows/sandbox-image.yml`, triggered by a monthly schedule, a manual dispatch, and changes
-under `sandbox/`:
+`.github/workflows/sandbox-image.yml`, triggered by a monthly schedule, a manual dispatch, changes
+under `sandbox/` on `main`, and pull requests touching `sandbox/**`:
 
 - `docker/build-push-action` via buildx, multi-arch (`linux/amd64`, `linux/arm64`), pushing the
   manifest list to the registry of §5.
@@ -197,6 +197,10 @@ under `sandbox/`:
   check against the amd64 image, and a second job asserts the index carries both manifests before
   re-running that same check on `linux/arm64` under qemu. An arm64 layer that will not execute
   fails the pipeline instead of shipping under a signature that claims it was verified.
+- **Pull requests build without publishing**: a PR touching `sandbox/**` builds the amd64 image
+  under a preview version derived from the PR number and runs the same conformance check against it.
+  The install, the segment downloads and the manifest generation are where a pin change goes wrong,
+  so catching that on the PR costs minutes instead of a broken monthly publish.
 - Provenance `mode=max` and an SBOM (`syft`/buildkit) attached as attestations.
 - **Cosign keyless** signing of the **index digest** (not a tag, not a per-arch manifest), plus a
   signed SBOM attestation. The signing identity is the workflow path on `main`; it is compiled into
