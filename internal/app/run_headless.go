@@ -94,12 +94,30 @@ func runHeadless(ctx context.Context, h *Harness) error {
 	if exportErr := h.emitFindingsExport(printer); exportErr != nil {
 		err = exportErr
 	}
+	// The gate runs after the export write has succeeded and before teardown,
+	// over the same snapshot (§8.5). A broken run, an interrupted turn, or a
+	// failed export gets no verdict: §8.1 puts broken first.
+	var gateErr error
+	if err == nil && !interrupted.Load() {
+		gateErr = h.evaluateSeverityGate(printer)
+	}
 	h.printSummary(result, printer.denials())
 
 	if interrupted.Load() && (err == nil || errors.Is(err, context.Canceled)) {
 		err = errInterrupted
 	}
-	return err
+	// Precedence: broken > gate failed > not clean > clean (§8.1). A finished
+	// turn that denied a prompt is a verdict, not a failure: its answer is on
+	// stdout and the summary already says the run was not clean.
+	switch {
+	case err != nil:
+		return err
+	case gateErr != nil:
+		return gateErr
+	case printer.denials() > 0:
+		return &NotClean{Denied: printer.denials()}
+	}
+	return nil
 }
 
 // printIdentity writes the run's one-line identity (§6.2). It never claims

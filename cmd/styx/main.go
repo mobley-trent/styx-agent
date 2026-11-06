@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/mobley-trent/styx-agent/internal/app"
+	"github.com/mobley-trent/styx-agent/internal/findingsexport"
 	"github.com/mobley-trent/styx-agent/internal/update"
 )
 
@@ -36,6 +37,9 @@ Flags:
                         vulnerabilities.csv, findings.sarif) into <dir> after
                         a non-interactive run; needs -n
                         (docs/findings-export.md)
+  --fail-on <severity>  Fail a non-interactive run when a gated finding is at
+                        or above <severity>: critical, high, medium, low, or
+                        info; needs -n (docs/headless-ci.md)
   --engagement <file>   Activate engagement mode through the engagement gate
                         (strict validation; without it, safe mode is default)
   --project <dir>       Project root to run in (default: the working directory)
@@ -45,6 +49,13 @@ Flags:
 Commands:
   update                Print the latest release and the upgrade command for
                         the detected install source (no self-updater)
+
+Exit codes:
+  0  clean — the run finished and no gate failed it
+  1  broken — a turn error, the turn cap, or a signal
+  2  usage error
+  3  gate failed — a gated finding is at or above --fail-on
+  4  run not clean — a prompt was denied with no operator
 
 Environment:
   DEEPSEEK_API_KEY      DeepSeek credential (required for prompts; env-only, never persisted)
@@ -100,10 +111,16 @@ func run(argv []string, version string) (stdout, stderr string, exitCode int) {
 		NonInteractive: opts.nonInteractive,
 		Task:           opts.task,
 		OutDir:         opts.out,
+		FailOn:         opts.failOn,
 		Stdin:          os.Stdin,
 		Stdout:         os.Stdout,
 		Stderr:         os.Stderr,
 	}); err != nil {
+		// A finished run's verdict is not a broken run (§8.1): the runner has
+		// already printed the line that explains it, so only the code changes.
+		if code, ok := app.VerdictCode(err); ok {
+			return "", "", code
+		}
 		return "", fmt.Sprintf("styx: %v\n", err), 1
 	}
 	return "", "", 0
@@ -161,6 +178,11 @@ type cliOptions struct {
 	// error, never an absent flag.
 	out    string
 	outSet bool
+	// failOn is the severity gate's threshold (docs/headless-ci.md §8), and
+	// failOnSet records that the flag was given, so an empty value is a usage
+	// error rather than no gate.
+	failOn    string
+	failOnSet bool
 	// positional collects the bare arguments; whether they are a task or a
 	// stray command is decided once -n is known.
 	positional []string
@@ -208,6 +230,9 @@ func parseArgs(args []string) (cliOptions, error) {
 		case "--out":
 			target = &opts.out
 			opts.outSet = true
+		case "--fail-on":
+			target = &opts.failOn
+			opts.failOnSet = true
 		default:
 			// A bare argument is the task of a non-interactive run, and a stray
 			// word anywhere else. Which one it is is decided once every flag
@@ -239,6 +264,22 @@ func parseArgs(args []string) (cliOptions, error) {
 		}
 		if !opts.nonInteractive {
 			return opts, errors.New("--out needs a non-interactive run (-n)")
+		}
+	}
+
+	// --fail-on is CI-shaped too (§2.2, §8.4): its value must be one of the five
+	// store severities, and given without -n it is a usage error rather than a
+	// silently ignored gate.
+	if opts.failOnSet {
+		opts.failOn = strings.TrimSpace(opts.failOn)
+		if opts.failOn == "" {
+			return opts, errors.New("--fail-on needs a severity")
+		}
+		if _, ok := findingsexport.Threshold(opts.failOn); !ok {
+			return opts, fmt.Errorf("--fail-on %q: want critical, high, medium, low, or info", opts.failOn)
+		}
+		if !opts.nonInteractive {
+			return opts, errors.New("--fail-on needs a non-interactive run (-n)")
 		}
 	}
 

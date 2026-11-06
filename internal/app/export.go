@@ -30,16 +30,7 @@ func (h *Harness) emitFindingsExport(printer *headlessPrinter) error {
 // artifacts. A safe-mode run has no store: it exports a valid, empty document
 // with a null engagement rather than nothing at all (§5).
 func (h *Harness) writeFindingsExport() (reported, omitted int, err error) {
-	h.mu.Lock()
-	store := h.state
-	h.mu.Unlock()
-
-	var snapshot engagementstate.Snapshot
-	engagement := ""
-	if store != nil {
-		snapshot = store.Snapshot()
-		engagement = store.Engagement()
-	}
+	snapshot, engagement := h.findingsSnapshot()
 
 	files, err := findingsexport.Render(snapshot, engagement, h.Version)
 	if err != nil {
@@ -50,6 +41,19 @@ func (h *Harness) writeFindingsExport() (reported, omitted int, err error) {
 		return reported, omitted, err
 	}
 	return reported, omitted, nil
+}
+
+// findingsSnapshot reads the state the export renders and the gate evaluates,
+// so both read one snapshot (§8.2, §8.5). A safe-mode run has no store: its set
+// is empty rather than fabricated (§8.4).
+func (h *Harness) findingsSnapshot() (engagementstate.Snapshot, string) {
+	h.mu.Lock()
+	store := h.state
+	h.mu.Unlock()
+	if store == nil {
+		return engagementstate.Snapshot{}, ""
+	}
+	return store.Snapshot(), store.Engagement()
 }
 
 // writeExportSet writes all three artifacts or none. Each is written to a

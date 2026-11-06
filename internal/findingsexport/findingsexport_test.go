@@ -313,3 +313,32 @@ func TestReportableAndGated(t *testing.T) {
 		}
 	}
 }
+
+// TestGatedFindings pins §8.2's threshold: at or above is inclusive, a
+// risk_accepted finding is exported and never counted, and the unverified count
+// covers only the failing findings.
+func TestGatedFindings(t *testing.T) {
+	mk := func(title string, severity engagementstate.Severity, status engagementstate.Status, verification engagementstate.Verification) engagementstate.Finding {
+		return engagementstate.Finding{
+			ID: title, Title: title, Severity: severity, Status: status,
+			Confidence: engagementstate.ConfidenceHigh, Verification: verification, Active: true,
+		}
+	}
+	snap := engagementstate.Snapshot{Findings: []engagementstate.Finding{
+		mk("high unverified", engagementstate.SeverityHigh, engagementstate.StatusConfirmed, engagementstate.VerificationUnverified),
+		mk("critical verified", engagementstate.SeverityCritical, engagementstate.StatusDetected, engagementstate.VerificationVerified),
+		mk("medium unverified", engagementstate.SeverityMedium, engagementstate.StatusDetected, engagementstate.VerificationUnverified),
+		mk("accepted high", engagementstate.SeverityHigh, engagementstate.StatusRiskAccepted, engagementstate.VerificationUnverified),
+		mk("fixed critical", engagementstate.SeverityCritical, engagementstate.StatusFixed, engagementstate.VerificationVerified),
+	}}
+
+	if failing, unverified := findingsexport.GatedFindings(snap, engagementstate.SeverityHigh); failing != 2 || unverified != 1 {
+		t.Errorf("GatedFindings(high) = %d failing, %d unverified; want 2, 1", failing, unverified)
+	}
+	if failing, unverified := findingsexport.GatedFindings(snap, engagementstate.SeverityMedium); failing != 3 || unverified != 2 {
+		t.Errorf("GatedFindings(medium) = %d failing, %d unverified; want 3, 2", failing, unverified)
+	}
+	if failing, _ := findingsexport.GatedFindings(snap, engagementstate.SeverityCritical); failing != 1 {
+		t.Errorf("GatedFindings(critical) = %d failing, want 1", failing)
+	}
+}
