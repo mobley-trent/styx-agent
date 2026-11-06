@@ -27,6 +27,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/containerlayer"
 	"github.com/mobley-trent/styx-agent/internal/engagement"
 	"github.com/mobley-trent/styx-agent/internal/engagementstate"
+	"github.com/mobley-trent/styx-agent/internal/findingsexport"
 	"github.com/mobley-trent/styx-agent/internal/mcpclient"
 	"github.com/mobley-trent/styx-agent/internal/memory"
 	"github.com/mobley-trent/styx-agent/internal/model"
@@ -60,6 +61,11 @@ type Options struct {
 	// Empty writes nothing; set without NonInteractive it is a usage error at
 	// the CLI.
 	OutDir string
+	// FailOn is the severity threshold --fail-on named: one of the five store
+	// severities (critical, high, medium, low, info), or empty for no gate. A
+	// non-empty value fails the run (exit 3) when a gated finding is at or
+	// above it (docs/headless-ci.md §8).
+	FailOn string
 	// Version is the running binary's version, shown in the status line.
 	Version string
 	// SourceBuild marks an unstamped (go build / go install) binary. The update
@@ -137,6 +143,9 @@ type Harness struct {
 	headless bool
 	// task is the single task a headless run submits (§2.1).
 	task string
+	// failOn is the --fail-on threshold, empty when no gate was asked for
+	// (docs/headless-ci.md §8).
+	failOn engagementstate.Severity
 
 	// model is the pinned model ID currently in force. /model swaps it without
 	// touching the byte-stable prompt prefix (§3.1).
@@ -226,6 +235,9 @@ func Run(ctx context.Context, opts Options) error {
 	if strings.TrimSpace(opts.OutDir) != "" && !opts.NonInteractive {
 		return errors.New("styx: --out needs a non-interactive run")
 	}
+	if strings.TrimSpace(opts.FailOn) != "" && !opts.NonInteractive {
+		return errors.New("styx: --fail-on needs a non-interactive run")
+	}
 	h, err := Build(ctx, opts)
 	if err != nil {
 		return err
@@ -261,6 +273,14 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 	now := opts.Now
 	if now == nil {
 		now = time.Now
+	}
+
+	// The severity gate's threshold is one of the store's five severities
+	// (docs/headless-ci.md §8.4); anything else refuses to start rather than
+	// silently gating nothing.
+	failOn, gateOK := findingsexport.Threshold(strings.TrimSpace(opts.FailOn))
+	if strings.TrimSpace(opts.FailOn) != "" && !gateOK {
+		return nil, fmt.Errorf("styx: --fail-on %q: want critical, high, medium, low, or info", opts.FailOn)
 	}
 
 	workDir := strings.TrimSpace(opts.ProjectDir)
@@ -341,6 +361,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		errOut:         errOut,
 		headless:       opts.NonInteractive,
 		task:           strings.TrimSpace(opts.Task),
+		failOn:         failOn,
 		outDir:         strings.TrimSpace(opts.OutDir),
 		now:            now,
 		session:        session,

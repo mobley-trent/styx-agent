@@ -39,8 +39,16 @@ func TestHeadlessPromptDeniedNoOperator(t *testing.T) {
 	))
 	var out, errOut strings.Builder
 
-	if err := Run(context.Background(), headlessOptions(t, dir, fake, "write a.txt", &out, &errOut)); err != nil {
-		t.Fatalf("Run() = %v", err)
+	err := Run(context.Background(), headlessOptions(t, dir, fake, "write a.txt", &out, &errOut))
+	var notClean *NotClean
+	if !errors.As(err, &notClean) {
+		t.Fatalf("Run() = %v, want *NotClean", err)
+	}
+	if notClean.Denied != 1 {
+		t.Errorf("denied = %d, want 1", notClean.Denied)
+	}
+	if code, ok := VerdictCode(err); !ok || code != 4 {
+		t.Errorf("VerdictCode() = %d, %v; want 4, true", code, ok)
 	}
 
 	if got := readAppFile(t, filepath.Join(dir, "a.txt")); got != "old\n" {
@@ -190,8 +198,13 @@ func TestHeadlessDenialCountIsAuthoritative(t *testing.T) {
 	))
 	var out, errOut strings.Builder
 
-	if err := Run(context.Background(), headlessOptions(t, dir, fake, "two calls", &out, &errOut)); err != nil {
-		t.Fatalf("Run() = %v", err)
+	err := Run(context.Background(), headlessOptions(t, dir, fake, "two calls", &out, &errOut))
+	var notClean *NotClean
+	if !errors.As(err, &notClean) || notClean.Denied != 2 {
+		t.Fatalf("Run() = %v, want *NotClean with 2 denials", err)
+	}
+	if code, ok := VerdictCode(err); !ok || code != 4 {
+		t.Errorf("VerdictCode() = %d, %v; want 4, true", code, ok)
 	}
 	if !strings.Contains(errOut.String(), "styx: denied 2 prompts (run not clean)") {
 		t.Errorf("stderr does not count both denials:\n%s", errOut.String())

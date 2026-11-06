@@ -392,3 +392,106 @@ func TestOutFlag(t *testing.T) {
 		})
 	}
 }
+
+// TestFailOnFlag covers docs/headless-ci.md §8.4: --fail-on reaches the harness
+// as one of the five store severities, and anything else — including the flag
+// without -n — is a usage error rather than a silently ignored gate.
+func TestFailOnFlag(t *testing.T) {
+	var got *app.Options
+	previous := runApp
+	runApp = func(_ context.Context, opts app.Options) error {
+		got = &opts
+		return nil
+	}
+	t.Cleanup(func() { runApp = previous })
+
+	stdout, stderr, code := run([]string{"styx", "-n", "scan", "--fail-on", "high"}, "v0.1.0")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty for a launch", stdout)
+	}
+	if got == nil || got.FailOn != "high" {
+		t.Fatalf("options = %+v, want FailOn \"high\"", got)
+	}
+
+	// Inline form, and the flag before the task.
+	got = nil
+	if _, stderr, code := run([]string{"styx", "--fail-on=critical", "-n", "scan"}, "v0.1.0"); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, stderr)
+	}
+	if got == nil || got.FailOn != "critical" {
+		t.Fatalf("options = %+v, want FailOn \"critical\"", got)
+	}
+
+	for _, c := range []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "without -n", args: []string{"styx", "--fail-on", "high"}, wantErr: "--fail-on needs a non-interactive run"},
+		{name: "unknown severity", args: []string{"styx", "-n", "scan", "--fail-on", "severe"}, wantErr: `--fail-on "severe": want critical, high, medium, low, or info`},
+		{name: "none is not a severity", args: []string{"styx", "-n", "scan", "--fail-on", "none"}, wantErr: `--fail-on "none"`},
+		{name: "empty value", args: []string{"styx", "-n", "scan", "--fail-on="}, wantErr: "--fail-on needs a severity"},
+		{name: "missing value", args: []string{"styx", "-n", "scan", "--fail-on"}, wantErr: "--fail-on needs a value"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var launched *app.Options
+			runApp = func(_ context.Context, opts app.Options) error {
+				launched = &opts
+				return nil
+			}
+			t.Cleanup(func() { runApp = previous })
+
+			_, stderr, code := run(c.args, "v0.1.0")
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2 (stderr=%q)", code, stderr)
+			}
+			if !strings.Contains(stderr, c.wantErr) {
+				t.Errorf("stderr = %q, want %q", stderr, c.wantErr)
+			}
+			if launched != nil {
+				t.Errorf("the harness was launched for a usage error: %+v", launched)
+			}
+		})
+	}
+}
+
+// TestVerdictExitCodes covers §8.1: a failed gate is 3, a run that denied a
+// prompt with the gate passing is 4, a broken run stays 1, and a clean run is 0.
+// The runner has already printed the verdict's line, so the CLI adds none.
+func TestVerdictExitCodes(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		want    int
+		wantMsg bool
+	}{
+		{"gate failed", &app.GateFailure{Threshold: "high", Failing: 2, Unverified: 1}, 3, false},
+		{"not clean", &app.NotClean{Denied: 1}, 4, false},
+		{"broken", context.Canceled, 1, true},
+		{"clean", nil, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			previous := runApp
+			runApp = func(context.Context, app.Options) error { return tt.err }
+			t.Cleanup(func() { runApp = previous })
+
+			_, stderr, code := run([]string{"styx", "-n", "scan"}, "v0.1.0")
+			if code != tt.want {
+				t.Fatalf("exit code = %d, want %d (stderr=%q)", code, tt.want, stderr)
+			}
+			if tt.wantMsg {
+				if !strings.Contains(stderr, "styx: context canceled") {
+					t.Errorf("stderr = %q, want the broken run's error", stderr)
+				}
+				return
+			}
+			if stderr != "" {
+				t.Errorf("stderr = %q, want none: the runner already printed the verdict", stderr)
+			}
+		})
+	}
+}

@@ -81,6 +81,36 @@ func Gated(f engagementstate.Finding) bool {
 	return Reportable(f) && f.Status != engagementstate.StatusRiskAccepted
 }
 
+// Threshold resolves a --fail-on value to a store severity: the five lowercase
+// severities and nothing else (docs/headless-ci.md §8.4).
+func Threshold(value string) (engagementstate.Severity, bool) {
+	switch s := engagementstate.Severity(value); s {
+	case engagementstate.SeverityCritical, engagementstate.SeverityHigh,
+		engagementstate.SeverityMedium, engagementstate.SeverityLow, engagementstate.SeverityInfo:
+		return s, true
+	}
+	return "", false
+}
+
+// GatedFindings counts what the severity gate must say about a snapshot
+// (docs/headless-ci.md §8.2): how many gated findings are at or above the
+// threshold, and how many of those are unverified (§8.7's disclosure). It
+// counts and adds nothing; the verdict — an exit code — belongs to the run
+// (ADR-0009).
+func GatedFindings(snap engagementstate.Snapshot, threshold engagementstate.Severity) (failing, unverified int) {
+	at := severityRank(threshold)
+	for _, f := range snap.Findings {
+		if !Gated(f) || severityRank(f.Severity) < at {
+			continue
+		}
+		failing++
+		if f.Verification == engagementstate.VerificationUnverified {
+			unverified++
+		}
+	}
+	return failing, unverified
+}
+
 // Render projects a snapshot into the three artifacts. engagement is the
 // engagement's name, empty for a safe-mode run, which renders a valid empty
 // export (§5); version is the build's version, carried as SARIF's
