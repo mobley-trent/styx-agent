@@ -8,17 +8,25 @@
 #   jq -S -f manifest.jq \
 #     --arg toolset_sha "$(sha256sum toolset.json | cut -d' ' -f1)" \
 #     --arg req_sha "$(sha256sum requirements-semgrep.txt | cut -d' ' -f1)" \
+#     --arg image_version "$VERSION" \
 #     image.json
+#
+# $image_version is the version this build is being published as. The workflow
+# computes sandbox-v1.YYYY.MM.PATCH per build, and the image's declaration and
+# the tag it is pushed under have to agree, or the image cannot be pinned: the
+# bump refuses a manifest whose image_version is not the version it is bumping
+# to. Empty means image.json's own value, which is what a local build records.
 #
 # Emits {toolset, build_info}. The toolset does not embed its own hash, so the
 # first pass may pass an empty $toolset_sha; the second pass records the real
 # one in build_info.
 
 . as $root
+| (if $image_version == "" then $root.image_version else $image_version end) as $version
 | {
     toolset: {
       schema_version: 1,
-      image_version: $root.image_version,
+      image_version: $version,
       base: "\($root.base.ref)@\($root.base.digest)",
       tools: [
         $root.tools[]
@@ -39,7 +47,7 @@
 
     build_info: {
       schema_version: 1,
-      image_version: $root.image_version,
+      image_version: $version,
       source_date_epoch: $root.source_date_epoch,
       base: { ref: $root.base.ref, digest: $root.base.digest },
       builder: {
@@ -75,7 +83,7 @@
       upstream: [
         {
           name: "semgrep",
-          version: ($root.tools[] | select(.source == "pypi") | .version),
+          version: first($root.tools[] | select(.source == "pypi") | .version),
           source: "pypi",
           requirements: $root.semgrep_requirements,
           requirements_sha256: $req_sha

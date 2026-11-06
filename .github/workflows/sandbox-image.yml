@@ -87,6 +87,10 @@ jobs:
           # mode=max: the build's own inputs are attested, not just its result.
           provenance: mode=max
           sbom: true
+          # The image's own declaration records the version it is tagged as, so
+          # the digest can be pinned later without the two disagreeing (§4.4).
+          build-args: |
+            IMAGE_VERSION=${{ steps.version.outputs.version }}
           tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
 
       - name: Pull the published index
@@ -114,6 +118,18 @@ jobs:
           REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
         run: cosign attest --yes --type spdxjson --predicate sbom.spdx.json "$REF"
 
+      # Prove the signature is one the harness's compiled-in policy will accept:
+      # the identity is the string styx ships (§6.1), so a rename of this
+      # workflow fails here rather than in every operator's session.
+      - name: Verify the signature against that policy
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          cosign verify "$REF" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sandbox-image.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
       # The image's own audit trail, taken from the image rather than regenerated
       # here: what is published must be what the bytes actually declare.
       - name: Collect the image's build information
@@ -137,7 +153,8 @@ jobs:
       - name: Verify the image against the pins
         env:
           REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
-        run: scripts/check-sandbox-image.sh --image "$REF"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/check-sandbox-image.sh --image "$REF" --version "$VERSION"
 
       - name: Record the published digest
         env:

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # check-sandbox-image.sh — verify the sandbox image's pins and build artifacts.
 #
-#   scripts/check-sandbox-image.sh                 # static: pins and generation
-#   scripts/check-sandbox-image.sh --image <ref>   # + the built image itself
+#   scripts/check-sandbox-image.sh                          # static: pins and generation
+#   scripts/check-sandbox-image.sh --image <ref> [--version <v>]
+#                                                          # + the built image itself
+#
+# --version is the version the image was published as. Static mode defaults to
+# image.json's own image_version, which is what a local build records; the
+# publish workflow builds and checks the version it tags (§4.4).
 #
 # Static mode needs only jq and python3. It regenerates the toolset manifest and
 # the build information from sandbox/image.json exactly as the Dockerfile does,
@@ -25,6 +30,7 @@ validator="$sandbox/validate-toolset.py"
 dockerfile="$sandbox/Dockerfile"
 requirements="$sandbox/requirements-semgrep.txt"
 image=""
+version=""
 
 note() { printf 'check-sandbox-image: %s\n' "$*"; }
 die() {
@@ -42,6 +48,11 @@ while [ $# -gt 0 ]; do
 	--image)
 		[ $# -ge 2 ] || die_usage "--image needs an image reference"
 		image="$2"
+		shift 2
+		;;
+	--version)
+		[ $# -ge 2 ] || die_usage "--version needs a value"
+		version="$2"
 		shift 2
 		;;
 	-h | --help)
@@ -66,6 +77,12 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 jq -e . "$pins" >/dev/null 2>&1 || die "sandbox/image.json is not valid JSON"
+
+if [ -z "$version" ]; then
+	version="$(jq -r .image_version "$pins")"
+fi
+printf '%s' "$version" | grep -Eq '^sandbox-v1\.[0-9]{4}\.[0-9]{2}\.[0-9]+$' ||
+	die "the image version must look like sandbox-v1.YYYY.MM.PATCH, got: $version"
 
 # 1. Every input carries its pin. A pin that is a tag, a range, or missing is
 #    the failure mode this file exists to make impossible.
@@ -106,11 +123,11 @@ grep -q 'apt-pins.txt' "$dockerfile" ||
 # 3. The deterministic generation the Dockerfile performs, twice, so build info
 #    can record the manifest's own hash.
 requirements_sha="$(sha256sum "$requirements" | cut -d' ' -f1)"
-jq -S -f "$sandbox/manifest.jq" --arg toolset_sha "" --arg req_sha "$requirements_sha" "$pins" >"$work/gen.json" ||
+jq -S -f "$sandbox/manifest.jq" --arg toolset_sha "" --arg req_sha "$requirements_sha" --arg image_version "$version" "$pins" >"$work/gen.json" ||
 	die "sandbox/manifest.jq failed on sandbox/image.json"
 jq -S .toolset "$work/gen.json" >"$work/toolset.json"
 toolset_sha="$(sha256sum "$work/toolset.json" | cut -d' ' -f1)"
-jq -S -f "$sandbox/manifest.jq" --arg toolset_sha "$toolset_sha" --arg req_sha "$requirements_sha" "$pins" |
+jq -S -f "$sandbox/manifest.jq" --arg toolset_sha "$toolset_sha" --arg req_sha "$requirements_sha" --arg image_version "$version" "$pins" |
 	jq -S .build_info >"$work/build-info.json"
 
 # 3. The manifest the image will ship satisfies its own schema.
@@ -119,11 +136,11 @@ python3 "$validator" "$work/toolset.json" "$schema" ||
 
 # 4. Build information records every pinned input, and every apt package in the
 #    pins, so "what produced this digest" is answerable from the image alone.
-jq -e --slurpfile pinned "$pins" '
+jq -e --arg version "$version" --slurpfile pinned "$pins" '
   (.base.digest == $pinned[0].base.digest) and
   (.builder.digest == $pinned[0].builder.digest) and
   (.source_date_epoch == $pinned[0].source_date_epoch) and
-  (.image_version == $pinned[0].image_version) and
+  (.image_version == $version) and
   (.data.seclists.commit == $pinned[0].data.seclists.commit) and
   (.data.seclists.license.sha256 == $pinned[0].data.seclists.license.sha256) and
   (.data.nuclei_templates.tag == $pinned[0].data.nuclei_templates.tag) and
@@ -159,6 +176,12 @@ grep -q "^# syntax=docker/dockerfile:1@$(jq -r .builder.digest "$pins")$" "$dock
 	die "sandbox/Dockerfile's syntax directive is not pinned to image.json's builder digest"
 grep -q "^ARG BASE=.*@$(jq -r .base.digest "$pins")$" "$dockerfile" ||
 	die "sandbox/Dockerfile's BASE arg is not pinned to image.json's base digest"
+grep -q "^ARG SOURCE_DATE_EPOCH=$(jq -r .source_date_epoch "$pins")$" "$dockerfile" ||
+	die "sandbox/Dockerfile's SOURCE_DATE_EPOCH does not match image.json's build clock"
+grep -q '^ARG IMAGE_VERSION=' "$dockerfile" ||
+	die "sandbox/Dockerfile must take the published image version as a build arg"
+grep -q -- '--arg image_version' "$dockerfile" ||
+	die "sandbox/Dockerfile must pass the image version into manifest.jq, or the tag and the declaration disagree"
 grep -q 'stat -c %s' "$dockerfile" ||
 	die "sandbox/Dockerfile must verify the pinned size of every checksummed download"
 grep -q 'sha256sum -c -' "$dockerfile" ||
@@ -241,6 +264,14 @@ for db in /opt/trivy-cache/db/trivy.db /opt/trivy-cache/java-db/javadb/trivy-jav
 done
 [ -s /etc/styx/README ] || fail "/etc/styx/README is missing"
 [ -s /usr/share/doc/styx/SecLists-LICENSE ] || fail "the SecLists licence is missing"
+
+# The runtimes code_exec promises, and the shell the harness execs through
+# (§2.1, §5.1): the image is the contract, so it is checked, not assumed.
+for cmd in bash python3 node; do
+  command -v "$cmd" >/dev/null 2>&1 || fail "the promised runtime $cmd is missing"
+done
+python3 -V >/dev/null 2>&1 || fail "python3 does not run"
+node -v >/dev/null 2>&1 || fail "node does not run"
 
 # The offline posture is the default, not a flag a caller has to remember (§8).
 [ "${TRIVY_SKIP_DB_UPDATE:-}" = "true" ] || fail "TRIVY_SKIP_DB_UPDATE is not true"

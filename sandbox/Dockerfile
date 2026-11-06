@@ -26,6 +26,10 @@ LABEL org.opencontainers.image.title="styx sandbox" \
       org.opencontainers.image.licenses="MIT"
 
 ARG SOURCE_DATE_EPOCH=1793923200
+# The version this build is published as. Empty means image.json's own value, so
+# a local build is self-describing; the publish workflow passes the version it
+# tags, and the two must agree or the image cannot be pinned (§4.4, §5).
+ARG IMAGE_VERSION=""
 ENV DEBIAN_FRONTEND=noninteractive \
     SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     HOME=/root \
@@ -49,7 +53,7 @@ COPY etc/motd /tmp/styx-build/motd
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends $(tr '\n' ' ' < /tmp/styx-build/apt-pins.txt); \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb /usr/share/doc/* /usr/share/man/*; \
     while read -r package want; do \
       got="$(dpkg-query -W -f='${Version}' "$package")"; \
       if [ "$got" != "$want" ]; then \
@@ -144,10 +148,11 @@ RUN set -eux; \
     cp /tmp/styx-build/README /etc/styx/README; \
     cp /tmp/styx-build/motd /etc/motd; \
     req_sha="$(sha256sum /tmp/styx-build/requirements-semgrep.txt | cut -d' ' -f1)"; \
-    jq -S -f /tmp/styx-build/manifest.jq --arg toolset_sha "" --arg req_sha "$req_sha" /tmp/styx-build/image.json > /tmp/styx-build/gen.json; \
+    version="${IMAGE_VERSION:-$(jq -r .image_version /tmp/styx-build/image.json)}"; \
+    jq -S -f /tmp/styx-build/manifest.jq --arg toolset_sha "" --arg req_sha "$req_sha" --arg image_version "$version" /tmp/styx-build/image.json > /tmp/styx-build/gen.json; \
     jq -S .toolset /tmp/styx-build/gen.json > /etc/styx/toolset.json; \
     toolset_sha="$(sha256sum /etc/styx/toolset.json | cut -d' ' -f1)"; \
-    jq -S -f /tmp/styx-build/manifest.jq --arg toolset_sha "$toolset_sha" --arg req_sha "$req_sha" /tmp/styx-build/image.json | jq -S .build_info > /etc/styx/build-info.json; \
+    jq -S -f /tmp/styx-build/manifest.jq --arg toolset_sha "$toolset_sha" --arg req_sha "$req_sha" --arg image_version "$version" /tmp/styx-build/image.json | jq -S .build_info > /etc/styx/build-info.json; \
     python3 /tmp/styx-build/validate-toolset.py /etc/styx/toolset.json /tmp/styx-build/toolset.schema.json; \
     chmod 0644 /etc/styx/toolset.json /etc/styx/build-info.json /etc/styx/README; \
     rm -rf /tmp/styx-build
