@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "styx",
+          "semanticVersion": "v0.4.0",
+          "informationUri": "https://github.com/mobley-trent/styx-agent",
+          "rules": [
+            {
+              "id": "anonymous-ftp-read-access",
+              "name": "Anonymous FTP read access",
+              "shortDescription": {
+                "text": "Anonymous FTP read access"
+              }
+            },
+            {
+              "id": "smb-signing-disabled",
+              "name": "SMB signing disabled",
+              "shortDescription": {
+                "text": "SMB signing disabled"
+              }
+            },
+            {
+              "id": "smb-signing-disabled-2",
+              "name": "SMB signing: disabled",
+              "shortDescription": {
+                "text": "SMB signing: disabled"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "smb-signing-disabled",
+          "level": "error",
+          "message": {
+            "text": "SMB signing disabled"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "service/10.0.0.33:445/tcp"
+                }
+              },
+              "properties": {
+                "host": "10.0.0.33",
+                "hostname": "web02",
+                "port": 445,
+                "proto": "tcp",
+                "product": "microsoft-ds",
+                "version": "10.0"
+              }
+            }
+          ],
+          "properties": {
+            "findingId": "finding-cccc",
+            "severity": "high",
+            "status": "confirmed",
+            "confidence": "high",
+            "verification": "unverified",
+            "evidenceCount": 2
+          },
+          "fingerprints": {
+            "styxFindingV1": "4cf389f3dc3c0822"
+          },
+          "partialFingerprints": {
+            "styxFindingV1": "4cf389f3dc3c0822"
+          }
+        },
+        {
+          "ruleId": "anonymous-ftp-read-access",
+          "level": "warning",
+          "message": {
+            "text": "Anonymous FTP read access"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "host/10.0.0.50"
+                }
+              },
+              "properties": {
+                "host": "10.0.0.50",
+                "hostname": "ftp01"
+              }
+            }
+          ],
+          "properties": {
+            "findingId": "finding-dddd",
+            "severity": "medium",
+            "status": "risk_accepted",
+            "confidence": "high",
+            "verification": "verified",
+            "evidenceCount": 1
+          },
+          "fingerprints": {
+            "styxFindingV1": "843a86d20e92fbee"
+          },
+          "partialFingerprints": {
+            "styxFindingV1": "843a86d20e92fbee"
+          }
+        },
+        {
+          "ruleId": "smb-signing-disabled-2",
+          "level": "warning",
+          "message": {
+            "text": "SMB signing: disabled"
+          },
+          "properties": {
+            "findingId": "finding-ffff",
+            "severity": "medium",
+            "status": "detected",
+            "confidence": "medium",
+            "verification": "unverified",
+            "evidenceCount": 0
+          },
+          "fingerprints": {
+            "styxFindingV1": "b201f4d1b76e3920"
+          },
+          "partialFingerprints": {
+            "styxFindingV1": "b201f4d1b76e3920"
+          }
+        }
+      ]
+    }
+  ]
+}

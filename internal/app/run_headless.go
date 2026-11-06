@@ -88,6 +88,12 @@ func runHeadless(ctx context.Context, h *Harness) error {
 	if answer := strings.TrimSpace(result.Answer); answer != "" {
 		_, _ = fmt.Fprintln(h.out, answer)
 	}
+	// The export is written before the run's exit status is decided
+	// (docs/findings-export.md §5): the gate reads the same snapshot, so no
+	// verdict ever needs the file. A failed write fails the run (§5).
+	if exportErr := h.emitFindingsExport(printer); exportErr != nil {
+		err = exportErr
+	}
 	h.printSummary(result, printer.denials())
 
 	if interrupted.Load() && (err == nil || errors.Is(err, context.Canceled)) {

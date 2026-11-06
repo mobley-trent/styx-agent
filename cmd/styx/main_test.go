@@ -330,3 +330,65 @@ func TestNonInteractiveFlags(t *testing.T) {
 		})
 	}
 }
+
+// TestOutFlag covers docs/findings-export.md §5: --out reaches the harness, and
+// given without -n it is a usage error rather than a silently ignored flag.
+func TestOutFlag(t *testing.T) {
+	var got *app.Options
+	previous := runApp
+	runApp = func(_ context.Context, opts app.Options) error {
+		got = &opts
+		return nil
+	}
+	t.Cleanup(func() { runApp = previous })
+
+	stdout, stderr, code := run([]string{"styx", "-n", "scan", "--out", "reports"}, "v0.1.0")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty for a launch", stdout)
+	}
+	if got == nil || got.OutDir != "reports" {
+		t.Fatalf("options = %+v, want OutDir \"reports\"", got)
+	}
+
+	// Inline form, and the flag before the task.
+	got = nil
+	if _, stderr, code := run([]string{"styx", "--out=out/nested", "-n", "scan"}, "v0.1.0"); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, stderr)
+	}
+	if got == nil || got.OutDir != "out/nested" {
+		t.Fatalf("options = %+v, want OutDir \"out/nested\"", got)
+	}
+
+	for _, c := range []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "without -n", args: []string{"styx", "--out", "reports"}, wantErr: "--out needs a non-interactive run"},
+		{name: "empty value", args: []string{"styx", "-n", "scan", "--out="}, wantErr: "--out needs a directory"},
+		{name: "missing value", args: []string{"styx", "-n", "scan", "--out"}, wantErr: "--out needs a value"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var launched *app.Options
+			runApp = func(_ context.Context, opts app.Options) error {
+				launched = &opts
+				return nil
+			}
+			t.Cleanup(func() { runApp = previous })
+
+			_, stderr, code := run(c.args, "v0.1.0")
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2 (stderr=%q)", code, stderr)
+			}
+			if !strings.Contains(stderr, c.wantErr) {
+				t.Errorf("stderr = %q, want %q", stderr, c.wantErr)
+			}
+			if launched != nil {
+				t.Errorf("the harness was launched for a usage error: %+v", launched)
+			}
+		})
+	}
+}

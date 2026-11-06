@@ -23,6 +23,14 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- `--out <dir>` on a non-interactive run writes the findings export: `vulnerabilities.json`, a
+  `vulnerabilities.csv` in DefectDojo's import columns, and a SARIF 2.1.0 `findings.sarif`, all
+  rendered from engagement state and nothing else, so identical state produces byte-identical files
+  and a CI diff means the security posture changed. Affected hosts and services are resolved to
+  their addresses, ports, and products, an endpoint that no longer resolves is carried as
+  `unknown` rather than dropped, and the envelope counts what was omitted. All three files are
+  written together through temp-and-rename before the exit status exists; a failed write removes
+  the set and fails the run. Given without `-n` it is a usage error. (#122)
 - `-n` / `--non-interactive <task>`: one task, one turn, no terminal, no command surface, and stdin
   never read. A prompted action is denied with the audit reason `no-operator` — the turn continues,
   and the run reports itself not clean — rather than manufactured into an allow; a diff applies only
