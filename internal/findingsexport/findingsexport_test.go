@@ -122,6 +122,7 @@ func TestRenderGolden(t *testing.T) {
 			}
 			continue
 		}
+		//nolint:gosec // the golden path is the one this test built from its own fixture directory.
 		want, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read golden %s: %v", path, err)
