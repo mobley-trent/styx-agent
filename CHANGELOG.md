@@ -23,6 +23,14 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- `--fail-on <severity>` turns a finished `-n` run's findings into a build verdict: a gated finding
+  (active, not `false_positive` or `fixed`, not `refuted`, and not `risk_accepted`) at or above the
+  threshold exits `3`, a run that denied a prompt with no operator exits `4`, and a broken run stays
+  `1` — the exit code is a verdict, never a crash report. The gate reads the same snapshot and the
+  same predicate the `--out` export renders, evaluated after the write and before teardown, so the
+  artifact and the verdict cannot disagree. Severity is the threshold and verification never moves
+  it, though the one stderr line reports how many failing findings are unverified. Given without
+  `-n`, or with anything but critical, high, medium, low, or info, it is a usage error. (#124)
 - `--out <dir>` on a non-interactive run writes the findings export: `vulnerabilities.json`, a
   `vulnerabilities.csv` in DefectDojo's import columns, and a SARIF 2.1.0 `findings.sarif`, all
   rendered from engagement state and nothing else, so identical state produces byte-identical files
