@@ -9,7 +9,8 @@ Keystone rationale: [`docs/adr/0007-non-interactive-runs-never-widen.md`](adr/00
 The rest of that CI surface is decided beside this document and is deliberately **not** repeated
 here: the machine-readable findings artifact ([#114](https://github.com/mobley-trent/styx-agent/issues/114)),
 the USD budget cap ([#117](https://github.com/mobley-trent/styx-agent/issues/117)), and the
-offensive sandbox image ([#118](https://github.com/mobley-trent/styx-agent/issues/118)). Diff
+offensive sandbox image ([#118](https://github.com/mobley-trent/styx-agent/issues/118),
+[`docs/sandbox-image.md`](sandbox-image.md)). Diff
 scoping ([#116](https://github.com/mobley-trent/styx-agent/issues/116)) is decided in §11, which
 defers the flag to v1.3 and settles the semantics it lands with.
 

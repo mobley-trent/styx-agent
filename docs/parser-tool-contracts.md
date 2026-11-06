@@ -71,8 +71,8 @@ receipt). N is six, not N hand-rolled tools.
 - Raw scanner output is written by the CLI in the session container to a **designated
   artifact directory** under the project root — `.styx/out/` — which is bind-mounted as
   `/workspace` and therefore visible harness-side. The prompt (and, in v1.2, the sandbox
-  image's help text) routes scanner output there; the harness additively gitignores
-  `.styx/`.
+  image's help text — [`docs/sandbox-image.md`](sandbox-image.md) §2.3) routes scanner output
+  there; the harness additively gitignores `.styx/`.
 - The designated directory is what makes §4's obligation-watching reliable: the harness
   can see an artifact appear even when argv sniffing misses a wrapped or scripted run.
 - Artifacts are **retained**, not auto-pruned: they are the evidence refs state points at.
