@@ -99,6 +99,13 @@ jobs:
           context: sandbox
           platforms: linux/amd64,linux/arm64
           push: true
+          # The expensive layers — a pinned apt install, a hash-locked semgrep,
+          # ~1.1 GB of trivy databases — are identical on both architectures, so
+          # the release build shares one cache scope with the pull-request build.
+          # mode=min keeps the cache to the layers the image actually ships, which
+          # is what fits in GitHub's 10 GB cache budget for two architectures.
+          cache-from: type=gha,scope=sandbox
+          cache-to: type=gha,mode=min,scope=sandbox
           # mode=max: the build's own inputs are attested, not just its result.
           provenance: mode=max
           sbom: true
@@ -296,6 +303,10 @@ jobs:
           platforms: linux/amd64
           load: true
           push: false
+          # Same scope as the release build: a PR reuses the layers the last
+          # publish or PR push already paid for, and the publish reuses the PR's.
+          cache-from: type=gha,scope=sandbox
+          cache-to: type=gha,mode=min,scope=sandbox
           build-args: |
             IMAGE_VERSION=${{ steps.preview.outputs.version }}
           tags: styx-sandbox:pr-${{ github.event.pull_request.number }}

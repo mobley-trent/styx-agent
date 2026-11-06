@@ -200,7 +200,10 @@ under `sandbox/` on `main`, and pull requests touching `sandbox/**`:
 - **Pull requests build without publishing**: a PR touching `sandbox/**` builds the amd64 image
   under a preview version derived from the PR number and runs the same conformance check against it.
   The install, the segment downloads and the manifest generation are where a pin change goes wrong,
-  so catching that on the PR costs minutes instead of a broken monthly publish.
+  so catching that on the PR costs minutes instead of a broken monthly publish. The layer cache is
+  shared with the publish build (`type=gha`, one scope, `mode=min`), because those layers — the
+  pinned apt install, the hash-locked semgrep, the trivy databases — are the same on both
+  architectures and the same on both triggers; only the layers that changed are rebuilt.
 - Provenance `mode=max` and an SBOM (`syft`/buildkit) attached as attestations.
 - **Cosign keyless** signing of the **index digest** (not a tag, not a per-arch manifest), plus a
   signed SBOM attestation. The signing identity is the workflow path on `main`; it is compiled into
