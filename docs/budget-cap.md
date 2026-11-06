@@ -13,7 +13,8 @@ here: the run's shape, streams, and end conditions ([#113](https://github.com/mo
 ([#114](https://github.com/mobley-trent/styx-agent/issues/114), [`docs/findings-export.md`](findings-export.md)),
 the severity gate and its exit codes ([`docs/headless-ci.md`](headless-ci.md) §8), diff scoping
 ([#116](https://github.com/mobley-trent/styx-agent/issues/116)), and the sandbox image
-([#118](https://github.com/mobley-trent/styx-agent/issues/118)).
+([#118](https://github.com/mobley-trent/styx-agent/issues/118),
+[`docs/sandbox-image.md`](sandbox-image.md)).
 
 ## 1. Scope
 

@@ -39,7 +39,8 @@ implementations follow once each design is decided.
 4. **Preloaded offensive sandbox image.** Replace `python:3.12-slim` with a styx-maintained,
    cosign-published security image (nmap, nuclei, ffuf, sqlmap, semgrep, trivy, …), still
    egress-pinned by the existing firewall layer. The single highest-leverage match for
-   Strix's out-of-the-box toolkit without adopting its weaker governance.
+   Strix's out-of-the-box toolkit without adopting its weaker governance. Decided in
+   [`docs/sandbox-image.md`](sandbox-image.md).
 5. **Headless / CI mode with severity gating.** `-n/--non-interactive`;
    `--fail-on critical|high|medium|low|info` exiting `3` at/above threshold (exit codes
    0/1/2/3/4, [`docs/headless-ci.md`](headless-ci.md) §8); `vulnerabilities.json` / `.csv` and
@@ -127,5 +128,7 @@ the relationship-graph and attack-path computation in
 [`docs/headless-ci.md`](headless-ci.md) §8. Of the v1.2 operating surface, the **USD budget cap**
 is decided in [`docs/budget-cap.md`](budget-cap.md); diff scoping is deferred to v1.3 because it
 needs the target-declaring artifacts that item 9 introduces
-([`docs/headless-ci.md`](headless-ci.md) §11). Still open: sandbox-image contents (operating
-surface) and the reach and provider designs.
+([`docs/headless-ci.md`](headless-ci.md) §11). The **sandbox image** is decided in
+[`docs/sandbox-image.md`](sandbox-image.md). Still open: the exploitation-phase orchestration
+design ([#131](https://github.com/mobley-trent/styx-agent/issues/131)) and the reach and provider
+designs.

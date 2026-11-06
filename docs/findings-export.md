@@ -13,7 +13,8 @@ shape, streams, and end conditions ([#113](https://github.com/mobley-trent/styx-
 ([`docs/headless-ci.md`](headless-ci.md) §8), diff scoping
 ([#116](https://github.com/mobley-trent/styx-agent/issues/116)), the USD budget cap
 ([#117](https://github.com/mobley-trent/styx-agent/issues/117)), and the sandbox image
-([#118](https://github.com/mobley-trent/styx-agent/issues/118)).
+([#118](https://github.com/mobley-trent/styx-agent/issues/118),
+[`docs/sandbox-image.md`](sandbox-image.md)).
 
 ## 1. Scope
 
@@ -360,8 +361,7 @@ rendering. One rendering, one owner.
 ## 11. Explicitly not in v1.2
 
 diff scoping ([#116](https://github.com/mobley-trent/styx-agent/issues/116)) · the USD budget cap
-([#117](https://github.com/mobley-trent/styx-agent/issues/117)) · the sandbox image
-([#118](https://github.com/mobley-trent/styx-agent/issues/118)) · Markdown/HTML reports and the run
+([#117](https://github.com/mobley-trent/styx-agent/issues/117)) · Markdown/HTML reports and the run
 viewer (§9) · SARIF baselines and suppressions (§7.6) · a machine-readable *run summary* (the
 summary stays human-readable, [`docs/headless-ci.md`](headless-ci.md) §6.3) · exporting engagement
 state wholesale (the store is not an artifact) · attack-path or cost context in any format (§3.3) ·

@@ -275,7 +275,7 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `read_file` / `write_file` / `edit_file` | file ops in the session workspace (container FS) | no |
 | `glob` / `grep` | repo orientation primitives | no |
 | `bash` | shell commands, container-only | container egress rules apply |
-| `code_exec` | multi-language snippets (`lang` parameter; python3 first) against runtimes present in the container image | container egress rules apply |
+| `code_exec` | multi-language snippets (`lang` parameter; python3 first) against runtimes present in the container image (`python3` and `node` are promised by the default sandbox image, [`docs/sandbox-image.md`](sandbox-image.md) §2.1) | container egress rules apply |
 | `web_fetch` | harness-side URL fetch | scope-checked |
 | `ssh_logs` | read-only remote log fetch over SSH; harness-enforced read-only command allowlist (cat/tail/grep/zgrep-class) | scope-checked |
 | `dispatch_subagent` | spawn a role-preset subagent | n/a (delegates to its tools) |
@@ -295,6 +295,11 @@ workspace; model `docs/parser-tool-contracts.md`.
 All exec runs in a **per-session container** (never the default bridge, never host
 networking):
 
+- **Session image:** the default is the pinned, signed offensive sandbox image
+  ([`docs/sandbox-image.md`](sandbox-image.md)); the harness verifies its digest and signing
+  identity before the container is created and refuses to start when that fails. `container.image`
+  may pin a different image, which runs only under the explicit, audited
+  `--allow-unverified-image` flag.
 - **Egress enforcement:** the harness programs an nftables/iptables allowlist (prefer `nft`
   backend; detect and fall back) in `DOCKER-USER`/`FORWARD`, scoped to the session's bridge
   interface, derived from the engagement scope's pinned IPs plus the run's own needs

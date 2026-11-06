@@ -76,6 +76,28 @@ Container execution when the harness cannot enforce container egress at the host
 edge: the container gets no external network plus a harness-mediated egress path scoped to
 the engagement. A visible, audited downgrade — never silent, never the quiet default.
 
+## Sandbox image
+
+**Sandbox image**
+The pinned container image a session runs `bash` and `code_exec` in. Content-addressed by digest,
+never by tag; the official image is signed and verified before use, and an operator may pin another,
+which runs only as an explicitly authorized unverified image.
+
+**Verified image**
+A sandbox image whose digest signature, signing identity, and transparency-log inclusion were checked
+against the harness's compiled-in policy before the container was created. A pre-pulled image whose
+bundle was never verified is not one.
+
+**Toolset manifest**
+The image's own declaration — at `/etc/styx/toolset.json` — of the tools, versions, parser mappings,
+wordlists, and tool-data versions it carries, read once at session start so prompts and allowlists stay
+truthful. Absent means unknown, never probed.
+
+**Tool data**
+The scanner payloads bundled into the sandbox image at build: nuclei templates, sqlmap tamper scripts,
+semgrep rules, the trivy databases, and wordlists. Refreshed by an image release, never fetched at
+runtime.
+
 ## Engagement state & findings
 
 **Engagement state**
