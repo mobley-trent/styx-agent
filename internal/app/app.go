@@ -56,6 +56,10 @@ type Options struct {
 	// NonInteractive set, stdin is never read and there is no second prompt.
 	NonInteractive bool
 	Task           string
+	// OutDir is the findings export destination (docs/findings-export.md §5).
+	// Empty writes nothing; set without NonInteractive it is a usage error at
+	// the CLI.
+	OutDir string
 	// Version is the running binary's version, shown in the status line.
 	Version string
 	// SourceBuild marks an unstamped (go build / go install) binary. The update
@@ -163,6 +167,9 @@ type Harness struct {
 	// errOut is stderr: the harness's own voice and, headless, the whole
 	// transcript (docs/headless-ci.md §6.1). stdout stays the answer alone.
 	errOut io.Writer
+	// outDir is the --out directory a non-interactive run writes its findings
+	// export into (docs/findings-export.md §5). Empty means no export.
+	outDir string
 	now    func() time.Time
 	warned bool
 	// updateNotified records that the notifier has emitted its one notice for
@@ -215,6 +222,9 @@ type Harness struct {
 func Run(ctx context.Context, opts Options) error {
 	if opts.NonInteractive && strings.TrimSpace(opts.Task) == "" {
 		return errors.New("styx: a non-interactive run needs one task")
+	}
+	if strings.TrimSpace(opts.OutDir) != "" && !opts.NonInteractive {
+		return errors.New("styx: --out needs a non-interactive run")
 	}
 	h, err := Build(ctx, opts)
 	if err != nil {
@@ -331,6 +341,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		errOut:         errOut,
 		headless:       opts.NonInteractive,
 		task:           strings.TrimSpace(opts.Task),
+		outDir:         strings.TrimSpace(opts.OutDir),
 		now:            now,
 		session:        session,
 		client:         client,

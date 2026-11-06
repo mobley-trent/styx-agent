@@ -32,6 +32,10 @@ Flags:
                         the answer goes to stdout, the transcript to stderr.
                         Prompts cannot be asked, so they are denied
                         (docs/headless-ci.md)
+  --out <dir>           Write the findings export (vulnerabilities.json,
+                        vulnerabilities.csv, findings.sarif) into <dir> after
+                        a non-interactive run; needs -n
+                        (docs/findings-export.md)
   --engagement <file>   Activate engagement mode through the engagement gate
                         (strict validation; without it, safe mode is default)
   --project <dir>       Project root to run in (default: the working directory)
@@ -95,6 +99,7 @@ func run(argv []string, version string) (stdout, stderr string, exitCode int) {
 		SourceBuild:    isSourceBuild(),
 		NonInteractive: opts.nonInteractive,
 		Task:           opts.task,
+		OutDir:         opts.out,
 		Stdin:          os.Stdin,
 		Stdout:         os.Stdout,
 		Stderr:         os.Stderr,
@@ -151,6 +156,11 @@ type cliOptions struct {
 	nonInteractive bool
 	// task is the single positional argument of a non-interactive run (§2).
 	task string
+	// out is the findings export directory (docs/findings-export.md §5),
+	// and outSet records that the flag was given: an empty value is a usage
+	// error, never an absent flag.
+	out    string
+	outSet bool
 	// positional collects the bare arguments; whether they are a task or a
 	// stray command is decided once -n is known.
 	positional []string
@@ -195,6 +205,9 @@ func parseArgs(args []string) (cliOptions, error) {
 			target = &opts.engagement
 		case "--project":
 			target = &opts.project
+		case "--out":
+			target = &opts.out
+			opts.outSet = true
 		default:
 			// A bare argument is the task of a non-interactive run, and a stray
 			// word anywhere else. Which one it is is decided once every flag
@@ -215,6 +228,18 @@ func parseArgs(args []string) (cliOptions, error) {
 	}
 	if pendingFlag != nil {
 		return opts, fmt.Errorf("flag %s needs a value", pendingName)
+	}
+
+	// --out is CI-shaped: given without -n it is a usage error (§2.2), never
+	// silently ignored.
+	if opts.outSet {
+		opts.out = strings.TrimSpace(opts.out)
+		if opts.out == "" {
+			return opts, errors.New("--out needs a directory")
+		}
+		if !opts.nonInteractive {
+			return opts, errors.New("--out needs a non-interactive run (-n)")
+		}
 	}
 
 	if !opts.nonInteractive {

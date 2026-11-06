@@ -1,0 +1,4 @@
+Date,Title,Severity,Url,Id,Status,Confidence,Verification,EvidenceCount
+2026-10-30T11:40:51Z,SMB signing disabled,High,10.0.0.33:445/tcp,finding-cccc,confirmed,high,unverified,2
+2026-10-30T11:40:51Z,Anonymous FTP read access,Medium,10.0.0.50,finding-dddd,risk_accepted,high,verified,1
+2026-10-30T11:40:51Z,SMB signing: disabled,Medium,host-9999,finding-ffff,detected,medium,unverified,0

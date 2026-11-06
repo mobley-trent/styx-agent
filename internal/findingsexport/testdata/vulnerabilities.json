@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "engagement": "acme-q4",
+  "findings": [
+    {
+      "id": "finding-cccc",
+      "title": "SMB signing disabled",
+      "severity": "high",
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "status": "confirmed",
+      "confidence": "high",
+      "verification": "unverified",
+      "affected": [
+        {
+          "kind": "service",
+          "host": "10.0.0.33",
+          "hostname": "web02",
+          "port": 445,
+          "proto": "tcp",
+          "product": "microsoft-ds",
+          "version": "10.0"
+        }
+      ],
+      "evidence": {
+        "count": 2,
+        "items": [
+          {
+            "kind": "artifact",
+            "ref": ".styx/out/nmap-20261030T1012.xml"
+          },
+          {
+            "kind": "note",
+            "ref": "signing required = false on 445/tcp"
+          }
+        ]
+      },
+      "first_seen": "2026-10-30T10:12:04Z",
+      "last_seen": "2026-10-30T11:40:51Z"
+    },
+    {
+      "id": "finding-dddd",
+      "title": "Anonymous FTP read access",
+      "severity": "medium",
+      "status": "risk_accepted",
+      "confidence": "high",
+      "verification": "verified",
+      "affected": [
+        {
+          "kind": "host",
+          "host": "10.0.0.50",
+          "hostname": "ftp01"
+        }
+      ],
+      "evidence": {
+        "count": 1,
+        "items": [
+          {
+            "kind": "cli-output",
+            "ref": "ftp\u003e ls"
+          }
+        ]
+      },
+      "first_seen": "2026-10-30T10:12:04Z",
+      "last_seen": "2026-10-30T11:40:51Z"
+    },
+    {
+      "id": "finding-ffff",
+      "title": "SMB signing: disabled",
+      "severity": "medium",
+      "status": "detected",
+      "confidence": "medium",
+      "verification": "unverified",
+      "affected": [
+        {
+          "kind": "unknown",
+          "ref": "host-9999"
+        }
+      ],
+      "evidence": {
+        "count": 0,
+        "items": []
+      },
+      "first_seen": "2026-10-30T10:12:04Z",
+      "last_seen": "2026-10-30T11:40:51Z"
+    }
+  ],
+  "counts": {
+    "reported": 3,
+    "omitted": 2
+  }
+}
