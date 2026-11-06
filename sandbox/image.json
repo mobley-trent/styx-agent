@@ -1,0 +1,183 @@
+{
+  "image_version": "sandbox-v1.2026.11.0",
+  "source_date_epoch": 1793923200,
+  "base": {
+    "ref": "docker.io/kalilinux/kali-rolling",
+    "digest": "sha256:7997e0581c4f5c185cfe6773d5cae8fcc7c6b79798726ccaabf843af4bcd2013"
+  },
+  "builder": {
+    "ref": "docker.io/docker/dockerfile",
+    "tag": "1",
+    "digest": "sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e"
+  },
+  "tools": [
+    {
+      "name": "nmap",
+      "version": "7.99",
+      "binary": "nmap",
+      "package": "nmap",
+      "package_version": "7.991+dfsg-1kali1",
+      "parser": "nmap_parse",
+      "source": "kali"
+    },
+    {
+      "name": "nuclei",
+      "version": "3.11.1",
+      "binary": "nuclei",
+      "package": "nuclei",
+      "package_version": "3.11.1-0kali1",
+      "parser": "nuclei_parse",
+      "source": "kali"
+    },
+    {
+      "name": "sqlmap",
+      "version": "1.10.10",
+      "binary": "sqlmap",
+      "package": "sqlmap",
+      "package_version": "1.10.10-1",
+      "parser": "sqlmap_parse",
+      "source": "kali"
+    },
+    {
+      "name": "gobuster",
+      "version": "3.8.2",
+      "binary": "gobuster",
+      "package": "gobuster",
+      "package_version": "3.8.2-1",
+      "parser": "gobuster_parse",
+      "source": "kali"
+    },
+    {
+      "name": "netexec",
+      "version": "1.5.1",
+      "binary": "nxc",
+      "package": "netexec",
+      "package_version": "1.5.1-0kali2",
+      "parser": "cme_parse",
+      "source": "kali"
+    },
+    {
+      "name": "bloodhound.py",
+      "version": "1.9.0",
+      "binary": "bloodhound-python",
+      "package": "bloodhound.py",
+      "package_version": "1.9.0-0kali1",
+      "parser": "bloodhound_parse",
+      "source": "kali"
+    },
+    {
+      "name": "ffuf",
+      "version": "2.3.0",
+      "binary": "ffuf",
+      "package": "ffuf",
+      "package_version": "2.3.0-1",
+      "parser": null,
+      "source": "kali"
+    },
+    {
+      "name": "semgrep",
+      "version": "1.184.0",
+      "binary": "semgrep",
+      "package": null,
+      "package_version": null,
+      "parser": null,
+      "source": "pypi"
+    },
+    {
+      "name": "trivy",
+      "version": "0.76.0",
+      "binary": "trivy",
+      "package": "trivy",
+      "package_version": "0.76.0-0kali1",
+      "parser": null,
+      "source": "kali"
+    }
+  ],
+  "supporting": [
+    { "package": "bash", "package_version": "5.3-4" },
+    { "package": "coreutils", "package_version": "9.10-1" },
+    { "package": "curl", "package_version": "8.22.0-1" },
+    { "package": "jq", "package_version": "1.8.2-1" },
+    { "package": "git", "package_version": "1:2.53.0-1" },
+    { "package": "python3", "package_version": "3.14.7-3" },
+    { "package": "python3-venv", "package_version": "3.14.7-3" },
+    { "package": "nodejs", "package_version": "24.21.0+dfsg+~cs24.13.4-1" },
+    { "package": "openssl", "package_version": "3.6.5-1" },
+    { "package": "ca-certificates", "package_version": "20260816+nmu1" },
+    { "package": "unzip", "package_version": "6.0-31" },
+    { "package": "netcat-traditional", "package_version": "1.10-50.1" },
+    { "package": "tar", "package_version": "1.35+dfsg-6" },
+    { "package": "gzip", "package_version": "1.14-1" }
+  ],
+  "wordlists": [
+    {
+      "name": "raft-small-words",
+      "url": "https://raw.githubusercontent.com/danielmiessler/SecLists/2f31b22e1f9963ec2fd2b12606c00f0fb04910f1/Discovery/Web-Content/raft-small-words.txt",
+      "path": "/usr/share/wordlists/styx/raft-small-words.txt",
+      "sha256": "1aadf7dafde5ca68f5e5160c9206f7be6f6fc701775cdea30ba01bbb6d8db8ad"
+    },
+    {
+      "name": "raft-medium-directories",
+      "url": "https://raw.githubusercontent.com/danielmiessler/SecLists/2f31b22e1f9963ec2fd2b12606c00f0fb04910f1/Discovery/Web-Content/raft-medium-directories.txt",
+      "path": "/usr/share/wordlists/styx/raft-medium-directories.txt",
+      "sha256": "a9626959f818d9e198259665c5a88053b7b061c538f46da215d172bcba305fe9"
+    },
+    {
+      "name": "common",
+      "url": "https://raw.githubusercontent.com/danielmiessler/SecLists/2f31b22e1f9963ec2fd2b12606c00f0fb04910f1/Discovery/Web-Content/common.txt",
+      "path": "/usr/share/wordlists/styx/common.txt",
+      "sha256": "47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a"
+    },
+    {
+      "name": "subdomains-top1million-5000",
+      "url": "https://raw.githubusercontent.com/danielmiessler/SecLists/2f31b22e1f9963ec2fd2b12606c00f0fb04910f1/Discovery/DNS/subdomains-top1million-5000.txt",
+      "path": "/usr/share/wordlists/styx/subdomains-top1million-5000.txt",
+      "sha256": "e331367c140298cb179114fdeefa78f58f696219f0dec017a28bb79487cfcf19"
+    },
+    {
+      "name": "top-usernames-shortlist",
+      "url": "https://raw.githubusercontent.com/danielmiessler/SecLists/2f31b22e1f9963ec2fd2b12606c00f0fb04910f1/Usernames/top-usernames-shortlist.txt",
+      "path": "/usr/share/wordlists/styx/top-usernames-shortlist.txt",
+      "sha256": "dc44775d12dcdb4027017623ffaa935a018944839ce4b204ccb0c6ef566db5dd"
+    }
+  ],
+  "data": {
+    "seclists": {
+      "repo": "danielmiessler/SecLists",
+      "commit": "2f31b22e1f9963ec2fd2b12606c00f0fb04910f1",
+      "license": {
+        "url": "https://raw.githubusercontent.com/danielmiessler/SecLists/2f31b22e1f9963ec2fd2b12606c00f0fb04910f1/LICENSE",
+        "path": "/usr/share/doc/styx/SecLists-LICENSE",
+        "sha256": "3dbdc93d5f8829de0941744841730a09c106d0732e5ae0e98ca1d77be7ded66c"
+      }
+    },
+    "nuclei_templates": {
+      "tag": "v10.5.1",
+      "url": "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v10.5.1.tar.gz",
+      "sha256": "30fe1cfaced4635f886e4a2673641bba86998dceec28e468274524e789aa56eb"
+    },
+    "semgrep_rules": {
+      "repo": "semgrep/semgrep-rules",
+      "commit": "16b9e6d45f10649f6a531ec4838ed9924372c3bc",
+      "url": "https://codeload.github.com/semgrep/semgrep-rules/tar.gz/16b9e6d45f10649f6a531ec4838ed9924372c3bc",
+      "sha256": "098703252fbff4c04186e7b6dd06f9a6a03fb548778341056a945e099ec2a824"
+    },
+    "trivy_db": {
+      "ref": "ghcr.io/aquasecurity/trivy-db",
+      "repo": "aquasecurity/trivy-db",
+      "tag": "2",
+      "digest": "sha256:245d6b09bb1977e00e1778421af6168f0b2c71ba9137c8debc35c3b2bd2d81b5",
+      "layer_digest": "sha256:668b5f8fc26d948b67959d91a370f48885a5fbe8c9f575bbec28da8782ec7aab",
+      "layer_size": 138557479
+    },
+    "trivy_java_db": {
+      "ref": "ghcr.io/aquasecurity/trivy-java-db",
+      "repo": "aquasecurity/trivy-java-db",
+      "tag": "1",
+      "digest": "sha256:a48270d8181f59baed801e34d73e0857558570c51c9a582eaa3999e897c210e4",
+      "layer_digest": "sha256:c6a199cdfd2022f0e4792f9de59b63228d63b904df5858afb1873214427d2a44",
+      "layer_size": 995358342
+    }
+  },
+  "semgrep_requirements": "requirements-semgrep.txt"
+}

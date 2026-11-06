@@ -25,6 +25,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # The sandbox image publishes on a schedule, not on every pull request, so
+      # its pins and the manifest they generate are checked here instead.
+      - name: Sandbox image pins
+        run: scripts/check-sandbox-image.sh
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:

@@ -23,6 +23,12 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- The sandbox image is built and published from pinned inputs: the Kali base digest, an exact apt
+  version for every package, a hash-locked semgrep install, and checksummed tool data (nuclei
+  templates, semgrep rules, a SecLists subset, the trivy databases). The image declares itself in
+  `/etc/styx/toolset.json` and `/etc/styx/build-info.json`, a workflow builds it for `amd64` and
+  `arm64` and signs the index digest keyless, and `scripts/sandbox-bump.sh` pins a published digest
+  in the binary as a reviewed change. (#129)
 - `--fail-on <severity>` turns a finished `-n` run's findings into a build verdict: a gated finding
   (active, not `false_positive` or `fixed`, not `refuted`, and not `risk_accepted`) at or above the
   threshold exits `3`, a run that denied a prompt with no operator exits `4`, and a broken run stays
