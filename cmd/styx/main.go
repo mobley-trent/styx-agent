@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,11 @@ styx-agent: a terminal agent harness for coding plus red-team, reverse-
 engineering, and blue-team work, with harness-enforced dual-mode safety.
 
 Flags:
+  -n, --non-interactive <task>
+                        Run exactly one task in one turn with no terminal:
+                        the answer goes to stdout, the transcript to stderr.
+                        Prompts cannot be asked, so they are denied
+                        (docs/headless-ci.md)
   --engagement <file>   Activate engagement mode through the engagement gate
                         (strict validation; without it, safe mode is default)
   --project <dir>       Project root to run in (default: the working directory)
@@ -83,13 +89,15 @@ func run(argv []string, version string) (stdout, stderr string, exitCode int) {
 	}
 
 	if err := runApp(context.Background(), app.Options{
-		Engagement:  opts.engagement,
-		ProjectDir:  opts.project,
-		Version:     version,
-		SourceBuild: isSourceBuild(),
-		Stdin:       os.Stdin,
-		Stdout:      os.Stdout,
-		Stderr:      os.Stderr,
+		Engagement:     opts.engagement,
+		ProjectDir:     opts.project,
+		Version:        version,
+		SourceBuild:    isSourceBuild(),
+		NonInteractive: opts.nonInteractive,
+		Task:           opts.task,
+		Stdin:          os.Stdin,
+		Stdout:         os.Stdout,
+		Stderr:         os.Stderr,
 	}); err != nil {
 		return "", fmt.Sprintf("styx: %v\n", err), 1
 	}
@@ -138,8 +146,14 @@ func resolveSymlinks(path string) string {
 
 // cliOptions is the parsed command line.
 type cliOptions struct {
-	engagement string
-	project    string
+	engagement     string
+	project        string
+	nonInteractive bool
+	// task is the single positional argument of a non-interactive run (§2).
+	task string
+	// positional collects the bare arguments; whether they are a task or a
+	// stray command is decided once -n is known.
+	positional []string
 	help       bool
 	version    bool
 	update     bool
@@ -174,12 +188,23 @@ func parseArgs(args []string) (cliOptions, error) {
 		case "update":
 			opts.update = true
 			continue
+		case "-n", "--non-interactive":
+			opts.nonInteractive = true
+			continue
 		case "--engagement":
 			target = &opts.engagement
 		case "--project":
 			target = &opts.project
 		default:
-			return opts, fmt.Errorf("unknown flag or command %q", arg)
+			// A bare argument is the task of a non-interactive run, and a stray
+			// word anywhere else. Which one it is is decided once every flag
+			// has been seen, since -n may follow the task. Anything with a
+			// leading dash is a flag this build does not know, never a task.
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unknown flag or command %q", arg)
+			}
+			opts.positional = append(opts.positional, arg)
+			continue
 		}
 
 		if hasInline {
@@ -190,6 +215,33 @@ func parseArgs(args []string) (cliOptions, error) {
 	}
 	if pendingFlag != nil {
 		return opts, fmt.Errorf("flag %s needs a value", pendingName)
+	}
+
+	if !opts.nonInteractive {
+		if len(opts.positional) > 0 {
+			return opts, fmt.Errorf("unknown flag or command %q", opts.positional[0])
+		}
+		return opts, nil
+	}
+
+	// With -n, a bare argument is always the task, never a command (§2): a
+	// command combined with a flag that cannot honour it is a usage error, like
+	// --version -n.
+	switch {
+	case opts.update:
+		return opts, errors.New("-n cannot be combined with the update command")
+	case opts.version:
+		return opts, errors.New("-n cannot be combined with --version")
+	case opts.help:
+		return opts, errors.New("-n cannot be combined with --help")
+	case len(opts.positional) == 0:
+		return opts, errors.New("-n needs one task")
+	case len(opts.positional) > 1:
+		return opts, fmt.Errorf("-n takes exactly one task; got %d", len(opts.positional))
+	}
+	opts.task = strings.TrimSpace(opts.positional[0])
+	if opts.task == "" {
+		return opts, errors.New("-n needs one task")
 	}
 	return opts, nil
 }

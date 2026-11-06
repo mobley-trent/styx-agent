@@ -271,3 +271,62 @@ func TestModuleVersionFrom(t *testing.T) {
 		})
 	}
 }
+
+func TestNonInteractiveFlags(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantErr  string
+		wantTask string
+	}{
+		{name: "missing task", args: []string{"styx", "-n"}, wantErr: "-n needs one task"},
+		{name: "long flag missing task", args: []string{"styx", "--non-interactive"}, wantErr: "-n needs one task"},
+		{name: "two tasks", args: []string{"styx", "-n", "one", "two"}, wantErr: "-n takes exactly one task"},
+		{name: "update with -n", args: []string{"styx", "update", "-n"}, wantErr: "-n cannot be combined with the update command"},
+		{name: "version with -n", args: []string{"styx", "--version", "-n"}, wantErr: "-n cannot be combined with --version"},
+		{name: "unknown flag after -n is never the task", args: []string{"styx", "-n", "--bogus"}, wantErr: `unknown flag or command "--bogus"`},
+		{name: "bare word without -n is not a task", args: []string{"styx", "scan"}, wantErr: `unknown flag or command "scan"`},
+		{name: "task after the flag", args: []string{"styx", "-n", "scan the box"}, wantTask: "scan the box"},
+		{name: "task before the flag", args: []string{"styx", "scan the box", "-n"}, wantTask: "scan the box"},
+		{name: "long flag form", args: []string{"styx", "--non-interactive", "scan the box"}, wantTask: "scan the box"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got *app.Options
+			previous := runApp
+			runApp = func(_ context.Context, opts app.Options) error {
+				got = &opts
+				return nil
+			}
+			t.Cleanup(func() { runApp = previous })
+
+			stdout, stderr, code := run(tt.args, "v0.1.0")
+			if tt.wantTask == "" {
+				if code != 2 {
+					t.Fatalf("exit code = %d, want 2 (stderr=%q)", code, stderr)
+				}
+				if !strings.Contains(stderr, tt.wantErr) {
+					t.Errorf("stderr = %q, want %q", stderr, tt.wantErr)
+				}
+				if got != nil {
+					t.Errorf("the harness was launched for a usage error: %+v", got)
+				}
+				return
+			}
+
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty for a launch", stdout)
+			}
+			if got == nil {
+				t.Fatal("the harness was never launched")
+			}
+			if !got.NonInteractive || got.Task != tt.wantTask {
+				t.Errorf("options = {NonInteractive:%v Task:%q}, want {true %q}", got.NonInteractive, got.Task, tt.wantTask)
+			}
+		})
+	}
+}

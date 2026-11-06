@@ -124,13 +124,16 @@ type Gate struct {
 	SourceBuild bool
 	// Engagement is true while engagement mode is active.
 	Engagement bool
+	// NonInteractive is true for a `-n` run: a CI log has no use for an upgrade
+	// nag, so the notifier never fetches (docs/headless-ci.md §5.5).
+	NonInteractive bool
 	// Env reads an environment variable; nil means os.Getenv.
 	Env func(string) string
 }
 
 // Active reports whether the notifier is permitted to make its single fetch.
 func (g Gate) Active() bool {
-	if !g.ConfigEnabled || g.SourceBuild || g.Engagement {
+	if !g.ConfigEnabled || g.SourceBuild || g.Engagement || g.NonInteractive {
 		return false
 	}
 	env := g.Env
