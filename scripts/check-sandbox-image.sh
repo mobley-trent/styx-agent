@@ -2,12 +2,17 @@
 # check-sandbox-image.sh — verify the sandbox image's pins and build artifacts.
 #
 #   scripts/check-sandbox-image.sh                          # static: pins and generation
-#   scripts/check-sandbox-image.sh --image <ref> [--version <v>]
+#   scripts/check-sandbox-image.sh --image <ref> [--version <v>] [--platform <p>]
 #                                                          # + the built image itself
 #
 # --version is the version the image was published as. Static mode defaults to
 # image.json's own image_version, which is what a local build records; the
 # publish workflow builds and checks the version it tags (§4.4).
+#
+# --platform selects the architecture to execute when <ref> is an index. The
+# publish workflow checks amd64 natively and re-runs this whole file against the
+# arm64 manifest under qemu, so both halves of the index are proved rather than
+# one being assumed from the other (§4.3).
 #
 # Static mode needs only jq and python3. It regenerates the toolset manifest and
 # the build information from sandbox/image.json exactly as the Dockerfile does,
@@ -31,6 +36,7 @@ dockerfile="$sandbox/Dockerfile"
 requirements="$sandbox/requirements-semgrep.txt"
 image=""
 version=""
+platform=""
 
 note() { printf 'check-sandbox-image: %s\n' "$*"; }
 die() {
@@ -39,8 +45,18 @@ die() {
 }
 die_usage() {
 	printf 'check-sandbox-image: %s\n' "$*" >&2
-	printf 'check-sandbox-image: usage: scripts/check-sandbox-image.sh [--image <ref>]\n' >&2
+	printf 'check-sandbox-image: usage: scripts/check-sandbox-image.sh [--image <ref>] [--version <v>] [--platform <p>]\n' >&2
 	exit 2
+}
+
+# Every execution of the image goes through here, so a check run for another
+# architecture can never accidentally execute the host's.
+run_image() {
+	if [ -n "$platform" ]; then
+		docker run --rm --platform "$platform" "$@"
+	else
+		docker run --rm "$@"
+	fi
 }
 
 while [ $# -gt 0 ]; do
@@ -55,8 +71,13 @@ while [ $# -gt 0 ]; do
 		version="$2"
 		shift 2
 		;;
+	--platform)
+		[ $# -ge 2 ] || die_usage "--platform needs a value"
+		platform="$2"
+		shift 2
+		;;
 	-h | --help)
-		sed -n '2,17p' "$0"
+		sed -n '2,26p' "$0"
 		exit 0
 		;;
 	*) die_usage "unknown argument: $1" ;;
@@ -211,11 +232,11 @@ fi
 # 7. The built image: its declaration must be exactly the generation above, and
 #    its contents must match that declaration. Run it, do not infer it.
 command -v docker >/dev/null 2>&1 || die "docker is required for --image"
-note "checking the built image: $image"
+note "checking the built image: $image${platform:+ as $platform}"
 
-docker run --rm "$image" cat /etc/styx/toolset.json >"$work/image-toolset.json" 2>/dev/null ||
+run_image "$image" cat /etc/styx/toolset.json >"$work/image-toolset.json" 2>/dev/null ||
 	die "cannot read /etc/styx/toolset.json from $image"
-docker run --rm "$image" cat /etc/styx/build-info.json >"$work/image-build-info.json" 2>/dev/null ||
+run_image "$image" cat /etc/styx/build-info.json >"$work/image-build-info.json" 2>/dev/null ||
 	die "cannot read /etc/styx/build-info.json from $image"
 
 cmp -s "$work/toolset.json" "$work/image-toolset.json" ||
@@ -281,7 +302,7 @@ node -v >/dev/null 2>&1 || fail "node does not run"
 [ -n "${STYX_WORDLISTS:-}" ] || fail "STYX_WORDLISTS is not set"
 EOS
 
-docker run --rm -v "$work:/check:ro" --entrypoint bash "$image" /check/in-image.sh ||
+run_image -v "$work:/check:ro" --entrypoint bash "$image" /check/in-image.sh ||
 	die "the built image does not match its declaration"
 
-note "image checks passed: $image"
+note "image checks passed: $image${platform:+ as $platform}"

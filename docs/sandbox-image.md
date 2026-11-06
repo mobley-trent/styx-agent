@@ -97,8 +97,8 @@ and `perl` are not promised by this image, and an absent one fails through the s
 
 ### 2.2 Wordlists
 
-A **curated SecLists subset**, pinned by commit, about 40–60 MB, at `/usr/share/wordlists/styx/`,
-with `STYX_WORDLISTS` exported to that directory:
+A **curated SecLists subset**, pinned by commit — five lists totalling about 650 KB — at
+`/usr/share/wordlists/styx/`, with `STYX_WORDLISTS` exported to that directory:
 
 | List | Used for |
 |---|---|
@@ -108,6 +108,9 @@ with `STYX_WORDLISTS` exported to that directory:
 | `Discovery/DNS/subdomains-top1million-5000.txt` | Subdomain/vhost brute force |
 | `Usernames/top-usernames-shortlist.txt` | Account enumeration seeds for AD/web flows |
 
+- **Size:** ~650 KB in total (≈668,000 bytes at the pinned commit). These are first-pass lists: the
+  exhaustive ones cost real space and belong in a bind-mount, the same reason `rockyou.txt` is not
+  shipped, so the wordlist set is negligible next to the tool data.
 - **Provenance and licence:** SecLists is MIT; the image carries the upstream `LICENSE` and records
   the pinned commit in `build-info.json` and in the toolset manifest's wordlist entries.
 - **`rockyou.txt` is not shipped.** Its size and murky redistribution history make it a poor default;
@@ -190,6 +193,10 @@ under `sandbox/`:
 
 - `docker/build-push-action` via buildx, multi-arch (`linux/amd64`, `linux/arm64`), pushing the
   manifest list to the registry of §5.
+- **Both architectures are verified**, not merely built: the build job runs the full conformance
+  check against the amd64 image, and a second job asserts the index carries both manifests before
+  re-running that same check on `linux/arm64` under qemu. An arm64 layer that will not execute
+  fails the pipeline instead of shipping under a signature that claims it was verified.
 - Provenance `mode=max` and an SBOM (`syft`/buildkit) attached as attestations.
 - **Cosign keyless** signing of the **index digest** (not a tag, not a per-arch manifest), plus a
   signed SBOM attestation. The signing identity is the workflow path on `main`; it is compiled into
