@@ -131,7 +131,7 @@ jobs:
           image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: sbom.spdx.json
-          syft-version: v1.34.0
+          syft-version: v1.57.0
 
       # The signature covers the manifest-list index digest, never a tag: docker
       # selects the platform manifest from the signed index (§5).
