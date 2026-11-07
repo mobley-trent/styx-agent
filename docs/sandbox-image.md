@@ -161,7 +161,7 @@ The bar is **input-pinned and attested**, not bit-identical:
 | Input | Pinned by |
 |---|---|
 | Base image | `kalilinux/kali-rolling@sha256:…` digest |
-| Apt packages | Exact version for every package; the build fails if a pinned version is unavailable |
+| Apt packages | Exact version for every package on every architecture; the build fails if a pinned version is unavailable |
 | Upstream binaries (where Kali's package is not used) | Version plus `sha256` of the release artifact |
 | SecLists | Commit plus per-file `sha256` |
 | Nuclei templates | Release tag plus archive `sha256` |
@@ -171,7 +171,13 @@ The bar is **input-pinned and attested**, not bit-identical:
 | Build clock | `SOURCE_DATE_EPOCH`, from the image version's commit timestamp |
 
 The Dockerfile does `apt-get install --no-install-recommends` against the pinned list, never
-`apt-get upgrade`, and strips caches and docs. A rebuild months later may legitimately differ because
+`apt-get upgrade`, and strips caches and docs. There is one list per architecture
+(`apt-pins-amd64.txt`, `apt-pins-arm64.txt`, selected by BuildKit's `TARGETARCH`), because Debian's
+binNMU rebuilds give one architecture a version the others do not carry: `netcat-traditional` is
+`1.10-50.1` on amd64 and `1.10-50.1+b1` on arm64, and pinning either alone makes the other
+architecture's build fail on a version apt cannot install. Each entry is still one exact version for
+the architecture its list names — `package_versions` in `image.json` records the exception, never a
+range and never a suffix match. A rebuild months later may legitimately differ because
 Kali has no snapshot service to pin against; the guarantee we can actually keep is that every input
 was pinned, every input is attested, and **drift fails the build instead of producing a silently
 different image**. Vendoring every `.deb` into the build context for byte-identical rebuilds is
@@ -181,7 +187,8 @@ this project should not pay yet.
 ### 4.2 Build information
 
 Every build emits `build-info.json`, signed and published beside the image, recording: the base
-digest, every apt package and version, every upstream binary and checksum, the SecLists commit, the
+digest, every apt package and version on the architecture being built, every upstream binary and
+checksum, the SecLists commit, the
 data versions (templates, rules, DBs), the `SOURCE_DATE_EPOCH`, the builder image digest, and the
 `sha256` of the generated toolset manifest. It is the audit trail for "what exactly produced this
 digest", and the toolset manifest is a rendering of a subset of it.
@@ -203,7 +210,10 @@ under `sandbox/` on `main`, and pull requests touching `sandbox/**`:
   so catching that on the PR costs minutes instead of a broken monthly publish. The layer cache is
   shared with the publish build (`type=gha`, one scope, `mode=min`), because those layers — the
   pinned apt install, the hash-locked semgrep, the trivy databases — are the same on both
-  architectures and the same on both triggers; only the layers that changed are rebuilt.
+  architectures and the same on both triggers; only the layers that changed are rebuilt. Before it
+  builds, the PR job resolves every pin against **each** architecture's archive inside the pinned
+  base image, so a version that has rolled off the other architecture's index fails on the pull
+  request rather than in the monthly publish.
 - Provenance `mode=max` and an SBOM (`syft`/buildkit) attached as attestations.
 - **Cosign keyless** signing of the **index digest** (not a tag, not a per-arch manifest), plus a
   signed SBOM attestation. The signing identity is the workflow path on `main`; it is compiled into

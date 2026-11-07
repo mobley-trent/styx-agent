@@ -2,6 +2,8 @@
 # check-sandbox-image.sh — verify the sandbox image's pins and build artifacts.
 #
 #   scripts/check-sandbox-image.sh                          # static: pins and generation
+#   scripts/check-sandbox-image.sh --resolve                # + every pin resolves on
+#                                                          #   every architecture
 #   scripts/check-sandbox-image.sh --image <ref> [--version <v>] [--platform <p>]
 #                                                          # + the built image itself
 #
@@ -15,13 +17,19 @@
 # one being assumed from the other (§4.3).
 #
 # Static mode needs only jq and python3. It regenerates the toolset manifest and
-# the build information from sandbox/image.json exactly as the Dockerfile does,
-# validates the manifest against sandbox/toolset.schema.json, and checks every
-# pinned input is recorded — so a broken pin or an unacceptable manifest fails a
-# pull request instead of a monthly image build. With --image it also checks the
-# image's own /etc/styx files are byte-identical to that generation, that every
-# declared tool exists at its declared version, and that the baked tool data and
-# offline environment are what the spec promises.
+# the build information from sandbox/image.json exactly as the Dockerfile does —
+# per architecture, because the apt pins are — validates the manifest against
+# sandbox/toolset.schema.json, and checks every pinned input is recorded — so a
+# broken pin or an unacceptable manifest fails a pull request instead of a
+# monthly image build. With --image it also checks the image's own /etc/styx
+# files are byte-identical to that generation, that every declared tool exists at
+# its declared version, and that the baked tool data and offline environment are
+# what the spec promises.
+#
+# --resolve needs docker. It asks apt inside the pinned base image, for every
+# architecture, whether each pinned version is in that architecture's index — a
+# version the archive no longer carries for one architecture fails here, which
+# the static checks cannot see because the archive moves and the pins do not.
 #
 # Exit: 0 every check passed; 1 a check failed; 2 a usage error.
 
@@ -37,6 +45,7 @@ requirements="$sandbox/requirements-semgrep.txt"
 image=""
 version=""
 platform=""
+resolve=0
 
 note() { printf 'check-sandbox-image: %s\n' "$*"; }
 die() {
@@ -45,7 +54,7 @@ die() {
 }
 die_usage() {
 	printf 'check-sandbox-image: %s\n' "$*" >&2
-	printf 'check-sandbox-image: usage: scripts/check-sandbox-image.sh [--image <ref>] [--version <v>] [--platform <p>]\n' >&2
+	printf 'check-sandbox-image: usage: scripts/check-sandbox-image.sh [--image <ref>] [--version <v>] [--platform <p>] [--resolve]\n' >&2
 	exit 2
 }
 
@@ -76,8 +85,12 @@ while [ $# -gt 0 ]; do
 		platform="$2"
 		shift 2
 		;;
+	--resolve)
+		resolve=1
+		shift
+		;;
 	-h | --help)
-		sed -n '2,26p' "$0"
+		sed -n '2,/^$/{/^$/d;p}' "$0"
 		exit 0
 		;;
 	*) die_usage "unknown argument: $1" ;;
@@ -91,8 +104,13 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required"
 [ -f "$validator" ] || die "missing sandbox/validate-toolset.py"
 [ -f "$dockerfile" ] || die "missing sandbox/Dockerfile"
 [ -f "$requirements" ] || die "missing sandbox/requirements-semgrep.txt"
-apt_pins="$sandbox/apt-pins.txt"
-[ -f "$apt_pins" ] || die "missing sandbox/apt-pins.txt"
+# The architectures sandbox-image.yml builds and verifies. A pin has to resolve
+# on every one of them, and each gets its own generated apt list.
+archs_json='["amd64","arm64"]'
+architectures="$(printf '%s' "$archs_json" | jq -r '.[]')"
+for arch in $architectures; do
+	[ -f "$sandbox/apt-pins-$arch.txt" ] || die "missing sandbox/apt-pins-$arch.txt"
+done
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -133,31 +151,71 @@ jq -e '
 ' "$pins" >/dev/null ||
 	die "sandbox/image.json is missing a pinned input: every tool, package, wordlist, and tool-data source needs its exact version, digest, or checksum"
 
-# 2. apt-pins.txt is generated from image.json, never hand-edited: the build
-#    installs exactly this list, and drift between it and the pins fails here.
-jq -r '[.tools[], .supporting[]] | map(select(.package != null)) | map("\(.package)=\(.package_version)") | unique | .[]' "$pins" >"$work/apt-pins.txt"
-cmp -s "$work/apt-pins.txt" "$apt_pins" ||
-	die "sandbox/apt-pins.txt is out of step with sandbox/image.json; regenerate it from the pins"
-grep -q 'apt-pins.txt' "$dockerfile" ||
-	die "sandbox/Dockerfile must install the pinned packages from sandbox/apt-pins.txt"
+# 1b. Every package resolves to one exact version on every architecture. A
+#     package rebuilt as a per-arch binNMU names that architecture in
+#     package_versions instead of pinning a version another architecture cannot
+#     install; no package_versions means the pin is the same on all of them.
+jq -e --argjson archs "$archs_json" '
+  [ (.tools[], .supporting[]) | select(.package != null) | . as $p
+    | (($p.package_versions // {}) | keys[]) as $k
+    | select(($archs | index($k)) == null)
+    | "\($p.package): package_versions names \($k), which the image is not built for"
+  ] + [ (.tools[], .supporting[]) | select(.package != null) | . as $p
+        | $archs[] as $a
+        | ($p.package_versions[$a] // $p.package_version) as $v
+        | select(($v | type) != "string" or ($v | length) == 0)
+        | "\($p.package): no exact version for \($a)"
+      ]
+  | length == 0
+' "$pins" >/dev/null ||
+	die "sandbox/image.json must pin one exact version per package per architecture (amd64, arm64)"
+
+# 2. apt-pins-<arch>.txt is generated from image.json, never hand-edited: the
+#    build installs exactly that list, and drift between it and the pins fails
+#    here. One file per architecture, because a Debian binNMU rebuild gives one
+#    architecture a version the others do not carry.
+for arch in $architectures; do
+	jq -r --arg arch "$arch" '[.tools[], .supporting[]] | map(select(.package != null)) | map("\(.package)=\(.package_versions[$arch] // .package_version)") | unique | .[]' "$pins" >"$work/apt-pins-$arch.txt"
+	cmp -s "$work/apt-pins-$arch.txt" "$sandbox/apt-pins-$arch.txt" ||
+		die "sandbox/apt-pins-$arch.txt is out of step with sandbox/image.json; regenerate it from the pins"
+done
+grep -qF 'apt-pins-${TARGETARCH}.txt' "$dockerfile" ||
+	die "sandbox/Dockerfile must install the pinned packages from sandbox/apt-pins-<arch>.txt"
+grep -q '^ARG TARGETARCH$' "$dockerfile" ||
+	die "sandbox/Dockerfile must declare ARG TARGETARCH to select the architecture's pin list"
 
 # 3. The deterministic generation the Dockerfile performs, twice, so build info
-#    can record the manifest's own hash.
+#    can record the manifest's own hash. The toolset names no apt version, so it
+#    has to be the same declaration on every architecture; build-info names them,
+#    so it is generated once per architecture.
 requirements_sha="$(sha256sum "$requirements" | cut -d' ' -f1)"
-jq -S -f "$sandbox/manifest.jq" --arg toolset_sha "" --arg req_sha "$requirements_sha" --arg image_version "$version" "$pins" >"$work/gen.json" ||
-	die "sandbox/manifest.jq failed on sandbox/image.json"
-jq -S .toolset "$work/gen.json" >"$work/toolset.json"
+for arch in $architectures; do
+	jq -S -f "$sandbox/manifest.jq" --arg toolset_sha "" --arg req_sha "$requirements_sha" \
+		--arg image_version "$version" --arg arch "$arch" "$pins" >"$work/gen-$arch.json" ||
+		die "sandbox/manifest.jq failed on sandbox/image.json"
+	jq -S .toolset "$work/gen-$arch.json" >"$work/toolset-$arch.json"
+done
+for arch in $architectures; do
+	cmp -s "$work/toolset-amd64.json" "$work/toolset-$arch.json" ||
+		die "the generated toolset manifest differs between amd64 and $arch; it must not name anything architecture-specific"
+done
+cp "$work/toolset-amd64.json" "$work/toolset.json"
 toolset_sha="$(sha256sum "$work/toolset.json" | cut -d' ' -f1)"
-jq -S -f "$sandbox/manifest.jq" --arg toolset_sha "$toolset_sha" --arg req_sha "$requirements_sha" --arg image_version "$version" "$pins" |
-	jq -S .build_info >"$work/build-info.json"
+for arch in $architectures; do
+	jq -S -f "$sandbox/manifest.jq" --arg toolset_sha "$toolset_sha" --arg req_sha "$requirements_sha" \
+		--arg image_version "$version" --arg arch "$arch" "$pins" |
+		jq -S .build_info >"$work/build-info-$arch.json"
+done
 
 # 3. The manifest the image will ship satisfies its own schema.
 python3 "$validator" "$work/toolset.json" "$schema" ||
 	die "the generated toolset manifest does not satisfy sandbox/toolset.schema.json"
 
-# 4. Build information records every pinned input, and every apt package in the
-#    pins, so "what produced this digest" is answerable from the image alone.
-jq -e --arg version "$version" --slurpfile pinned "$pins" '
+# 4. Build information records every pinned input, and every apt package at its
+#    architecture's pinned version, so "what produced this digest" is answerable
+#    from the image alone.
+for arch in $architectures; do
+	jq -e --arg version "$version" --arg arch "$arch" --slurpfile pinned "$pins" '
   (.base.digest == $pinned[0].base.digest) and
   (.builder.digest == $pinned[0].builder.digest) and
   (.source_date_epoch == $pinned[0].source_date_epoch) and
@@ -172,8 +230,12 @@ jq -e --arg version "$version" --slurpfile pinned "$pins" '
   (.data.trivy_java_db.digest == $pinned[0].data.trivy_java_db.digest) and
   (.upstream[0].requirements_sha256 | test("^[0-9a-f]{64}$")) and
   (.toolset_sha256 | test("^[0-9a-f]{64}$")) and
-  ([.apt[].package] | sort == ([$pinned[0].tools[], $pinned[0].supporting[]] | map(select(.package != null) | .package) | sort))
-' "$work/build-info.json" >/dev/null || die "build-info.json does not record every pinned input"
+  ([.apt[] | "\(.package)=\(.version)"] | sort ==
+    ([$pinned[0].tools[], $pinned[0].supporting[]] |
+      map(select(.package != null) | "\(.package)=\(.package_versions[$arch] // .package_version)") | sort))
+' "$work/build-info-$arch.json" >/dev/null ||
+		die "build-info-$arch.json does not record every pinned input at its pinned version"
+done
 
 # 5. semgrep's lock is what the "pinned upstream release" means: one exact
 #    version and a hash for every artifact pip may install.
@@ -203,6 +265,8 @@ grep -q '^ARG IMAGE_VERSION=' "$dockerfile" ||
 	die "sandbox/Dockerfile must take the published image version as a build arg"
 grep -q -- '--arg image_version' "$dockerfile" ||
 	die "sandbox/Dockerfile must pass the image version into manifest.jq, or the tag and the declaration disagree"
+grep -q -- '--arg arch' "$dockerfile" ||
+	die "sandbox/Dockerfile must pass the target architecture into manifest.jq, or build-info names another architecture's apt versions"
 grep -q 'stat -c %s' "$dockerfile" ||
 	die "sandbox/Dockerfile must verify the pinned size of every checksummed download"
 grep -q 'sha256sum -c -' "$dockerfile" ||
@@ -225,6 +289,60 @@ grep -q 'validate-toolset.py' "$dockerfile" ||
 
 note "static checks passed: $(jq '.tools | length' "$pins") tools, $(jq '.supporting | length' "$pins") supporting packages, $(jq '.wordlists | length' "$pins") wordlists"
 
+# 7. Every pin resolves on every architecture. Static checks cannot see this: the
+#    archive moves, so a version pinned for one architecture can vanish from its
+#    index while the other still carries it, and the build then fails on that
+#    architecture alone. Ask the pinned base image's own apt, from the indexes
+#    the build installs from: `apt-get download --print-uris` exits 100 for a
+#    version that architecture's index does not carry, and fetches nothing when
+#    it does. arch:all packages are indexed for every architecture but apt
+#    refuses a foreign qualifier for them, so those are checked unqualified —
+#    the same _all.deb is what either architecture installs.
+if [ "$resolve" -eq 1 ]; then
+	command -v docker >/dev/null 2>&1 || die "docker is required for --resolve"
+	base="$(jq -r '.base.ref + "@" + .base.digest' "$pins")"
+	note "resolving every pin on every architecture against $base"
+	mounts=()
+	for arch in $architectures; do
+		mounts+=(-v "$sandbox/apt-pins-$arch.txt:/check/apt-pins-$arch.txt:ro")
+	done
+	docker run --rm "${mounts[@]}" --entrypoint bash "$base" -c '
+		set -euo pipefail
+		host_arch="$(dpkg --print-architecture)"
+		for list in /check/apt-pins-*.txt; do
+			arch="$(basename "$list" .txt)"
+			arch="${arch#apt-pins-}"
+			[ "$arch" = "$host_arch" ] || dpkg --add-architecture "$arch"
+		done
+		apt-get update -qq
+		available() {
+			pkg="$1"
+			ver="$2"
+			arch="$3"
+			if apt-get download --print-uris "${pkg}:${arch}=${ver}" >/dev/null 2>&1; then
+				return 0
+			fi
+			if [ "$(apt-cache show "$pkg" 2>/dev/null | sed -n "s/^Architecture: //p" | head -n1)" != all ]; then
+				return 1
+			fi
+			apt-get download --print-uris "${pkg}=${ver}" >/dev/null 2>&1
+		}
+		missing=0
+		for list in /check/apt-pins-*.txt; do
+			arch="$(basename "$list" .txt)"
+			arch="${arch#apt-pins-}"
+			while IFS="=" read -r pkg ver; do
+				[ -n "$pkg" ] || continue
+				if ! available "$pkg" "$ver" "$arch"; then
+					printf "no %s index entry for %s=%s\n" "$arch" "$pkg" "$ver" >&2
+					missing=1
+				fi
+			done < "$list"
+		done
+		exit "$missing"
+	' || die "the pins do not resolve: an architecture's index no longer carries every pinned version"
+fi
+
 if [ -z "$image" ]; then
 	exit 0
 fi
@@ -234,6 +352,16 @@ fi
 command -v docker >/dev/null 2>&1 || die "docker is required for --image"
 note "checking the built image: $image${platform:+ as $platform}"
 
+# The pins are per architecture, so the check has to know which one it is looking
+# at: the requested platform, or the image's own when none was given.
+if [ -n "$platform" ]; then
+	arch="${platform#linux/}"
+else
+	arch="$(run_image --entrypoint dpkg "$image" --print-architecture)"
+fi
+printf '%s\n' $architectures | grep -qx "$arch" ||
+	die "sandbox/image.json pins no packages for architecture: $arch"
+
 run_image "$image" cat /etc/styx/toolset.json >"$work/image-toolset.json" 2>/dev/null ||
 	die "cannot read /etc/styx/toolset.json from $image"
 run_image "$image" cat /etc/styx/build-info.json >"$work/image-build-info.json" 2>/dev/null ||
@@ -241,12 +369,12 @@ run_image "$image" cat /etc/styx/build-info.json >"$work/image-build-info.json" 
 
 cmp -s "$work/toolset.json" "$work/image-toolset.json" ||
 	die "the image's toolset manifest differs from what sandbox/image.json generates"
-cmp -s "$work/build-info.json" "$work/image-build-info.json" ||
+cmp -s "$work/build-info-$arch.json" "$work/image-build-info.json" ||
 	die "the image's build-info.json differs from what sandbox/image.json generates"
 python3 "$validator" "$work/image-toolset.json" "$schema" ||
 	die "the image's toolset manifest does not satisfy sandbox/toolset.schema.json"
 
-jq -r '.tools[] | [.name, .binary, (.package // "-"), (.package_version // "-"), .version] | @tsv' "$pins" >"$work/tools.tsv"
+jq -r --arg arch "$arch" '.tools[] | [.name, .binary, (.package // "-"), (.package_versions[$arch] // .package_version // "-"), .version] | @tsv' "$pins" >"$work/tools.tsv"
 jq -r '.wordlists[] | [.path, .sha256] | @tsv' "$pins" >"$work/wordlists.tsv"
 
 cat >"$work/in-image.sh" <<'EOS'
