@@ -85,6 +85,13 @@ jobs:
       - name: Resolve the pinned packages for every architecture
         run: scripts/check-sandbox-image.sh --resolve
 
+      # The image's own pins are proven above; the tools this workflow
+      # downloads are pinned separately, and a tag with no published assets
+      # fails at the step that installs it — at the end of the build, which is
+      # the most expensive place to learn it.
+      - name: Resolve the pinned tool versions
+        run: scripts/check-sandbox-image.sh --tools
+
       - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
@@ -301,6 +308,11 @@ jobs:
       # here instead of in the monthly publish.
       - name: Resolve the pinned packages for every architecture
         run: scripts/check-sandbox-image.sh --resolve
+
+      # The tools the workflow downloads are pinned by version too, and a pin
+      # whose release has no assets fails only at the step that installs it.
+      - name: Resolve the pinned tool versions
+        run: scripts/check-sandbox-image.sh --tools
 
       # The image records the version it was built as, so the preview build needs
       # one too. The PR number keeps it inside the version grammar and unique.

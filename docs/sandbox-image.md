@@ -213,7 +213,10 @@ under `sandbox/` on `main`, and pull requests touching `sandbox/**`:
   architectures and the same on both triggers; only the layers that changed are rebuilt. Before it
   builds, the PR job resolves every pin against **each** architecture's archive inside the pinned
   base image, so a version that has rolled off the other architecture's index fails on the pull
-  request rather than in the monthly publish.
+  request rather than in the monthly publish. It resolves the workflow's own tool pins the same way:
+  the versions the pipeline downloads (the SBOM's `syft`, and `cosign-release` if one is pinned) are
+  asked of their release locations, because a tag that exists as source but has no published assets
+  is a pin that cannot install, and the image's own pins do not describe it.
 - Provenance `mode=max` and an SBOM (`syft`/buildkit) attached as attestations.
 - **Cosign keyless** signing of the **index digest** (not a tag, not a per-arch manifest), plus a
   signed SBOM attestation. The signing identity is the workflow path on `main`; it is compiled into

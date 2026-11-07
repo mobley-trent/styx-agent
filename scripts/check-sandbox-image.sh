@@ -4,6 +4,9 @@
 #   scripts/check-sandbox-image.sh                          # static: pins and generation
 #   scripts/check-sandbox-image.sh --resolve                # + every pin resolves on
 #                                                          #   every architecture
+#   scripts/check-sandbox-image.sh --tools                   # + every tool version
+#                                                          #   the workflow pins is
+#                                                          #   one that exists
 #   scripts/check-sandbox-image.sh --image <ref> [--version <v>] [--platform <p>]
 #                                                          # + the built image itself
 #
@@ -31,6 +34,13 @@
 # version the archive no longer carries for one architecture fails here, which
 # the static checks cannot see because the archive moves and the pins do not.
 #
+# --tools needs curl. The workflow pins the versions of the tools it downloads
+# itself, which the image's own pins do not describe; a tag that exists as
+# source but has no published assets installs nothing, and the publish only
+# finds out at the step that downloads it — after the build has been paid for.
+# Each pinned tool's own release location is asked instead, on the pull request
+# that changes the pin.
+#
 # Exit: 0 every check passed; 1 a check failed; 2 a usage error.
 
 set -euo pipefail
@@ -46,6 +56,7 @@ image=""
 version=""
 platform=""
 resolve=0
+tools=0
 
 note() { printf 'check-sandbox-image: %s\n' "$*"; }
 die() {
@@ -54,7 +65,7 @@ die() {
 }
 die_usage() {
 	printf 'check-sandbox-image: %s\n' "$*" >&2
-	printf 'check-sandbox-image: usage: scripts/check-sandbox-image.sh [--image <ref>] [--version <v>] [--platform <p>] [--resolve]\n' >&2
+	printf 'check-sandbox-image: usage: scripts/check-sandbox-image.sh [--image <ref>] [--version <v>] [--platform <p>] [--resolve] [--tools]\n' >&2
 	exit 2
 }
 
@@ -87,6 +98,10 @@ while [ $# -gt 0 ]; do
 		;;
 	--resolve)
 		resolve=1
+		shift
+		;;
+	--tools)
+		tools=1
 		shift
 		;;
 	-h | --help)
@@ -341,6 +356,67 @@ if [ "$resolve" -eq 1 ]; then
 		done
 		exit "$missing"
 	' || die "the pins do not resolve: an architecture's index no longer carries every pinned version"
+fi
+
+# 8. Every tool version the workflow pins resolves. These are pins the image
+#    does not carry: the workflow downloads those tools itself, so the checks
+#    above cannot see them, and the publish only finds out at the step that
+#    installs one — with the twenty-minute build already spent. Ask each tool's
+#    own release location, on the pull request that changes the pin.
+if [ "$tools" -eq 1 ]; then
+	command -v curl >/dev/null 2>&1 || die "curl is required for --tools"
+	workflow="$root/.github/workflows/sandbox-image.yml"
+	[ -f "$workflow" ] || die "missing .github/workflows/sandbox-image.yml"
+	note "resolving the tool versions sandbox-image.yml pins"
+	pinned_tools="$(sed -nE 's/^[[:space:]]+([a-z][a-z0-9-]*-(version|release)):[[:space:]]*([^[:space:]#]+).*$/\1\t\3/p' "$workflow")"
+	[ -n "$pinned_tools" ] || die "sandbox-image.yml pins no tool versions"
+	failed=0
+	while IFS="$(printf '\t')" read -r key value; do
+		[ -n "$key" ] || continue
+		value="${value%\"}"
+		value="${value#\"}"
+		value="${value%\'}"
+		value="${value#\'}"
+		if ! printf '%s' "$value" | grep -Eq '^v[0-9]+(\.[0-9]+)*$'; then
+			printf 'check-sandbox-image: %s is not an exact version: %s\n' "$key" "$value" >&2
+			failed=1
+			continue
+		fi
+		case "$key" in
+		syft-version)
+			tag="$value"
+			urls=(
+				"https://raw.githubusercontent.com/anchore/syft/$tag/install.sh"
+				"https://github.com/anchore/syft/releases/download/$tag/syft_${tag#v}_linux_amd64.tar.gz"
+				"https://github.com/anchore/syft/releases/download/$tag/syft_${tag#v}_checksums.txt"
+			)
+			;;
+		cosign-release)
+			urls=(
+				"https://github.com/sigstore/cosign/releases/download/$value/cosign-linux-amd64"
+				"https://github.com/sigstore/cosign/releases/download/$value/cosign_checksums.txt"
+			)
+			;;
+		*)
+			# A pin this file was never taught to resolve is still a pin the
+			# publish depends on, so silence is the one answer it must not give.
+			printf 'check-sandbox-image: no resolution rule for %s (add one here when a tool is pinned)\n' "$key" >&2
+			failed=1
+			continue
+			;;
+		esac
+		for url in "${urls[@]}"; do
+			# A ranged GET is what asks whether an asset exists: 206 here, and
+			# 404 for a tag that has source but no published release.
+			curl -fsSL --max-time 30 -r 0-1023 -o /dev/null "$url" 2>/dev/null || {
+				printf 'check-sandbox-image: %s=%s does not resolve: %s\n' "$key" "$value" "$url" >&2
+				failed=1
+			}
+		done
+	done <<< "$pinned_tools"
+	[ "$failed" -eq 0 ] ||
+		die "a pinned tool version does not resolve: the publish would fail at the step that installs it"
+	note "tool pins resolve: $(printf '%s\n' "$pinned_tools" | cut -f1 | paste -sd, -)"
 fi
 
 if [ -z "$image" ]; then
