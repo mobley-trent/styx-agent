@@ -246,8 +246,13 @@ jobs:
           REF: ${{ needs.publish.outputs.ref }}
         run: |
           set -eu
+          # The provenance and SBOM attestations ride along as extra index
+          # manifests with no real platform (unknown/unknown); this check is about
+          # the image manifests, so they are not counted.
           platforms="$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' \
-            | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(",")')"
+            | jq -r '[.manifests[].platform
+                      | select(.os != "unknown" and .architecture != "unknown")
+                      | "\(.os)/\(.architecture)"] | sort | join(",")')"
           if [ "$platforms" != "linux/amd64,linux/arm64" ]; then
             echo "::error::the published index covers: ${platforms}"
             exit 1
