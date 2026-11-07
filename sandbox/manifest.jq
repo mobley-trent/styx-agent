@@ -9,6 +9,7 @@
 #     --arg toolset_sha "$(sha256sum toolset.json | cut -d' ' -f1)" \
 #     --arg req_sha "$(sha256sum requirements-semgrep.txt | cut -d' ' -f1)" \
 #     --arg image_version "$VERSION" \
+#     --arg arch "$TARGETARCH" \
 #     image.json
 #
 # $image_version is the version this build is being published as. The workflow
@@ -16,6 +17,13 @@
 # the tag it is pushed under have to agree, or the image cannot be pinned: the
 # bump refuses a manifest whose image_version is not the version it is bumping
 # to. Empty means image.json's own value, which is what a local build records.
+#
+# $arch is the architecture being built (BuildKit's TARGETARCH). The apt pins are
+# one exact version per architecture — a Debian binNMU rebuild gives one
+# architecture a version the others do not carry — so build-info names the
+# version this architecture installs, resolved from package_versions with
+# package_version as the default. The toolset names no apt version, so it is the
+# same declaration on every architecture.
 #
 # Emits {toolset, build_info}. The toolset does not embed its own hash, so the
 # first pass may pass an empty $toolset_sha; the second pass records the real
@@ -55,17 +63,17 @@
         tag: $root.builder.tag,
         digest: $root.builder.digest
       },
-      # Every apt package, exact version: the package set is the tool set plus
-      # the runtimes and utilities the session needs.
+      # Every apt package, exact version for this architecture: the package set
+      # is the tool set plus the runtimes and utilities the session needs.
       apt: (
         [
           $root.tools[]
           | select(.package != null)
-          | { package: .package, version: .package_version }
+          | { package: .package, version: (.package_versions[$arch] // .package_version) }
         ]
         + [
           $root.supporting[]
-          | { package: .package, version: .package_version }
+          | { package: .package, version: (.package_versions[$arch] // .package_version) }
         ]
       ),
       tools: [
@@ -74,7 +82,7 @@
             name: .name,
             version: .version,
             package: .package,
-            package_version: .package_version,
+            package_version: (.package_versions[$arch] // .package_version),
             source: .source
           }
       ],

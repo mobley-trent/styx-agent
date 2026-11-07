@@ -80,6 +80,11 @@ jobs:
           echo "version=${version}" >>"$GITHUB_OUTPUT"
           echo "::notice::publishing ${version}"
 
+      # A pin that has rolled off one architecture's archive fails here in about
+      # a minute, instead of at the end of a twenty-minute build apt aborts.
+      - name: Resolve the pinned packages for every architecture
+        run: scripts/check-sandbox-image.sh --resolve
+
       - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
@@ -284,6 +289,13 @@ jobs:
       # Fail in seconds on a malformed pin rather than after a ten-minute install.
       - name: Check the pinned artifacts
         run: scripts/check-sandbox-image.sh
+
+      # The archives move, so a pin can be valid on one architecture and gone
+      # from the other's index; only apt can tell. Both are resolved before the
+      # build, on the pull request that changes the pin, so that breakage lands
+      # here instead of in the monthly publish.
+      - name: Resolve the pinned packages for every architecture
+        run: scripts/check-sandbox-image.sh --resolve
 
       # The image records the version it was built as, so the preview build needs
       # one too. The PR number keeps it inside the version grammar and unique.
