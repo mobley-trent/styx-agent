@@ -10,6 +10,8 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-11-12
+
 ### Changed
 
 - Attack paths rank only the footholds an engagement actually holds. An exploit already in the
@@ -263,7 +265,8 @@ Initial pre-alpha release: the tracer-bullet harness runs end to end.
 - Distribution: goreleaser Linux/macOS archives with keyless-cosign-signed
   `SHA256SUMS`, a Homebrew tap, and a Linux install script.
 
-[Unreleased]: https://github.com/mobley-trent/styx-agent/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/mobley-trent/styx-agent/compare/v0.3.0...HEAD
+[v0.3.0]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.3.0
 [v0.2.1]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.2.1
 [v0.2.0]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.2.0
 [v0.1.1]: https://github.com/mobley-trent/styx-agent/releases/tag/v0.1.1
