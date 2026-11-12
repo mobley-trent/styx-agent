@@ -49,7 +49,8 @@ implementations follow once each design is decided.
    ([`docs/headless-ci.md`](headless-ci.md) §11).
 6. **USD budget cap.** A `--max-budget`-style cumulative ceiling across root and child agents
    with graduated wrap-up warnings, enforced on the cost signal styx already tracks
-   ([`docs/budget-cap.md`](budget-cap.md)).
+   ([`docs/budget-cap.md`](budget-cap.md)). **Decided, not yet built:** the implementation is
+   tracked by [#153](https://github.com/mobley-trent/styx-agent/issues/153).
 7. **Exploitation-phase orchestration within the ROE.** Exploitation runs as a state-driven
    phase that is auto-allowed when in-scope + engagement mode (as every in-scope action
    already is), with destructive actions still prompting; plus an explicit engagement-file
@@ -88,7 +89,9 @@ implementations follow once each design is decided.
 | **v1.3 — reach & providers** | Browser + proxy; OpenAPI/Postman; reports + run viewer; specialist subagents + orchestration; web search/OSINT; MCP remote/OAuth; child-session UX; provider breadth + per-agent routing |
 
 The substrate lands before anything that writes to it, and each phase is reviewable behind
-the safety invariants before the next opens.
+the safety invariants before the next opens. One v1.2 row is decided but not built: the USD budget
+cap ([#153](https://github.com/mobley-trent/styx-agent/issues/153)), so that phase's
+implementation — not its design — is what remains open.
 
 ## 3. Partial adoption
 
@@ -132,5 +135,11 @@ is decided in [`docs/budget-cap.md`](budget-cap.md); diff scoping is deferred to
 needs the target-declaring artifacts that item 9 introduces
 ([`docs/headless-ci.md`](headless-ci.md) §11). The **sandbox image** is decided in
 [`docs/sandbox-image.md`](sandbox-image.md), and the **exploitation-phase orchestration** in
-[`docs/exploitation-phase.md`](exploitation-phase.md), which closes the v1.2 operating surface.
-Still open: the reach and provider designs.
+[`docs/exploitation-phase.md`](exploitation-phase.md).
+
+The v1.2 operating surface is therefore **design-complete, not implementation-complete**: every
+item is decided, and one is not built. The budget cap above never graduated an implementation
+ticket, so `--max-budget` is absent from the tree; that work is tracked by
+[#153](https://github.com/mobley-trent/styx-agent/issues/153). The rest — the sandbox image, the
+headless run with its export and severity gate, and the exploitation phase with the autonomy
+level — is shipped. Still open: the reach and provider designs.

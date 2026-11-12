@@ -6,6 +6,8 @@ delivering the budget half of the roadmap's operating surface
 ([`docs/red-team-roadmap.md`](red-team-roadmap.md) §1, item 6).
 Companion to [`docs/headless-ci.md`](headless-ci.md), which decides the run itself.
 Keystone rationale: [`docs/adr/0010-a-budget-cap-is-measured-never-estimated.md`](adr/0010-a-budget-cap-is-measured-never-estimated.md).
+**Implementation:** tracked by [#153](https://github.com/mobley-trent/styx-agent/issues/153) — the
+design is decided and `--max-budget` is not yet built.
 
 The rest of that CI surface is decided beside this document and is deliberately **not** repeated
 here: the run's shape, streams, and end conditions ([#113](https://github.com/mobley-trent/styx-agent/issues/113),
