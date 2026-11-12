@@ -1,0 +1,86 @@
+{
+  "base": "docker.io/kalilinux/kali-rolling@sha256:7997e0581c4f5c185cfe6773d5cae8fcc7c6b79798726ccaabf843af4bcd2013",
+  "data": {
+    "nuclei_templates": "v10.5.1",
+    "seclists": "2f31b22e1f9963ec2fd2b12606c00f0fb04910f1",
+    "semgrep_rules": "16b9e6d45f10649f6a531ec4838ed9924372c3bc",
+    "trivy_db": "sha256:245d6b09bb1977e00e1778421af6168f0b2c71ba9137c8debc35c3b2bd2d81b5",
+    "trivy_java_db": "sha256:a48270d8181f59baed801e34d73e0857558570c51c9a582eaa3999e897c210e4"
+  },
+  "image_version": "sandbox-v1.2026.11.11",
+  "schema_version": 1,
+  "tools": [
+    {
+      "name": "nmap",
+      "parser": "nmap_parse",
+      "version": "7.99"
+    },
+    {
+      "name": "nuclei",
+      "parser": "nuclei_parse",
+      "version": "3.11.1"
+    },
+    {
+      "name": "sqlmap",
+      "parser": "sqlmap_parse",
+      "version": "1.10.10"
+    },
+    {
+      "name": "gobuster",
+      "parser": "gobuster_parse",
+      "version": "3.8.2"
+    },
+    {
+      "name": "netexec",
+      "parser": "cme_parse",
+      "version": "1.5.1"
+    },
+    {
+      "name": "bloodhound.py",
+      "parser": "bloodhound_parse",
+      "version": "1.9.0"
+    },
+    {
+      "name": "ffuf",
+      "parser": null,
+      "version": "2.3.0"
+    },
+    {
+      "name": "semgrep",
+      "parser": null,
+      "version": "1.184.0"
+    },
+    {
+      "name": "trivy",
+      "parser": null,
+      "version": "0.76.0"
+    }
+  ],
+  "wordlists": [
+    {
+      "name": "raft-small-words",
+      "path": "/usr/share/wordlists/styx/raft-small-words.txt",
+      "sha256": "1aadf7dafde5ca68f5e5160c9206f7be6f6fc701775cdea30ba01bbb6d8db8ad"
+    },
+    {
+      "name": "raft-medium-directories",
+      "path": "/usr/share/wordlists/styx/raft-medium-directories.txt",
+      "sha256": "a9626959f818d9e198259665c5a88053b7b061c538f46da215d172bcba305fe9"
+    },
+    {
+      "name": "common",
+      "path": "/usr/share/wordlists/styx/common.txt",
+      "sha256": "47fb86ca6fb3f97e5491161581900d6d99851fb16764eacddf16aa85617c956a"
+    },
+    {
+      "name": "subdomains-top1million-5000",
+      "path": "/usr/share/wordlists/styx/subdomains-top1million-5000.txt",
+      "sha256": "e331367c140298cb179114fdeefa78f58f696219f0dec017a28bb79487cfcf19"
+    },
+    {
+      "name": "top-usernames-shortlist",
+      "path": "/usr/share/wordlists/styx/top-usernames-shortlist.txt",
+      "sha256": "dc44775d12dcdb4027017623ffaa935a018944839ce4b204ccb0c6ef566db5dd"
+    }
+  ]
+}

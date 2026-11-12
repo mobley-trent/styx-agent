@@ -113,9 +113,10 @@ type Runtime interface {
 
 // ImageEnsurer is implemented by runtimes that can make the session image
 // available locally, pulling it when it is missing. StartSession calls it when
-// present, so a fresh host runs the first exec instead of failing with a bare
-// daemon "no such image" — the harness still ships no image, it only fetches
-// the one the operator pinned. Fakes that do not manage images need not
+// present, after verification has passed, so a fresh host runs the first exec
+// instead of failing with a bare daemon "no such image" — and so the bytes are
+// pulled only once the harness has decided to trust them
+// (docs/sandbox-image.md §6.1). Fakes that do not manage images need not
 // implement it.
 type ImageEnsurer interface {
 	// EnsureImage makes image present locally. A non-nil error means the

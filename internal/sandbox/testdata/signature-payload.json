@@ -1,0 +1,1 @@
+{"critical":{"identity":{"docker-reference":"ghcr.io/mobley-trent/styx-sandbox"},"image":{"docker-manifest-digest":"sha256:4ecf7a3a70082cf5b6d1b377532e39708d53e45edb5eff37d8cfff3db8d66fad"},"type":"cosign container image signature"},"optional":null}

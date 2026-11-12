@@ -1,0 +1,18 @@
+<!-- The session image's toolset (docs/sandbox-image.md §9). Rendered into the
+     byte-stable prefix for the pinned image, whose declaration is compiled into
+     the binary; an operator-pinned image's toolset is unknown until its
+     container starts, and is reported as turn content instead. -->
+{{- if .Unknown}}
+## Sandbox toolset
+
+The session image is operator-pinned, so this harness cannot describe it: what the container carries is read when it starts and reported in the transcript. Do not assume a scanner exists because a parser tool names one — run what the report says is installed.
+
+{{- else}}
+## Sandbox toolset
+
+Tools run in the session container `{{.Image}}`, which declares its toolset ({{.ImageVersion}}) at `/etc/styx/toolset.json`. This is that declaration:
+
+{{range .Tools}}- `{{.Name}}` {{.Version}}{{if .Parser}} — parse its output with `{{.Parser}}`{{else}} — no parser tool: read the output yourself and record findings through `state_update` with evidence{{end}}
+{{end}}
+Write each scanner's artifact into `.styx/out/` and parse the file, rather than reading the output out of this conversation.
+{{- end}}

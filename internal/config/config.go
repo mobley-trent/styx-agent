@@ -97,12 +97,15 @@ type Config struct {
 	MCP MCP
 }
 
-// Container is the session-container configuration. The harness ships no
-// image; the operator pins one, plus any egress destinations beyond the
-// engagement scope (model endpoints, package mirrors) that the container may
-// reach.
+// Container is the session-container configuration. The harness ships a
+// verified default image — pinned by digest and signed by the sandbox workflow
+// (docs/sandbox-image.md) — and the operator may pin another, plus any egress
+// destinations beyond the engagement scope (model endpoints, package mirrors)
+// that the container may reach.
 type Container struct {
-	// Image is the session image. Empty means the built-in default.
+	// Image is the session image, pinned by digest. Empty means the pinned
+	// default. A digest that is not the official one runs only under
+	// --allow-unverified-image: the waiver is a flag, never this key.
 	Image string
 	// EgressAllow is extra allowed destinations beyond the engagement scope,
 	// as IP literals or CIDRs.

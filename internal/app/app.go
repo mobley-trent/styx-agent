@@ -90,6 +90,14 @@ type Options struct {
 	// Executor overrides exec dispatch entirely (tests): when set, no
 	// container runtime is constructed.
 	Executor agent.Executor
+	// AllowUnverifiedImage waives session-image signature verification for an
+	// operator-pinned digest. It comes only from the flag of that name, never
+	// from a config key, so the choice stays per-run, explicit, and audited
+	// (docs/sandbox-image.md §7).
+	AllowUnverifiedImage bool
+	// SandboxVerifier overrides the image verifier (tests). Nil means the
+	// sigstore verifier over the embedded trusted root.
+	SandboxVerifier containerlayer.ImageVerifier
 	// MCPConnector overrides how MCP servers are launched (tests). Nil means
 	// the stdio launcher, which runs the configured command as a subprocess.
 	MCPConnector mcpclient.Connector
@@ -190,14 +198,19 @@ type Harness struct {
 	provider *lazyModelClient
 
 	// Wired once at Build and reused across mode switches.
-	client         model.ModelClient
-	memory         string
-	mcpConnector   mcpclient.Connector
-	execOverride   agent.Executor
-	runtimeFactory func() (containerlayer.Runtime, error)
-	firewall       containerlayer.Firewall
-	fetcher        agent.Fetcher
-	logFetcher     agent.LogFetcher
+	client       model.ModelClient
+	memory       string
+	mcpConnector mcpclient.Connector
+	execOverride agent.Executor
+	// allowUnverifiedImage is the --allow-unverified-image waiver, and
+	// sandboxVerifier is the image verifier (tests), nil meaning sigstore over
+	// the embedded root (docs/sandbox-image.md §6–§7).
+	allowUnverifiedImage bool
+	sandboxVerifier      containerlayer.ImageVerifier
+	runtimeFactory       func() (containerlayer.Runtime, error)
+	firewall             containerlayer.Firewall
+	fetcher              agent.Fetcher
+	logFetcher           agent.LogFetcher
 	// notifier is the opt-out update notifier, or nil when it is disabled
 	// (config, env, source build, or an engagement active at startup) (§12.3).
 	notifier *update.Notifier
@@ -351,31 +364,34 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 	}
 
 	h := &Harness{
-		Config:         cfg,
-		Engagement:     eng,
-		WorkDir:        workDir,
-		Version:        opts.Version,
-		sessions:       store,
-		audit:          auditWriter,
-		out:            out,
-		errOut:         errOut,
-		headless:       opts.NonInteractive,
-		task:           strings.TrimSpace(opts.Task),
-		failOn:         failOn,
-		outDir:         strings.TrimSpace(opts.OutDir),
-		now:            now,
-		session:        session,
-		client:         client,
-		provider:       provider,
-		memory:         mem,
-		model:          cfg.Model,
-		skillCatalog:   catalog,
-		mcpConnector:   opts.MCPConnector,
-		execOverride:   opts.Executor,
-		runtimeFactory: factory,
-		firewall:       opts.ContainerFirewall,
-		fetcher:        opts.Fetcher,
-		logFetcher:     opts.LogFetcher,
+		Config:       cfg,
+		Engagement:   eng,
+		WorkDir:      workDir,
+		Version:      opts.Version,
+		sessions:     store,
+		audit:        auditWriter,
+		out:          out,
+		errOut:       errOut,
+		headless:     opts.NonInteractive,
+		task:         strings.TrimSpace(opts.Task),
+		failOn:       failOn,
+		outDir:       strings.TrimSpace(opts.OutDir),
+		now:          now,
+		session:      session,
+		client:       client,
+		provider:     provider,
+		memory:       mem,
+		model:        cfg.Model,
+		skillCatalog: catalog,
+		mcpConnector: opts.MCPConnector,
+		execOverride: opts.Executor,
+
+		allowUnverifiedImage: opts.AllowUnverifiedImage,
+		sandboxVerifier:      opts.SandboxVerifier,
+		runtimeFactory:       factory,
+		firewall:             opts.ContainerFirewall,
+		fetcher:              opts.Fetcher,
+		logFetcher:           opts.LogFetcher,
 	}
 	h.compactor = newCompactor(cfg, client, h.currentModel, h.emit)
 	if eng != nil {
@@ -444,6 +460,14 @@ func (h *Harness) configure() error {
 	// event, never a startup refusal.
 	mcpManager := h.ensureMCP()
 
+	// Which image the session runs, and whether it is the image whose trust is
+	// compiled into this binary (docs/sandbox-image.md §5, §7). A reference the
+	// harness cannot verify refuses here, before anything is pulled.
+	image, official, err := h.sessionImage()
+	if err != nil {
+		return err
+	}
+
 	// Pack detection is resolved once, here, and cached: injection happens at
 	// session start / gate activation and the byte-stable prefix is never
 	// swapped mid-session (§8.2).
@@ -453,6 +477,7 @@ func (h *Harness) configure() error {
 		Engagement: engagementContext(eng),
 		Memory:     h.memory,
 		Packs:      selection.Detection,
+		Sandbox:    h.promptToolset(official),
 	})
 	if err != nil {
 		return err
@@ -485,11 +510,16 @@ func (h *Harness) configure() error {
 	} else {
 		container = containerlayer.NewManager(containerlayer.ManagerOptions{
 			RuntimeFactory: h.runtimeFactory,
-			Image:          h.Config.Container.Image,
-			Workspace:      h.WorkDir,
-			Allowed:        allowedEgress(eng, h.Config),
-			Pins:           namePins(eng),
-			Firewall:       h.firewall,
+			Image:          image,
+			// Verification runs before the image is pulled, and the started
+			// image's own declaration must agree with the binary
+			// (docs/sandbox-image.md §6).
+			Verifier:     h.imageVerifier(image, official),
+			CheckToolset: officialToolsetCheck(official),
+			Workspace:    h.WorkDir,
+			Allowed:      allowedEgress(eng, h.Config),
+			Pins:         namePins(eng),
+			Firewall:     h.firewall,
 			OnStart: func(info containerlayer.SessionInfo) {
 				h.emitIsolation(info)
 			},
@@ -631,12 +661,25 @@ func (h *Harness) configure() error {
 		return err
 	}
 
-	// The digest reaches the main loop only: a subagent consumes state through
-	// state_query and reports to the parent, which carries the view
-	// (docs/engagement-state.md §8).
+	// Turn content the loop delivers at a turn boundary reaches the main loop
+	// only: a subagent consumes state through state_query and reports to the
+	// parent, which carries the view (docs/engagement-state.md §8). The
+	// engagement digest and, for an operator-pinned image, the toolset it
+	// declares share the seam because both are facts that become knowable
+	// mid-session (docs/sandbox-image.md §9).
 	loopOpts := h.loopOptions()
+	var digests sandboxDigests
 	if stateStore != nil {
-		loopOpts = append(loopOpts, agent.WithStateDigest(stateDigest{store: stateStore, pending: pendingParses}))
+		digests = append(digests, stateDigest{store: stateStore, pending: pendingParses})
+	}
+	if !official && container != nil {
+		digests = append(digests, &toolsetDigest{container: container})
+	}
+	switch len(digests) {
+	case 1:
+		loopOpts = append(loopOpts, agent.WithStateDigest(digests[0]))
+	case 2:
+		loopOpts = append(loopOpts, agent.WithStateDigest(digests))
 	}
 
 	old := h.container

@@ -27,6 +27,9 @@ var engagementTemplate string
 //go:embed promptdata/memory.md.tmpl
 var memoryTemplate string
 
+//go:embed promptdata/sandbox.md.tmpl
+var sandboxTemplate string
+
 // EngagementContext is the advisory scope summary the harness injects into
 // the system prompt when an engagement is active (§7.4). It is enforcement's
 // shadow, never its substitute: the policy engine and the container egress
@@ -62,6 +65,34 @@ type PromptInput struct {
 	// security pack's full section replaces its compact section when its
 	// trigger fired. The model never selects packs.
 	Packs skillpacks.Detection
+	// Sandbox is the session image's toolset declaration, nil when the harness
+	// cannot describe it. The pinned image's is compiled into the binary, so it
+	// rides this prefix; an operator-pinned image's is unknown until its
+	// container starts and arrives as turn content instead
+	// (docs/sandbox-image.md §9).
+	Sandbox *SandboxToolset
+}
+
+// SandboxToolset is what the session image declares about itself. It is
+// rendered into the prompt so that "run nmap, then nmap_parse it" is stated in
+// one breath.
+type SandboxToolset struct {
+	// Image is the pinned reference the tools run inside.
+	Image string
+	// ImageVersion is the image's own contract version.
+	ImageVersion string
+	// Tools is the declared scanner list, in the image's order.
+	Tools []SandboxTool
+	// Unknown marks an operator-pinned image the harness cannot describe.
+	Unknown bool
+}
+
+// SandboxTool is one declared scanner and the parser tool that reads it, empty
+// when no parser tool exists and the model parses the output itself.
+type SandboxTool struct {
+	Name    string
+	Version string
+	Parser  string
 }
 
 // BuildSystemPrompt renders the system prompt, the head of the byte-stable
@@ -75,6 +106,13 @@ func BuildSystemPrompt(in PromptInput) (string, error) {
 
 	if in.Engagement != nil {
 		rendered, err := render(engagementTemplate, in.Engagement)
+		if err != nil {
+			return "", err
+		}
+		sections = append(sections, rendered)
+	}
+	if in.Sandbox != nil {
+		rendered, err := render(sandboxTemplate, in.Sandbox)
 		if err != nil {
 			return "", err
 		}

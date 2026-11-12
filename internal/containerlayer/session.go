@@ -9,20 +9,34 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mobley-trent/styx-agent/internal/sandbox"
 )
 
-// Default constant container settings. The image is overridable; the harness
-// does not build or ship images (§5.1: runtimes present in the container
-// image).
+// Default constant container settings (§5.1, §5.2). The harness ships a
+// verified default image — pinned by digest, signed by the sandbox workflow,
+// and checked before it is pulled (docs/sandbox-image.md) — and the operator
+// may pin another.
 const (
-	// DefaultImage carries a shell and python3, so `bash` and `code_exec`
-	// work out of the box. Operators pin their own security-tooling image.
-	DefaultImage = "docker.io/library/python:3.12-slim"
+	// DefaultImage is the pinned sandbox image: a digest reference, never a
+	// tag, because a tag is a name the harness must not resolve
+	// (docs/sandbox-image.md §5, ADR-0011).
+	DefaultImage = sandbox.ImageRef
 	// DefaultContainerWorkspace is where the project is mounted.
 	DefaultContainerWorkspace = "/workspace"
 	// DefaultKeepAlive keeps the session container running as an exec target.
 	DefaultKeepAlive = "sleep infinity"
 )
+
+// ImageVerifier verifies a session image against the trust the harness ships,
+// and must run before the image is pulled: unverified bytes are never
+// downloaded into the daemon (docs/sandbox-image.md §6.1). The container layer
+// only knows that such a decision exists — the harness wires the mechanism.
+type ImageVerifier interface {
+	// VerifyImage returns nil only when the image at ref is trusted. A non-nil
+	// error means the session must not start.
+	VerifyImage(ctx context.Context, ref string) error
+}
 
 // SessionOptions configures one per-session container (§5.2).
 type SessionOptions struct {
@@ -30,6 +44,14 @@ type SessionOptions struct {
 	Runtime Runtime
 	// Image is the session image; empty means DefaultImage.
 	Image string
+	// Verifier, when set, runs before the image is pulled. Nil means the
+	// caller has already established trust (tests, and a pinned local image).
+	Verifier ImageVerifier
+	// CheckToolset, when set, is handed the image's toolset manifest once,
+	// after the container starts. A non-nil error refuses the session: a
+	// manifest that disagrees with the binary means the prompt would describe
+	// tools that are not there (docs/sandbox-image.md §6.3, §9).
+	CheckToolset func(manifest []byte) error
 	// Name seeds the session's container, network, bridge, and table names.
 	// It must be unique per session. Required.
 	Name string
@@ -78,6 +100,9 @@ type Session struct {
 	isolation   Isolation
 	workspace   string
 	keepAlive   string
+	// toolset is the image's toolset manifest, read once after start. Empty
+	// means the image declares none, and the toolset is unknown.
+	toolset []byte
 
 	mu     sync.Mutex
 	closed bool
@@ -106,6 +131,15 @@ func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	workspace := opts.ContainerWorkspace
 	if strings.TrimSpace(workspace) == "" {
 		workspace = DefaultContainerWorkspace
+	}
+
+	// Verify before pulling, and pull only once verification passed: a session
+	// never downloads bytes it has not decided to trust, and never starts on an
+	// image it cannot vouch for (docs/sandbox-image.md §6.1).
+	if opts.Verifier != nil {
+		if err := opts.Verifier.VerifyImage(ctx, image); err != nil {
+			return nil, err
+		}
 	}
 
 	// Make the image available before touching the network or the firewall: a
@@ -165,6 +199,9 @@ func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	if err := s.startContainer(ctx, opts, image, workspace, nil); err != nil {
 		return nil, s.fail(err)
 	}
+	if err := s.discoverToolset(ctx, opts); err != nil {
+		return nil, s.fail(err)
+	}
 	return s, nil
 }
 
@@ -206,7 +243,31 @@ func (s *Session) startDegraded(ctx context.Context, opts SessionOptions, image,
 	if err := s.startContainer(ctx, opts, image, workspace, env); err != nil {
 		return nil, s.fail(err)
 	}
+	if err := s.discoverToolset(ctx, opts); err != nil {
+		return nil, s.fail(err)
+	}
 	return s, nil
+}
+
+// discoverToolset reads the image's own declaration of what it carries: one
+// `cat` after the container starts, never a probe per tool and never a guess
+// (docs/sandbox-image.md §9). An image that ships no manifest — or one the
+// runtime cannot read — is "toolset unknown", which is not a failure: the
+// session runs and the prompt says what the harness actually knows. A manifest
+// that is present and contradicts the harness (CheckToolset) does refuse.
+func (s *Session) discoverToolset(ctx context.Context, opts SessionOptions) error {
+	res, err := s.rt.Exec(ctx, s.containerID, ExecRequest{Cmd: []string{"cat", sandbox.ToolsetPath}})
+	if err != nil || res.ExitCode != 0 || strings.TrimSpace(res.Stdout) == "" {
+		return nil
+	}
+	manifest := []byte(res.Stdout)
+	if opts.CheckToolset != nil {
+		if err := opts.CheckToolset(manifest); err != nil {
+			return err
+		}
+	}
+	s.toolset = manifest
+	return nil
 }
 
 // startContainer creates and starts the session container on the selected
@@ -256,6 +317,14 @@ func (s *Session) NetworkID() string { return s.networkID }
 
 // ContainerID is the session container's identifier.
 func (s *Session) ContainerID() string { return s.containerID }
+
+// Toolset is the toolset manifest the image declared, nil when it declared
+// none. It is read once, after the container starts.
+func (s *Session) Toolset() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.toolset...)
+}
 
 // ProxyURL is the fallback proxy's URL, empty when egress is enforced at the
 // host edge.

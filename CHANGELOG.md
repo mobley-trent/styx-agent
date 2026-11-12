@@ -23,6 +23,18 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- Exec runs in the verified sandbox image. The harness pins `ghcr.io/mobley-trent/styx-sandbox` by
+  digest and checks its keyless signature — the certificate chains to a Fulcio root embedded in the
+  binary, its SCT and Rekor timestamp verify, and the signing identity is the sandbox workflow on
+  `main` — **before** the image is pulled, so unverified bytes never reach the daemon. A verified
+  bundle is cached per digest and re-verified offline, which is the air-gap path. Failure refuses the
+  session at start and names the digest, the expected identity, and the reason; there is no fallback
+  image. The image's toolset declaration is read once after start: the pinned image's is compiled
+  into the prompt, an operator image's arrives as turn content, and a manifest that disagrees with
+  the binary refuses. `container.image` may pin another digest only under the new
+  `--allow-unverified-image` flag, which prompts once, records the waiver in the audit trail, and
+  writes no trust cache; `styx --version` prints the pinned digest. Adds
+  `github.com/sigstore/sigstore-go`. (#130)
 - The sandbox image is built and published from pinned inputs: the Kali base digest, an exact apt
   version for every package, a hash-locked semgrep install, and checksummed tool data (nuclei
   templates, semgrep rules, a SecLists subset, the trivy databases). The image declares itself in
