@@ -158,6 +158,10 @@ const (
 	PromptDiff PromptKind = "diff"
 	// PromptPlan is a proposed plan's approval card (§9.2).
 	PromptPlan PromptKind = "plan"
+	// PromptUnverified is the once-per-start confirmation for running an
+	// operator-pinned image whose signature was waived
+	// (docs/sandbox-image.md §7).
+	PromptUnverified PromptKind = "unverified-image"
 )
 
 // Prompt choices. They are the strings the app maps back onto the loop's
@@ -674,6 +678,18 @@ func (m *Model) promptBlock() []string {
 		lines = append(lines, "│ "+
 			m.styles.cardKey.Render("y")+" approve   "+
 			m.styles.cardKey.Render("n")+" reject")
+		lines = append(lines, m.styles.card.Render("╰─"))
+		return lines
+	}
+
+	if p.Kind == PromptUnverified {
+		lines = append(lines, m.styles.card.Render("╭─ unverified sandbox image"))
+		lines = append(lines, "│ image: "+p.Tool)
+		lines = append(lines, "│ digest: "+p.Path)
+		lines = append(lines, "│ the signature is not verified; this image runs on your say-so")
+		lines = append(lines, "│ "+
+			m.styles.cardKey.Render("y")+" run it unverified   "+
+			m.styles.cardKey.Render("n")+" refuse")
 		lines = append(lines, m.styles.card.Render("╰─"))
 		return lines
 	}

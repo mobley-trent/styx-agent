@@ -18,6 +18,7 @@ import (
 
 	"github.com/mobley-trent/styx-agent/internal/app"
 	"github.com/mobley-trent/styx-agent/internal/findingsexport"
+	"github.com/mobley-trent/styx-agent/internal/sandbox"
 	"github.com/mobley-trent/styx-agent/internal/update"
 )
 
@@ -40,6 +41,11 @@ Flags:
   --fail-on <severity>  Fail a non-interactive run when a gated finding is at
                         or above <severity>: critical, high, medium, low, or
                         info; needs -n (docs/headless-ci.md)
+  --allow-unverified-image
+                        Run a digest-pinned image that is not the signed
+                        sandbox image, without verifying it: asks once at
+                        startup and records the waiver in the audit trail
+                        (docs/sandbox-image.md)
   --engagement <file>   Activate engagement mode through the engagement gate
                         (strict validation; without it, safe mode is default)
   --project <dir>       Project root to run in (default: the working directory)
@@ -98,28 +104,37 @@ func run(argv []string, version string) (stdout, stderr string, exitCode int) {
 	case opts.help:
 		return usage, "", 0
 	case opts.version:
-		return fmt.Sprintf("styx %s\n", version), "", 0
+		// The pinned sandbox digest rides the version line so "what will this
+		// binary run" is answerable without opening the source
+		// (docs/sandbox-image.md §4.4).
+		return fmt.Sprintf("styx %s\nsandbox image %s\n", version, sandbox.ImageRef), "", 0
 	case opts.update:
 		return runUpdate(context.Background(), version)
 	}
 
 	if err := runApp(context.Background(), app.Options{
-		Engagement:     opts.engagement,
-		ProjectDir:     opts.project,
-		Version:        version,
-		SourceBuild:    isSourceBuild(),
-		NonInteractive: opts.nonInteractive,
-		Task:           opts.task,
-		OutDir:         opts.out,
-		FailOn:         opts.failOn,
-		Stdin:          os.Stdin,
-		Stdout:         os.Stdout,
-		Stderr:         os.Stderr,
+		Engagement:           opts.engagement,
+		ProjectDir:           opts.project,
+		Version:              version,
+		SourceBuild:          isSourceBuild(),
+		NonInteractive:       opts.nonInteractive,
+		Task:                 opts.task,
+		OutDir:               opts.out,
+		FailOn:               opts.failOn,
+		AllowUnverifiedImage: opts.allowUnverifiedImage,
+		Stdin:                os.Stdin,
+		Stdout:               os.Stdout,
+		Stderr:               os.Stderr,
 	}); err != nil {
 		// A finished run's verdict is not a broken run (§8.1): the runner has
 		// already printed the line that explains it, so only the code changes.
 		if code, ok := app.VerdictCode(err); ok {
 			return "", "", code
+		}
+		// A run the harness refused to configure — an image it will not trust,
+		// a flag that needs a digest — is a usage error, not a broken run.
+		if app.IsUsageError(err) {
+			return "", fmt.Sprintf("styx: %v\n\n%s\n", err, usage), 2
 		}
 		return "", fmt.Sprintf("styx: %v\n", err), 1
 	}
@@ -183,6 +198,9 @@ type cliOptions struct {
 	// error rather than no gate.
 	failOn    string
 	failOnSet bool
+	// allowUnverifiedImage waives image signature verification for an
+	// operator-pinned digest (docs/sandbox-image.md §7).
+	allowUnverifiedImage bool
 	// positional collects the bare arguments; whether they are a task or a
 	// stray command is decided once -n is known.
 	positional []string
@@ -222,6 +240,9 @@ func parseArgs(args []string) (cliOptions, error) {
 			continue
 		case "-n", "--non-interactive":
 			opts.nonInteractive = true
+			continue
+		case "--allow-unverified-image":
+			opts.allowUnverifiedImage = true
 			continue
 		case "--engagement":
 			target = &opts.engagement

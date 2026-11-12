@@ -39,8 +39,17 @@ func buildOptions(t *testing.T, workDir string, client model.ModelClient) Option
 		Stdout:     io.Discard,
 		Stderr:     io.Discard,
 		Now:        func() time.Time { return at },
+		// Image signatures are exercised in their own tests; a harness test
+		// never reaches for the registry.
+		SandboxVerifier: acceptingVerifier{},
 	}
 }
+
+// acceptingVerifier stands in for the sigstore verifier in tests that are not
+// about verification.
+type acceptingVerifier struct{}
+
+func (acceptingVerifier) VerifyImage(context.Context, string) error { return nil }
 
 func writeFile(t *testing.T, dir, name, body string) string {
 	t.Helper()

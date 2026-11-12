@@ -44,6 +44,14 @@ func TestRun(t *testing.T) {
 			wantOut: "styx v9.9.9-test",
 		},
 		{
+			// docs/sandbox-image.md §4.4: "what will this binary run" is
+			// answerable without opening the source.
+			name:    "version line names the pinned sandbox image",
+			args:    []string{"styx", "--version"},
+			version: "v9.9.9-test",
+			wantOut: "sandbox image ghcr.io/mobley-trent/styx-sandbox@sha256:",
+		},
+		{
 			name:      "unknown flag fails with usage on stderr and exit 2",
 			args:      []string{"styx", "--bogus"},
 			version:   "v0.1.0",
@@ -328,6 +336,43 @@ func TestNonInteractiveFlags(t *testing.T) {
 				t.Errorf("options = {NonInteractive:%v Task:%q}, want {true %q}", got.NonInteractive, got.Task, tt.wantTask)
 			}
 		})
+	}
+}
+
+// TestAllowUnverifiedImageFlag covers docs/sandbox-image.md §7: the waiver is a
+// flag that reaches the harness (never a config key), and a refusal the harness
+// raises about the image is a usage error rather than a broken run.
+func TestAllowUnverifiedImageFlag(t *testing.T) {
+	var got *app.Options
+	previous := runApp
+	runApp = func(_ context.Context, opts app.Options) error {
+		got = &opts
+		return nil
+	}
+	t.Cleanup(func() { runApp = previous })
+
+	stdout, stderr, code := run([]string{"styx", "--allow-unverified-image"}, "v0.1.0")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+	}
+	if got == nil || !got.AllowUnverifiedImage {
+		t.Fatalf("options = %+v, want the waiver to reach the harness", got)
+	}
+}
+
+func TestImageUsageRefusalExitsTwo(t *testing.T) {
+	previous := runApp
+	runApp = func(context.Context, app.Options) error {
+		return app.UsageError{Message: "refusing to start: ghcr.io/example/lab:latest is not pinned by digest"}
+	}
+	t.Cleanup(func() { runApp = previous })
+
+	_, stderr, code := run([]string{"styx"}, "v0.1.0")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "not pinned by digest") || !strings.Contains(stderr, "Usage: styx") {
+		t.Fatalf("stderr = %q, want the refusal and the usage text", stderr)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/memory"
 	"github.com/mobley-trent/styx-agent/internal/model/fakemodel"
 	"github.com/mobley-trent/styx-agent/internal/policy"
+	"github.com/mobley-trent/styx-agent/internal/sandbox"
 	"github.com/mobley-trent/styx-agent/internal/tui"
 )
 
@@ -303,7 +304,12 @@ func (r *trackingRuntime) CreateContainer(context.Context, containerlayer.Contai
 
 func (r *trackingRuntime) StartContainer(context.Context, string) error { return nil }
 
-func (r *trackingRuntime) Exec(context.Context, string, containerlayer.ExecRequest) (containerlayer.ExecResult, error) {
+func (r *trackingRuntime) Exec(_ context.Context, _ string, req containerlayer.ExecRequest) (containerlayer.ExecResult, error) {
+	// The session's one read of the image's own declaration answers with the
+	// pinned toolset, as a verified official image does.
+	if len(req.Cmd) == 2 && req.Cmd[0] == "cat" && req.Cmd[1] == sandbox.ToolsetPath {
+		return containerlayer.ExecResult{Stdout: sandbox.ToolsetManifest}, nil
+	}
 	return containerlayer.ExecResult{Stdout: "hi\n"}, nil
 }
 

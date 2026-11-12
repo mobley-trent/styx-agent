@@ -10,6 +10,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/audit"
 	"github.com/mobley-trent/styx-agent/internal/containerlayer"
 	"github.com/mobley-trent/styx-agent/internal/model/fakemodel"
+	"github.com/mobley-trent/styx-agent/internal/sandbox"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
 )
 
@@ -38,6 +39,13 @@ func (r *appFakeRuntime) CreateContainer(_ context.Context, spec containerlayer.
 func (r *appFakeRuntime) StartContainer(context.Context, string) error { return nil }
 
 func (r *appFakeRuntime) Exec(_ context.Context, _ string, req containerlayer.ExecRequest) (containerlayer.ExecResult, error) {
+	// The session reads the image's declaration once, right after start. The
+	// fake image declares the pinned toolset, so the session's check passes the
+	// way a real verified image's does; the read is not one of the test's
+	// subject executions.
+	if len(req.Cmd) == 2 && req.Cmd[0] == "cat" && req.Cmd[1] == sandbox.ToolsetPath {
+		return containerlayer.ExecResult{Stdout: sandbox.ToolsetManifest}, nil
+	}
 	r.execs = append(r.execs, req)
 	return containerlayer.ExecResult{Stdout: r.execOutput}, nil
 }

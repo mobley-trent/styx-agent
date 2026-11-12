@@ -24,6 +24,9 @@ type SessionInfo struct {
 	Degraded bool
 	// ProxyURL is the fallback proxy's URL when degraded, else empty.
 	ProxyURL string
+	// Toolset is the manifest the image declared about itself, nil when it
+	// declared none (docs/sandbox-image.md §9).
+	Toolset []byte
 }
 
 // Manager lazily starts the session container on first exec and tears it down
@@ -47,7 +50,11 @@ type ManagerOptions struct {
 	RuntimeFactory func() (Runtime, error)
 	// Image, Workspace, ContainerWorkspace, Allowed, Firewall, FirewallRunner,
 	// and ProxyAddr are passed to the started session.
-	Image              string
+	Image string
+	// Verifier, when set, runs before the image is pulled, and
+	// CheckToolset, when set, judges the manifest the started image declares.
+	Verifier           ImageVerifier
+	CheckToolset       func(manifest []byte) error
 	Workspace          string
 	ContainerWorkspace string
 	Allowed            []netip.Prefix
@@ -102,6 +109,7 @@ func (m *Manager) Start(ctx context.Context) (*Session, error) {
 		Isolation: session.Isolation(),
 		Degraded:  session.Isolation() == IsolationDegraded,
 		ProxyURL:  session.ProxyURL(),
+		Toolset:   session.Toolset(),
 	}
 	info, onStart := m.info, m.opts.OnStart
 	m.mu.Unlock()
@@ -125,6 +133,8 @@ func (m *Manager) start(ctx context.Context, opts ManagerOptions) (*Session, Run
 	session, err := StartSession(ctx, SessionOptions{
 		Runtime:            rt,
 		Image:              opts.Image,
+		Verifier:           opts.Verifier,
+		CheckToolset:       opts.CheckToolset,
 		Name:               newSessionSeed(),
 		Workspace:          opts.Workspace,
 		ContainerWorkspace: opts.ContainerWorkspace,

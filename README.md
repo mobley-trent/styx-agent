@@ -61,6 +61,13 @@ and never written to disk or into model context. `styx --engagement <file>`
 activates engagement mode through the engagement gate; without it, safe mode
 is the default.
 
+Exec runs in the pinned offensive sandbox image
+(`ghcr.io/mobley-trent/styx-sandbox`, in [`docs/sandbox-image.md`](docs/sandbox-image.md)):
+the first command pulls it once, and its signature is verified against the
+workflow identity compiled into the binary before it is pulled. `styx --version`
+prints the pinned digest; `container.image` may pin another digest, which runs
+only under `--allow-unverified-image` (one prompt, one audit entry).
+
 ## Layout
 
 The package layout and per-package boundary rules are specified in
