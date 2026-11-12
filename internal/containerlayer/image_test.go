@@ -66,7 +66,7 @@ func TestStartSessionRefusesAnUnverifiedImage(t *testing.T) {
 	if len(rt.ensuredImages) != 0 {
 		t.Errorf("pulled %v after verification failed, want no pull", rt.ensuredImages)
 	}
-	if rt.networks != nil && len(rt.networks) != 0 {
+	if len(rt.networks) != 0 {
 		t.Errorf("created %d networks before verification passed, want none", len(rt.networks))
 	}
 }

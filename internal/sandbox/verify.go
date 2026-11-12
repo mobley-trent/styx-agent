@@ -142,7 +142,7 @@ func (v *Verifier) check(ref Ref, artifact SignatureArtifact) error {
 	if err != nil {
 		return &Error{Ref: ref, Stage: "bundle", Reason: err.Error()}
 	}
-	entity, err := bundle.NewProtobufBundle(pb)
+	entity, err := bundle.NewBundle(pb)
 	if err != nil {
 		return &Error{Ref: ref, Stage: "bundle", Reason: err.Error()}
 	}

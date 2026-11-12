@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-
-	_ "embed"
 )
 
 // ToolsetPath is where a session image declares what it carries

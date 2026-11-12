@@ -146,9 +146,9 @@ func TestVerifyRejectsAnotherIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("protobundleFor: %v", err)
 	}
-	entity, err := bundle.NewProtobufBundle(pb)
+	entity, err := bundle.NewBundle(pb)
 	if err != nil {
-		t.Fatalf("NewProtobufBundle: %v", err)
+		t.Fatalf("NewBundle: %v", err)
 	}
 	other, err := verify.NewShortCertificateIdentity(Issuer, "", "https://github.com/someone-else/repo/.github/workflows/sandbox-image.yml@refs/heads/main", "")
 	if err != nil {

@@ -168,6 +168,8 @@ func (r *Registry) token(ctx context.Context, ref Ref) (string, error) {
 		return "", nil
 	}
 	host, path := ref.Host()
+	// tokenURL is a token *endpoint*, not a credential.
+	//nolint:gosec // the value is a URL this package builds, never a secret.
 	service, tokenURL := host, "https://"+host+"/token"
 	if host == "docker.io" {
 		service, tokenURL = "registry.docker.io", "https://auth.docker.io/token"
