@@ -31,6 +31,26 @@ type TimeWindow struct {
 	TZ    string
 }
 
+// Autonomy is the exploitation approval level (docs/exploitation-phase.md §2):
+// whether an in-scope, non-destructive exploit-class call is approved without
+// asking. It widens exactly one verdict and is never read by the ranking.
+type Autonomy string
+
+const (
+	// AutonomyPrompt asks the operator about every exploit-class call. It is
+	// the default, and absence in the engagement file means it: the restrictive
+	// value is the one that needs no declaration.
+	AutonomyPrompt Autonomy = "prompt"
+	// AutonomyAuto approves an in-scope, non-destructive exploit-class call
+	// without asking. It is not full autonomy: it never lifts the ROE hard
+	// limits, never approves an out-of-scope target, and never auto-detones a
+	// destructive-tagged call.
+	AutonomyAuto Autonomy = "auto"
+)
+
+// Valid reports whether the level is one of the two defined values.
+func (a Autonomy) Valid() bool { return a == AutonomyPrompt || a == AutonomyAuto }
+
 // ROE is the machine-checked rules-of-engagement limit set (§6.3). Zero
 // value: no engagement — nothing widened, nothing limited.
 type ROE struct {
@@ -40,6 +60,18 @@ type ROE struct {
 	DestructiveForbidden bool
 	// TimeWindow optionally bounds network/exec to a daily window.
 	TimeWindow *TimeWindow
+	// ExploitationAutonomy is the exploit approval dial (optional in the file,
+	// defaulted to prompt). Empty reads as prompt.
+	ExploitationAutonomy Autonomy
+}
+
+// AutonomyLevel is the exploitation approval level, defaulting to prompt when
+// unset. A nil ROE (no engagement) is prompt too: nothing is widened.
+func (r *ROE) AutonomyLevel() Autonomy {
+	if r == nil || r.ExploitationAutonomy == "" {
+		return AutonomyPrompt
+	}
+	return r.ExploitationAutonomy
 }
 
 // Check evaluates a call against the ROE hard limits. A nil ROE means no

@@ -26,7 +26,7 @@ Authorized targets (advisory — the harness enforces scope):
 - 10.0.0.0/24
 
 Rules of engagement:
-- exploit-class tooling: allowed
+- exploit-class tooling: allowed (prompts in scope)
 - destructive-tagged calls: allowed
 
 This summary is advisory self-restraint only. Every network and exec action is

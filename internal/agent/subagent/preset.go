@@ -101,8 +101,9 @@ var logTriageSection string
 // six (docs/parser-tool-contracts.md §9), because the subagent that runs a
 // scanner is the one that should parse its output — and so does the advisory
 // attack-path suggestion (docs/attack-paths.md §6): a subagent planning the
-// next move reads the same ranking the main loop does.
-var stateTools = append([]string{"state_query", "state_update", "attack_path_suggest"}, parsers.Names()...)
+// next move reads the same ranking the main loop does — and the ranked
+// exploitation plan beside it (docs/exploitation-phase.md §4).
+var stateTools = append([]string{"state_query", "state_update", "attack_path_suggest", "exploit_plan_suggest"}, parsers.Names()...)
 
 // presets is the built-in registry, in stable display order (§5.4).
 var presets = []Preset{

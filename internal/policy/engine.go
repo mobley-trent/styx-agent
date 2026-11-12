@@ -67,6 +67,11 @@ func NewEngine(mode Mode, opts ...Option) (*Engine, error) {
 // Mode reports the engine's operating mode.
 func (e *Engine) Mode() Mode { return e.mode }
 
+// Autonomy reports the exploitation autonomy level in force. The audit trail
+// records it beside every exploit-class decision, so a run that could exploit
+// is legible as one from its own output (docs/exploitation-phase.md §6).
+func (e *Engine) Autonomy() Autonomy { return e.roe.AutonomyLevel() }
+
 // Decide resolves one tool call to exactly one verdict (§6.1). It is total:
 // every input produces a verdict, never an error. The order below is the
 // safety order itself (§6.2):
@@ -122,9 +127,18 @@ func (e *Engine) Decide(call Call) VerdictResult {
 	// never auto-allowed even in scope: detonation is always an explicit
 	// operator decision (§8.3). This is a prompt, not a hard deny — the
 	// destructive_forbidden hard limit is the ROE check above.
+	//
+	// An exploit-class call follows the same shape, one rung down: in scope and
+	// non-destructive, it still asks unless the engagement's exploitation
+	// autonomy level is auto (docs/exploitation-phase.md §2). The level widens
+	// exactly this verdict and reads nothing else: scope, destructive tagging,
+	// the time window, and exploit_allowed were all decided above it.
 	if e.allInScope(call) {
 		if call.Destructive {
 			return VerdictResult{VerdictPrompt, ReasonDestructive}
+		}
+		if call.ExploitClass && e.roe.AutonomyLevel() != AutonomyAuto {
+			return VerdictResult{VerdictPrompt, ReasonExploitApproval}
 		}
 		return VerdictResult{VerdictAllow, ReasonInScope}
 	}

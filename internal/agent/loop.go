@@ -825,7 +825,7 @@ func (l *Loop) admit(ctx context.Context, repairer *repair.Repairer, call model.
 	}
 
 	// 4. Audit write, before execution. Fail closed (§6.5).
-	if err := l.writeAudit(call, params, auditVerdict, reason); err != nil {
+	if err := l.writeAudit(call, params, auditVerdict, reason, tool.ExploitClass); err != nil {
 		adm.content = fmt.Sprintf("tool call denied: the audit trail could not be written (%v)", err)
 		l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Tool: call.Name, Failure: adm.content})
 		l.emitEvent(sessions.Event{Kind: sessions.KindToolResult, Turn: turn, Tool: call.Name, CallID: call.ID, Failure: adm.content})
@@ -914,11 +914,11 @@ func (l *Loop) resolve(ctx context.Context, verdict policy.VerdictResult, call m
 
 // writeAudit appends one decision to the audit trail. A nil writer is a
 // fail-closed writer: nothing is recorded, so nothing runs.
-func (l *Loop) writeAudit(call model.ToolCall, params map[string]any, verdict audit.Verdict, reason policy.Reason) error {
+func (l *Loop) writeAudit(call model.ToolCall, params map[string]any, verdict audit.Verdict, reason policy.Reason, exploitClass bool) error {
 	if l.audit == nil {
 		return errors.New("no audit writer configured")
 	}
-	return l.audit.Append(audit.Record{
+	record := audit.Record{
 		Mode:      audit.Mode(l.engine.Mode()),
 		Tool:      call.Name,
 		Params:    params,
@@ -926,7 +926,15 @@ func (l *Loop) writeAudit(call model.ToolCall, params map[string]any, verdict au
 		Reason:    string(reason),
 		Subagent:  l.subagent,
 		Isolation: l.isolation(),
-	})
+	}
+	// An exploit-class decision records the level that governed it, so an
+	// exploit approved without a prompt is visible as one in the forensic
+	// record (docs/exploitation-phase.md §6). Other calls carry no level: the
+	// dial does not apply to them.
+	if exploitClass {
+		record.Autonomy = string(l.engine.Autonomy())
+	}
+	return l.audit.Append(record)
 }
 
 // runAll executes the admitted calls, at most maxParallel at a time, filling

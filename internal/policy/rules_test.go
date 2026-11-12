@@ -145,6 +145,8 @@ func TestDefaultRules(t *testing.T) {
 		// same way (docs/attack-paths.md §6).
 		{name: "safe: attack_path_suggest denies", mode: ModeSafe, tool: "attack_path_suggest", want: VerdictDeny},
 		{name: "engagement: attack_path_suggest allows", mode: ModeEngagement, tool: "attack_path_suggest", want: VerdictAllow},
+		{name: "safe: exploit_plan_suggest denies", mode: ModeSafe, tool: "exploit_plan_suggest", want: VerdictDeny},
+		{name: "engagement: exploit_plan_suggest allows", mode: ModeEngagement, tool: "exploit_plan_suggest", want: VerdictAllow},
 
 		// The parser tools are the same mode difference, for the same reason: a
 		// parse writes engagement state, and safe mode has none
@@ -198,7 +200,7 @@ func TestDefaultRules(t *testing.T) {
 // which are denied together in safe mode and allowed together in engagement
 // mode.
 func isStateTool(tool string) bool {
-	if tool == "state_query" || tool == "state_update" || tool == "attack_path_suggest" {
+	if tool == "state_query" || tool == "state_update" || tool == "attack_path_suggest" || tool == "exploit_plan_suggest" {
 		return true
 	}
 	return parsers.Known(tool)

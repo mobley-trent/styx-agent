@@ -603,6 +603,15 @@ func (h *Harness) configure() error {
 			_, eng := h.modeAndEngagement()
 			return eng != nil && eng.ROE().ExploitAllowed
 		}),
+		// The ranked exploitation plan is the same kind of read: denied in safe
+		// mode, allowed and audited in engagement mode, advised and never
+		// scheduled (docs/exploitation-phase.md §4). It reads the ROE at call
+		// time for the one policy input the ranking takes: whether the terminal
+		// exploit step may be priced.
+		agent.ExploitPlanTool(stateStoreHandle(stateStore), func() bool {
+			_, eng := h.modeAndEngagement()
+			return eng != nil && eng.ROE().ExploitAllowed
+		}),
 	}
 	// The six parser tools are registered the same way, and gated the same way:
 	// a parse writes engagement state, so safe mode denies it
@@ -1228,6 +1237,7 @@ func engagementContext(eng *engagement.Engagement) *agent.EngagementContext {
 		Name:                 eng.Name(),
 		Targets:              eng.Targets(),
 		ExploitAllowed:       eng.ROE().ExploitAllowed,
+		ExploitAuto:          eng.ROE().AutonomyLevel() == policy.AutonomyAuto,
 		DestructiveForbidden: eng.ROE().DestructiveForbidden,
 	}
 	if w := eng.ROE().TimeWindow; w != nil {
@@ -1823,6 +1833,7 @@ func (h *Harness) Status(busy bool) tui.Status {
 		Model:      h.currentModel(),
 		Provider:   h.providerText(),
 		Targets:    scopeText(eng),
+		Autonomy:   autonomyText(eng),
 		Pending:    h.pendingParseText(),
 		Session:    shortID(h.SessionID()),
 		Isolation:  string(h.isolation()),
@@ -1850,6 +1861,16 @@ func (h *Harness) pendingParseText() string {
 		return ""
 	}
 	return fmt.Sprintf("parse %d pending", count)
+}
+
+// autonomyText is the status bar's exploitation-autonomy marker
+// (docs/exploitation-phase.md §7): it reads "exploit auto" while the level is
+// auto, and nothing at prompt — the prompt card is already its own signal.
+func autonomyText(eng *engagement.Engagement) string {
+	if eng == nil || eng.ROE().AutonomyLevel() != policy.AutonomyAuto {
+		return ""
+	}
+	return "exploit auto"
 }
 
 // scopeText is the status bar's in-scope target readout when an engagement is

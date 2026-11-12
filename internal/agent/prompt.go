@@ -41,6 +41,10 @@ type EngagementContext struct {
 	Targets []string
 	// ExploitAllowed mirrors roe.exploit_allowed.
 	ExploitAllowed bool
+	// ExploitAuto mirrors roe.exploitation_autonomy: true when the level is
+	// auto, so the summary can say an in-scope exploit is approved without a
+	// prompt (docs/exploitation-phase.md §7).
+	ExploitAuto bool
 	// DestructiveForbidden mirrors roe.destructive_forbidden.
 	DestructiveForbidden bool
 	// Expires is the rendered expiry, empty when the file is evergreen.
