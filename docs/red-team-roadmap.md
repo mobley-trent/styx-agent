@@ -54,7 +54,9 @@ implementations follow once each design is decided.
    phase that is auto-allowed when in-scope + engagement mode (as every in-scope action
    already is), with destructive actions still prompting; plus an explicit engagement-file
    **exploitation autonomy level** an operator may set to widen in-scope exploit approval.
-   See [ADR-0003](adr/0003-autonomous-exploitation-boundary.md).
+   Decided in [`docs/exploitation-phase.md`](exploitation-phase.md); boundary in
+   [ADR-0003](adr/0003-autonomous-exploitation-boundary.md), semantics in
+   [ADR-0012](adr/0012-the-autonomy-level-widens-a-verdict-never-binds-to-the-record.md).
 
 ### Reach — v1.3
 
@@ -129,6 +131,6 @@ the relationship-graph and attack-path computation in
 is decided in [`docs/budget-cap.md`](budget-cap.md); diff scoping is deferred to v1.3 because it
 needs the target-declaring artifacts that item 9 introduces
 ([`docs/headless-ci.md`](headless-ci.md) §11). The **sandbox image** is decided in
-[`docs/sandbox-image.md`](sandbox-image.md). Still open: the exploitation-phase orchestration
-design ([#131](https://github.com/mobley-trent/styx-agent/issues/131)) and the reach and provider
-designs.
+[`docs/sandbox-image.md`](sandbox-image.md), and the **exploitation-phase orchestration** in
+[`docs/exploitation-phase.md`](exploitation-phase.md), which closes the v1.2 operating surface.
+Still open: the reach and provider designs.
