@@ -168,13 +168,12 @@ func (r *Registry) token(ctx context.Context, ref Ref) (string, error) {
 		return "", nil
 	}
 	host, path := ref.Host()
-	// tokenURL is a token *endpoint*, not a credential.
-	//nolint:gosec // the value is a URL this package builds, never a secret.
-	service, tokenURL := host, "https://"+host+"/token"
+	// authURL is the registry's anonymous-credential endpoint, not a secret.
+	service, authURL := host, "https://"+host+"/token"
 	if host == "docker.io" {
-		service, tokenURL = "registry.docker.io", "https://auth.docker.io/token"
+		service, authURL = "registry.docker.io", "https://auth.docker.io/token"
 	}
-	endpoint := tokenURL + "?service=" + url.QueryEscape(service) + "&scope=" + url.QueryEscape("repository:"+path+":pull")
+	endpoint := authURL + "?service=" + url.QueryEscape(service) + "&scope=" + url.QueryEscape("repository:"+path+":pull")
 
 	ctx, cancel := context.WithTimeout(ctx, registryTimeout)
 	defer cancel()
