@@ -28,12 +28,21 @@ while safety-critical refusals (invalid config, a refused or stale engagement
 file) stay fatal at startup. Built-in tools cover file manipulation
 (`read_file`, `write_file`, `edit_file`, `glob`, `grep`), container-isolated
 exec (`bash`, `code_exec`), network fetch, plan approval, subagent dispatch,
-and agent skills; external capabilities arrive through the same gate as
-per-project MCP servers over stdio, becoming ordinary audited descriptors
-regardless of server-side strictness. Dual-mode safety is enforced by the
-harness: safe mode by default, engagement mode unlocked through the strict
-engagement gate (scope pins and rules of engagement); egress is either pinned
-to scope or visibly degraded isolation. The four built-in skill packs (coding,
+agent skills, engagement state (`state_query`, `state_update` over a
+schema-versioned store that lives outside the repo), six scanner parsers that
+write what they read through one audited pipeline, and the advisory
+`attack_path_suggest` / `exploit_plan_suggest`; external capabilities arrive
+through the same gate as per-project MCP servers over stdio, becoming ordinary
+audited descriptors regardless of server-side strictness. Dual-mode safety is
+enforced by the harness: safe mode by default, engagement mode unlocked through
+the strict engagement gate (scope pins and rules of engagement, including the
+optional `roe.exploitation_autonomy: auto` dial that approves an in-scope
+exploit without a prompt); egress is either pinned to scope or visibly degraded
+isolation. The same harness runs unattended: `styx -n <task>` does one turn
+with no terminal and no operator, so every prompt becomes a denial, while
+`--out <dir>` writes a deterministic findings export (`vulnerabilities.json`,
+`.csv`, and SARIF) and `--fail-on <severity>` turns the run into a build
+verdict over a five-value exit-code space. The four built-in skill packs (coding,
 red team, reverse engineering, blue team) and `SKILL.md` agent skills extend the
 workflow surface. The streaming TUI renders inline diffs with per-diff
 accept/reject and accept-all-rest-of-turn, keyboard-first permission cards,
@@ -54,6 +63,7 @@ make check              # the full CI gate: build, vet, lint, test
 make build              # build the styx binary
 ./styx --help           # usage
 DEEPSEEK_API_KEY=... ./styx   # run in a repo (safe mode by default)
+./styx -n "triage the working tree"   # one turn, answer on stdout: the CI path
 ```
 
 Secrets are environment-only: `DEEPSEEK_API_KEY` is read from the environment
@@ -81,6 +91,11 @@ comment. Headlines:
 - `internal/policy` — the pure policy engine, the safety choke point
 - `internal/diff` — the pure line diff behind write/edit review
 - `internal/engagement` — engagement file load/validate, scope pins, DNS pinning
+- `internal/engagementstate` — the schema-versioned engagement-state store and its prompt digest
+- `internal/parsers` — the six scanner parsers over one audited, atomic write pipeline
+- `internal/attackpath` — the pure cost model: attack paths and the exploitation ranking
+- `internal/findingsexport` — the deterministic findings export (JSON/CSV/SARIF)
+- `internal/sandbox` — the pinned, signature-verified sandbox image and its trust cache
 - `internal/containerlayer` — the only package touching the host network stack
 - `internal/mcpclient` — MCP servers over stdio: discovery, calls, lifecycle
 - `internal/tui` — the Bubble Tea program: stream, status bar, prompt cards, blocks
@@ -93,8 +108,11 @@ comment. Headlines:
 - `internal/update` — release-latest check and per-source upgrade hint
 
 Storage: per-session JSONL under `~/.local/share/styx/sessions/<project>/`, the
-audit trail (`styx-audit-<timestamp>.jsonl`) in the project directory, and
-project memory in `STYX.md`.
+audit trail (`styx-audit-<timestamp>.jsonl`) in the project directory, project
+memory in `STYX.md`, and — never in the repo — engagement state under
+`$XDG_DATA_HOME/styx/engagements/<project>/<engagement>/state.json`, plus the
+verified-image trust cache under `$XDG_DATA_HOME/styx/sandbox/`. Raw scanner
+artifacts live in the gitignored `.styx/out/`, where the parser tools read them.
 
 ## Install
 
