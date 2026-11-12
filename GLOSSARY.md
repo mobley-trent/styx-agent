@@ -127,6 +127,11 @@ A labeled network range grouping hosts in engagement state.
 The typed entity graph over engagement state — how hosts, services, credentials, and access
 relate.
 
+**Phase**
+A stage named by the red team skill pack's workflow text (recon, enumeration, exploitation,
+post-exploit). Prompt vocabulary, not a harness object: the harness holds no phase state and
+never advances one.
+
 **Attack path**
 A suggested route through the relationship graph from current access to a target, surfaced
 for the model to act on. A suggestion, never an auto-executed step.
@@ -152,6 +157,14 @@ An exploitable finding on a host or service current access can already reach, of
 beside an unreachable attack path. A hint rather than a priced step: naming the finding as a
 target is what prices it.
 
+**Exploitation candidate**
+An unexploited finding priced for exploitation: its cheapest positioning route plus the terminal
+exploit step, offered ranked beside the other candidates. A suggestion, never an authorization.
+
+**Exploitation plan**
+The ranked, capped list of exploitation candidates the harness offers. Not a **Plan block**:
+nothing in it is pre-authorized, and it describes no sequence of steps.
+
 **Path cost**
 The cost of an attack path: the sum of its capability steps' costs, each a base cost modified by
 the confidence and OPSEC-noise enums. A ranking, never a probability.
@@ -163,8 +176,10 @@ The compact, derived view of engagement state appended to the conversation when 
 The harness-stamped origin of a state mutation: tool or model, subagent attribution, session, and timestamp. Never model-supplied.
 
 **Exploitation autonomy level**
-The operator-set engagement flag that widens in-scope exploit approval within the rules of
-engagement. It never lifts ROE hard limits, and full autonomy is out of scope.
+The operator's engagement-file choice of whether an exploit-class call in scope is approved
+without a prompt (`auto`) or asks first (`prompt`, the default). It widens a verdict, never the
+rules of engagement: scope, destructive tagging, the time window, and `exploit_allowed` all bind
+before it, and full autonomy is out of scope.
 
 ## Parsers & artifacts
 
