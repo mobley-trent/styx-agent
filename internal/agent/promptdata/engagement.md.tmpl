@@ -6,7 +6,7 @@ Authorized targets (advisory — the harness enforces scope):
 {{range .Targets}}- {{.}}
 {{end}}
 Rules of engagement:
-- exploit-class tooling: {{if .ExploitAllowed}}allowed{{else}}forbidden{{end}}
+- exploit-class tooling: {{if .ExploitAllowed}}{{if .ExploitAuto}}allowed (auto-approved in scope){{else}}allowed (prompts in scope){{end}}{{else}}forbidden{{end}}
 - destructive-tagged calls: {{if .DestructiveForbidden}}forbidden{{else}}allowed{{end}}
 {{- if .TimeWindow}}
 - time window: {{.TimeWindow}}

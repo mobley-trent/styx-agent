@@ -46,7 +46,7 @@ func TestEngagementOpensTheStateStoreAndRegistersItsTools(t *testing.T) {
 	if dataHome := os.Getenv("XDG_DATA_HOME"); !strings.HasPrefix(h.state.Path(), dataHome) {
 		t.Errorf("store path = %q, want it under the XDG data home %q", h.state.Path(), dataHome)
 	}
-	for _, name := range []string{"state_query", "state_update", "attack_path_suggest"} {
+	for _, name := range []string{"state_query", "state_update", "attack_path_suggest", "exploit_plan_suggest"} {
 		if _, ok := h.Tools.Lookup(name); !ok {
 			t.Errorf("tool %q is not registered in engagement mode", name)
 		}
@@ -127,7 +127,7 @@ func TestSafeModeDeniesTheStateTools(t *testing.T) {
 		t.Errorf("safe mode should have no state store")
 	}
 	// The tools are registered in both modes: the rule table is what refuses.
-	for _, name := range []string{"state_query", "attack_path_suggest"} {
+	for _, name := range []string{"state_query", "attack_path_suggest", "exploit_plan_suggest"} {
 		if _, ok := h.Tools.Lookup(name); !ok {
 			t.Errorf("%s should be registered in safe mode too", name)
 		}

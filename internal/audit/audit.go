@@ -83,6 +83,11 @@ type Record struct {
 	Subagent string `json:"subagent,omitempty"`
 	// Isolation is the enforcement level in force for the call.
 	Isolation Isolation `json:"isolation,omitempty"`
+	// Autonomy is the exploitation autonomy level in force when an
+	// exploit-class call was decided (docs/exploitation-phase.md §6): a run that
+	// could exploit is legible as one from its own trail. Empty for every call
+	// that is not exploit-class.
+	Autonomy string `json:"autonomy,omitempty"`
 }
 
 // Writer appends one JSON object per decision to a per-session audit JSONL

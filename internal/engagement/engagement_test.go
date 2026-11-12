@@ -245,6 +245,8 @@ func TestParseValidFile(t *testing.T) {
 		ExploitAllowed:       true,
 		DestructiveForbidden: true,
 		TimeWindow:           &policy.TimeWindow{Start: "08:00", End: "18:00", TZ: "America/New_York"},
+		// An absent exploitation_autonomy defaults to the restrictive level.
+		ExploitationAutonomy: policy.AutonomyPrompt,
 	}
 	if got := eng.ROE(); !reflect.DeepEqual(got, wantROE) {
 		t.Errorf("ROE() = %+v, want %+v", got, wantROE)

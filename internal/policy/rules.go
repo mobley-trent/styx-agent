@@ -147,11 +147,15 @@ func DefaultRules(mode Mode) *RuleTable {
 	}
 	// The attack-path suggestion is a read of the local record, so it follows
 	// the same mode difference and carries no scope targets either
-	// (docs/attack-paths.md §6).
+	// (docs/attack-paths.md §6). The exploitation-plan ranking joins it for the
+	// same reason: both are pure local reads of the record, and neither
+	// schedules or pre-authorizes a step it suggests (docs/exploitation-phase.md
+	// §4, ADR-0006).
 	rules = append(rules,
 		Rule{Tool: "state_query", Action: stateAction, Source: "default"},
 		Rule{Tool: "state_update", Action: stateAction, Source: "default"},
 		Rule{Tool: "attack_path_suggest", Action: stateAction, Source: "default"},
+		Rule{Tool: "exploit_plan_suggest", Action: stateAction, Source: "default"},
 	)
 
 	// The parser tools are engagement-gated the same way, and for the same

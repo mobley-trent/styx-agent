@@ -37,6 +37,11 @@ const (
 	// ReasonROE is the reason when a rules-of-engagement limit hard-denied
 	// the call.
 	ReasonROE Reason = "roe"
+	// ReasonExploitApproval is the reason when an in-scope, non-destructive
+	// exploit-class call is held for the operator because the engagement's
+	// exploitation autonomy level is prompt (docs/exploitation-phase.md §2).
+	// It is a prompt, never a new verdict.
+	ReasonExploitApproval Reason = "exploit-approval"
 	// ReasonNoOperator is the reason when a promptable call was resolved with
 	// no operator attached: a non-interactive run denies what it cannot ask
 	// about, and the audit record says which silence refused it

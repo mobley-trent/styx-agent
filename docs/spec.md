@@ -284,11 +284,18 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `state_update` | write engagement state through typed, atomic ops (upserts, evidence, status, verification, edges) | no |
 | `nmap_parse` / `nuclei_parse` / `sqlmap_parse` / `gobuster_parse` / `cme_parse` / `bloodhound_parse` | parse one scanner artifact into engagement state over one harness-side pipeline (per-format extractor → atomic op batch → receipt) | no |
 | `attack_path_suggest` | suggest the cheapest costed attack paths from current access to a target host or service, or the positioning routes plus the priced exploit for a target finding; advisory text only, never scheduled | no |
+| `exploit_plan_suggest` | rank the engagement's exploitation candidates by positioning + exploit cost; advisory text only, never scheduled | no |
 
 One exec surface per mechanism: `bash` for shell, `code_exec` for language runtimes.
 Strict mode applies to all built-ins; the repair layer validates their arguments. The six
 parser tools share one strict `{path}` schema and confine that path to the session
 workspace; model `docs/parser-tool-contracts.md`.
+
+The one exception is `exploit_plan_suggest`, which takes no parameters at all: its parameter
+object declares no properties, and the provider rejects that shape under strict mode (#51),
+so it is the one built-in registered lenient. Nothing is lost — there are no arguments for
+strict mode to enforce, and the repair layer still validates whatever a call carries
+(`docs/exploitation-phase.md` §4).
 
 ### 5.2 Execution isolation (applies to `bash` and `code_exec`)
 
@@ -337,10 +344,11 @@ Nothing bypasses this order — MCP tools included.
 | `exploit-dev` | exec + fs + web_fetch + state | scope-checked, engagement-gated |
 | `log-triage` | fs-read + code_exec + state | none |
 
-"state" is `state_query` + `state_update` + `attack_path_suggest` (docs/engagement-state.md
-§7, docs/attack-paths.md §6): parsers run inside subagents, so the write path must reach them,
-provenance already carries subagent attribution, and a subagent planning the next move reads
-the same path ranking the main loop does. All four presets also receive the six parser tools
+"state" is `state_query` + `state_update` + `attack_path_suggest` + `exploit_plan_suggest`
+(docs/engagement-state.md §7, docs/attack-paths.md §6, docs/exploitation-phase.md §4): parsers
+run inside subagents, so the write path must reach them, provenance already carries subagent
+attribution, and a subagent planning the next move reads the same path ranking and exploitation
+plan the main loop does. All four presets also receive the six parser tools
 (docs/parser-tool-contracts.md §9): a subagent that runs a scanner must be able to parse what
 it produced.
 
@@ -397,6 +405,11 @@ Every tool call resolves to exactly one verdict: **allow / prompt / deny**.
   no scope targets, and it never schedules or pre-authorizes a step it suggests: acting on a
   route goes through the ordinary tools and the ordinary checks. (docs/attack-paths.md §6,
   ADR-0006)
+- `exploit_plan_suggest` joins them, for the same reason and with the same gate: it ranks the
+  exploitation candidates the record already makes eligible, as text, and the harness never
+  pins the first row, queues it, or pre-authorizes it. It carries no `ExploitClass` tag, so
+  `exploit_allowed: false` never hard-denies the *suggestion* — it prices positioning and says
+  exploitation is refused. (docs/exploitation-phase.md §4, ADR-0006)
 
 ### 6.2 Mode interaction
 
@@ -420,6 +433,12 @@ From the engagement file's ROE flags (§7.1):
 - `destructive_forbidden: true` → destructive-tagged calls hard-denied (rm-class exec,
   destructive payloads). RE sample detonation is destructive-tagged (§8.3).
 - `time_window` → network/exec outside the window denied regardless of scope.
+- `exploitation_autonomy: prompt | auto` → the approval dial (optional, default `prompt`). At
+  `prompt`, an in-scope, non-destructive exploit-class call is held for the operator; at `auto`
+  it is approved without asking, audited. `auto` is not full autonomy: it never lifts
+  `exploit_allowed: false`, never approves an out-of-scope target, never auto-detones a
+  destructive-tagged call, and never reads engagement state — it widens exactly one verdict,
+  for calls the rules of engagement already permit. (docs/exploitation-phase.md §2, ADR-0012)
 
 ROE is a standing limit, not a per-call ask.
 
@@ -428,6 +447,11 @@ ROE is a standing limit, not a per-call ask.
 When the verdict is prompt: an inline TUI card (§9.3) with **allow-once / allow-this-
 session / deny-this-session**. Session-scoped only; the prompt flow never writes
 persistent config.
+
+The reason a call is held is the engine's, and it is one of a closed set: `rule-match`,
+`out-of-scope`, `destructive`, or `exploit-approval` — the last for an in-scope,
+non-destructive exploit-class call whose engagement sets `exploitation_autonomy: prompt`.
+A new reason never introduces a new verdict (docs/exploitation-phase.md §2).
 
 ### 6.5 Audit
 
@@ -456,6 +480,7 @@ targets:                       # single authorization pool — flat, no groups
 roe:                           # machine-checked flags only — nothing expressive-but-unenforced
   exploit_allowed: true        # master gate for exploit-class tooling
   destructive_forbidden: true  # hard-denies destructive-tagged calls
+  exploitation_autonomy: prompt # optional; auto approves in-scope exploits without a prompt
   time_window:                 # optional; outside window denied regardless of scope
     start: "08:00"
     end: "18:00"
@@ -469,7 +494,11 @@ pinned IP set their expansion resolves to at load.
 ### 7.2 The engagement gate
 
 - **Strict, refuse-to-start validation**: file must parse, every target must resolve, ROE
-  flags must come from the closed v1 set. No partial scopes.
+  keys must come from the closed v1 set. No partial scopes. `exploit_allowed` and
+  `destructive_forbidden` are required — their absent values are not safe — while
+  `exploitation_autonomy` is optional and defaults to `prompt`, the restrictive value, so its
+  absence is not ambiguous. An unrecognised level refuses to start, naming the key and the two
+  accepted values.
 - **Activation only via the engagement gate**: `styx --engagement <file>` at launch, or
   `/engagement` in-session (a picker over discovered engagement files). The two doors are
   the same gate — same validation, same refusal. Forgetting the flag means safe mode,
@@ -485,7 +514,8 @@ egress rules) is torn down. Session ends also tear down (§5.2 cleanup).
 
 ### 7.4 Model visibility
 
-The harness injects a scope summary (targets, ROE flags, expiry) into the system prompt —
+The harness injects a scope summary (targets, ROE flags including the exploitation autonomy
+level, expiry) into the system prompt —
 **advisory self-restraint only**; all enforcement stays in the policy engine and the
 container egress layer. This section participates in the byte-stable prompt prefix (§3.3):
 it is set at gate activation and never mutated mid-session. The state digest and the
@@ -612,7 +642,10 @@ Decision #9. Charm v2 stack (Bubble Tea v2 + Lip Gloss v2 + Bubbles).
 **Chat-centric scrolling stream**: model output, tool results, diffs, subagent activity,
 prompt cards, and system banners render inline in one stream. A persistent one-line status
 bar always shows: operating mode (safe/engagement), active pack, model, isolation state
-(container ok / degraded), compaction level, and in-scope targets when engaged.
+(container ok / degraded), compaction level, and in-scope targets when engaged. It also
+carries `exploit auto` while the engagement's exploitation autonomy level approves in-scope
+exploits without a prompt, and nothing at `prompt` — the prompt card is already its signal
+(docs/exploitation-phase.md §7).
 
 **Two runners, one bus**: the TUI is one runner over the session event bus; the
 non-interactive line printer (`-n`, [`headless-ci.md`](headless-ci.md) §6) is the other.

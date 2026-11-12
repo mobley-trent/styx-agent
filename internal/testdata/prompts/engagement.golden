@@ -28,7 +28,7 @@ Authorized targets (advisory — the harness enforces scope):
 - app.acme.example
 
 Rules of engagement:
-- exploit-class tooling: allowed
+- exploit-class tooling: allowed (prompts in scope)
 - destructive-tagged calls: forbidden
 - expires: 2026-10-15T23:59:59Z
 

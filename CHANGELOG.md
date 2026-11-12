@@ -23,6 +23,16 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- Exploitation has an approval dial and a ranked plan. `roe.exploitation_autonomy: prompt | auto`
+  is an optional engagement key, defaulted to the restrictive `prompt`: at `auto` an in-scope,
+  non-destructive exploit-class call is approved without asking, while `exploit_allowed: false`,
+  out-of-scope targets, destructive-tagged calls, and the time window all still bind first and the
+  level never reads engagement state. The new `exploit_plan_suggest` tool ranks the eligible
+  findings by positioning + exploit cost, cheapest first, naming the ones no route reaches yet —
+  advisory text only, never scheduled or pre-authorized. The level is visible in the prompt's ROE
+  summary, the status bar (`exploit auto`), the headless identity line, and every exploit-class
+  audit entry. `Rank` sits beside `Compute` in `internal/attackpath` and re-prices nothing: a row's
+  prices are exactly what `attack_path_suggest` returns for that finding. (#142)
 - Exec runs in the verified sandbox image. The harness pins `ghcr.io/mobley-trent/styx-sandbox` by
   digest and checks its keyless signature — the certificate chains to a Fulcio root embedded in the
   binary, its SCT and Rekor timestamp verify, and the signing identity is the sandbox workflow on

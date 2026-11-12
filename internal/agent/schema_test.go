@@ -27,6 +27,7 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 		StateQueryTool(nil),
 		StateUpdateTool(nil),
 		AttackPathTool(nil, nil),
+		ExploitPlanTool(nil, nil),
 	}
 	tools = append(tools, ParserTools(dir, nil, nil)...)
 	if skillTool, ok := SkillTool(skillCatalog(t, map[string]string{
@@ -35,6 +36,13 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 		tools = append(tools, skillTool)
 	}
 	for _, tool := range tools {
+		if tool.Lenient {
+			// Strict mode is what the test covers, and this tool is the one
+			// built-in outside it: a zero-argument tool's parameter object has
+			// no properties, which the provider rejects outright. Its schema is
+			// pinned by its own test instead.
+			continue
+		}
 		t.Run(tool.Name, func(t *testing.T) {
 			var schema map[string]any
 			if err := json.Unmarshal(tool.Parameters, &schema); err != nil {

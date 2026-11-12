@@ -127,7 +127,10 @@ func (h *Harness) printIdentity() {
 	_, eng := h.modeAndEngagement()
 	where := "safe mode"
 	if eng != nil {
-		where = "engagement " + eng.Name()
+		// The level rides the identity line: a run that can exploit is legible
+		// as one from its own output, without reading the engagement file
+		// (docs/exploitation-phase.md §6).
+		where = fmt.Sprintf("engagement %s · exploit %s", eng.Name(), eng.ROE().AutonomyLevel())
 	}
 	_, _ = fmt.Fprintf(h.errWriter(), "styx: %s · %s · session %s\n",
 		h.Version, where, shortID(h.SessionID()))

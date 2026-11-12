@@ -62,6 +62,10 @@ type roeDoc struct {
 	ExploitAllowed       *bool      `yaml:"exploit_allowed"`
 	DestructiveForbidden *bool      `yaml:"destructive_forbidden"`
 	TimeWindow           *windowDoc `yaml:"time_window"`
+	// ExploitationAutonomy is optional because its absent value is the
+	// restrictive one (prompt), so absence is not ambiguous the way an absent
+	// destructive_forbidden would be (docs/exploitation-phase.md §2).
+	ExploitationAutonomy *string `yaml:"exploitation_autonomy"`
 }
 
 // windowDoc is the optional ROE time window (§7.1). TZ is an IANA location
@@ -331,6 +335,10 @@ func parseROE(doc *roeDoc) (*policy.ROE, []error) {
 			}
 		}
 	}
+	autonomy, autonomyErr := parseAutonomy(doc.ExploitationAutonomy)
+	if autonomyErr != nil {
+		errs = append(errs, autonomyErr)
+	}
 	if len(errs) > 0 {
 		return nil, errs
 	}
@@ -338,7 +346,24 @@ func parseROE(doc *roeDoc) (*policy.ROE, []error) {
 		ExploitAllowed:       *doc.ExploitAllowed,
 		DestructiveForbidden: *doc.DestructiveForbidden,
 		TimeWindow:           window,
+		ExploitationAutonomy: autonomy,
 	}, nil
+}
+
+// parseAutonomy validates the optional exploitation approval level by name and
+// defaults an absent key to the restrictive value. An unknown value refuses to
+// start: the level widens a verdict, so a typo must never silently mean prompt
+// while reading as something else.
+func parseAutonomy(raw *string) (policy.Autonomy, error) {
+	if raw == nil {
+		return policy.AutonomyPrompt, nil
+	}
+	autonomy := policy.Autonomy(strings.TrimSpace(*raw))
+	if !autonomy.Valid() {
+		return "", fmt.Errorf("%w: roe.exploitation_autonomy %q: want %q or %q",
+			ErrROE, *raw, policy.AutonomyPrompt, policy.AutonomyAuto)
+	}
+	return autonomy, nil
 }
 
 // validate checks the window is usable at load, not at first denied call: a

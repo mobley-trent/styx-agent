@@ -92,6 +92,11 @@ type Status struct {
 	// Targets is the in-scope target summary while engagement mode is active
 	// ("scope 10.0.0.0/24,…"); empty in safe mode (§9.1).
 	Targets string
+	// Autonomy is the exploitation-autonomy marker ("exploit auto") while the
+	// engagement's level approves in-scope exploits without a prompt; empty at
+	// prompt, where the prompt card is already the signal
+	// (docs/exploitation-phase.md §7).
+	Autonomy string
 	// Session is the current session ID, short-form.
 	Session string
 	// Isolation is the container enforcement level ("container" or
@@ -901,6 +906,9 @@ func (m *Model) statusLine() string {
 	}
 	if status.Targets != "" {
 		parts = append(parts, status.Targets)
+	}
+	if status.Autonomy != "" {
+		parts = append(parts, status.Autonomy)
 	}
 	if status.Pending != "" {
 		parts = append(parts, status.Pending)

@@ -270,6 +270,41 @@ func TestEngagementContextRendersROE(t *testing.T) {
 	}
 }
 
+// TestEngagementContextRendersAutonomy pins the level in the model-visible ROE
+// summary (docs/exploitation-phase.md §7): the model is told its own approval
+// posture, and the restrictive reading names the prompt.
+func TestEngagementContextRendersAutonomy(t *testing.T) {
+	cases := []struct {
+		name    string
+		auto    bool
+		allowed bool
+		want    string
+	}{
+		{"auto", true, true, "exploit-class tooling: allowed (auto-approved in scope)"},
+		{"prompt", false, true, "exploit-class tooling: allowed (prompts in scope)"},
+		{"forbidden", true, false, "exploit-class tooling: forbidden"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prompt, err := BuildSystemPrompt(PromptInput{
+				Mode: policy.ModeEngagement,
+				Engagement: &EngagementContext{
+					Name:           "acme-q4-redteam",
+					Targets:        []string{"10.0.0.0/24"},
+					ExploitAllowed: tc.allowed,
+					ExploitAuto:    tc.auto,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(prompt, tc.want) {
+				t.Errorf("engagement prompt is missing %q", tc.want)
+			}
+		})
+	}
+}
+
 // TestSystemPromptPackInjection is the injection-trigger table at the prompt
 // seam: each detection trigger swaps the matching pack's compact section for
 // its full workflow section, and nothing else moves.
