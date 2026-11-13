@@ -91,7 +91,12 @@ implementations follow once each design is decided.
     boundary in
     [ADR-0018](adr/0018-public-source-reach-is-a-class-not-a-target-check.md).
 13. **MCP remote/HTTP transport + OAuth.** Extend `internal/mcpclient` beyond stdio, behind
-    the same policy gate.
+    the same policy gate. Decided in [`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md):
+    streamable HTTP beside stdio in one server list, an OAuth grant taken only on an explicit
+    operator action with its token stored outside the repo, and the endpoint treated as declared
+    infrastructure rather than a target — boundary in
+    [ADR-0019](adr/0019-a-remote-mcp-endpoint-is-infrastructure-never-a-target.md) and
+    [ADR-0020](adr/0020-authorization-is-an-operator-act-never-a-session-side-effect.md).
 14. **Child-session UX.** Expose subagent runs as inspectable sessions.
 15. **Provider breadth + per-agent model routing.** General OpenAI-compatible endpoints, a
     per-agent model override, and a small model for title/summary work; DeepSeek stays the
