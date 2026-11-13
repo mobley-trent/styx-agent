@@ -72,8 +72,10 @@ implementations follow once each design is decided.
    diff-scoped PR scans need: with a target-declaring artifact in the tree, `--scope-mode diff` /
    `--diff-base` can narrow a run to the targets a change actually declares
    ([`docs/headless-ci.md`](headless-ci.md) §11).
-10. **Report generation + local run viewer.** Markdown/JSON (later SARIF) generated from
-    engagement state; a `view`-class viewer over the existing session/audit JSONL.
+10. **Report generation + local run viewer.** A Markdown report rendered from engagement state and
+    the engagement file's ROE — never the audit trail — and a `view`-class viewer over the existing
+    session JSONL. Decided in [`docs/reports-and-viewer.md`](reports-and-viewer.md), boundary in
+    [ADR-0015](adr/0015-a-report-renders-state-and-the-roe-never-the-audit.md).
 11. **Specialist subagents + parallel orchestration.** Add webapp, identity (AD), post-exploit,
     and critic presets with context carry. **One nesting level is retained for now** (spec
     §4.2); deepening it stays a conscious later decision.
@@ -148,4 +150,6 @@ ticket, so `--max-budget` is absent from the tree; that work is tracked by
 [#153](https://github.com/mobley-trent/styx-agent/issues/153). The rest — the sandbox image, the
 headless run with its export and severity gate, and the exploitation phase with the autonomy
 level — is shipped. Of the v1.3 reach designs, the **browser and proxy** are decided in
-[`docs/browser-and-proxy.md`](browser-and-proxy.md); the rest are open.
+[`docs/browser-and-proxy.md`](browser-and-proxy.md), the **API specification** in
+[`docs/api-spec-targets.md`](api-spec-targets.md), and **reports and the run viewer** in
+[`docs/reports-and-viewer.md`](reports-and-viewer.md); the rest are open.
