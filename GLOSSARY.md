@@ -96,6 +96,20 @@ and tampering are separate acts; it never pauses traffic waiting for a human.
 The recorded exchange stream of one session, kept on disk as evidence. It holds real bytes;
 sensitive values are redacted where the capture becomes model context, never on disk.
 
+**Web search**
+The harness's own search-provider capability: query text out, third-party result text back, and
+never a page fetch. Harness-owned because a provider call the harness cannot see would be reach
+nobody authorized.
+
+**Public-source reach**
+A call that reaches a host the engagement does not authorize, on the run's behalf — a search query
+handed to the provider. Authorized as a class by the engagement file's OSINT permission, never by
+the target pool: the pool says what styx may act against, not what it may tell a vendor.
+
+**Search result**
+One hit a provider returns: a title, a URL, a snippet. Third-party text about a page nobody in the
+harness read — an address, never a destination, and never an observation of the target.
+
 ## API declarations
 
 **API declaration**

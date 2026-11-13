@@ -278,6 +278,7 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `code_exec` | multi-language snippets (`lang` parameter; python3 first) against runtimes present in the container image (`python3` and `node` are promised by the default sandbox image, [`docs/sandbox-image.md`](sandbox-image.md) §2.1) | container egress rules apply |
 | `web_fetch` | harness-side URL fetch | scope-checked |
 | `ssh_logs` | read-only remote log fetch over SSH; harness-enforced read-only command allowlist (cat/tail/grep/zgrep-class) | scope-checked |
+| `web_search` | harness-side web search through the compiled-in provider; results are untrusted third-party text and are never fetched | public-source reach (`roe.osint_allowed`) |
 | `dispatch_subagent` | spawn a role-preset subagent | n/a (delegates to its tools) |
 | `skill` | invoke a loaded agent skill (§8.4) | delegates to its steps |
 | `state_query` | read engagement state: entities, findings, neighborhood reads over the relationship graph | no |
@@ -293,7 +294,10 @@ parser tools share one strict `{path}` schema and confine that path to the sessi
 workspace; model `docs/parser-tool-contracts.md`. `api_spec_load` shares that shape without being a
 parser: it reads a declaration rather than scanner output, writes only `host` entities tagged
 `declared`, and refuses any server the engagement does not already authorize; model
-[`docs/api-spec-targets.md`](api-spec-targets.md).
+[`docs/api-spec-targets.md`](api-spec-targets.md). `web_search` is the one tool that reaches a host
+the engagement does not authorize: a query has no destination, so it carries no scope targets and
+is gated by `roe.osint_allowed` instead — a written permission for a class of disclosure, never a
+target check; model [`docs/web-search-and-osint.md`](web-search-and-osint.md) §4, ADR-0018.
 
 The one exception is `exploit_plan_suggest`, which takes no parameters at all: its parameter
 object declares no properties, and the provider rejects that shape under strict mode (#51),
@@ -443,7 +447,14 @@ From the engagement file's ROE flags (§7.1):
   mode (recon/scan unaffected).
 - `destructive_forbidden: true` → destructive-tagged calls hard-denied (rm-class exec,
   destructive payloads). RE sample detonation is destructive-tagged (§8.3).
-- `time_window` → network/exec outside the window denied regardless of scope.
+- `osint_allowed` → the written permission for **public-source reach**: a search query handed to the
+provider, which discloses the query text to a third party. Optional, absent = forbidden, so
+existing files keep loading; while false, a public-source-reach call is hard-denied through the ROE
+check and is never promptable. It authorizes a *class* of disclosure, never a target — the target
+pool says what styx may act against, not what it may tell a vendor
+([`docs/web-search-and-osint.md`](web-search-and-osint.md) §4, ADR-0018).
+- `time_window` → network/exec outside the window denied regardless of scope. A public-source-reach
+  call is network for this limit.
 - `exploitation_autonomy: prompt | auto` → the approval dial (optional, default `prompt`). At
   `prompt`, an in-scope, non-destructive exploit-class call is held for the operator; at `auto`
   it is approved without asking, audited. `auto` is not full autonomy: it never lifts
@@ -492,6 +503,7 @@ roe:                           # machine-checked flags only — nothing expressi
   exploit_allowed: true        # master gate for exploit-class tooling
   destructive_forbidden: true  # hard-denies destructive-tagged calls
   exploitation_autonomy: prompt # optional; auto approves in-scope exploits without a prompt
+  osint_allowed: false        # optional; permits web search, which discloses query text to a provider
   time_window:                 # optional; outside window denied regardless of scope
     start: "08:00"
     end: "18:00"
@@ -526,7 +538,7 @@ egress rules) is torn down. Session ends also tear down (§5.2 cleanup).
 ### 7.4 Model visibility
 
 The harness injects a scope summary (targets, ROE flags including the exploitation autonomy
-level, expiry) into the system prompt —
+level and the OSINT permission, expiry) into the system prompt —
 **advisory self-restraint only**; all enforcement stays in the policy engine and the
 container egress layer. This section participates in the byte-stable prompt prefix (§3.3):
 it is set at gate activation and never mutated mid-session. The state digest and the
@@ -738,7 +750,10 @@ shadows global on name collision (§8.4).
 **Env-only.** `DEEPSEEK_API_KEY` from the environment; never in config files, never in
 model context, never persisted by styx. Its absence is not a startup error: the harness
 starts degraded and the first prompt that needs the provider fails with a message naming
-the missing variable (§1 fail on demand).
+the missing variable (§1 fail on demand). `EXA_API_KEY`, the web search provider's key, follows the
+same rule for the same reason: read once by the search client, never rendered, and absent means the
+first `web_search` fails naming the variable rather than startup refusing
+([`docs/web-search-and-osint.md`](web-search-and-osint.md) §3).
 
 ### 10.6 Engagement state
 

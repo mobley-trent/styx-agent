@@ -41,10 +41,10 @@ columns:
 | Preset | Distinctive tools | Network | Gate |
 |---|---|---|---|
 | `coder` | fs, `bash`, `code_exec` + `state` | none | none |
-| `recon` | `web_fetch`, `bash`, fs-read, `browser_*` + `state` | scope | none |
+| `recon` | `web_fetch`, `web_search`, `bash`, fs-read, `browser_*` + `state` | scope | none |
 | `exploit-dev` | exec, fs, `web_fetch`, `browser_*`, `proxy_*` + `state` | scope | engagement + `exploit_allowed` |
 | `log-triage` | fs-read, `code_exec` + `state` | none | none |
-| **`webapp`** | `browser_*`, `proxy_*`, `web_fetch`, `bash`, fs-read + `state` | scope | **engagement** |
+| **`webapp`** | `browser_*`, `proxy_*`, `web_fetch`, `web_search`, `bash`, fs-read + `state` | scope | **engagement** |
 | **`identity`** | `bash`, `code_exec`, `read_file`, `write_file`, `glob`, `grep` + `state` | scope | **engagement** |
 | **`post-exploit`** | `bash`, `code_exec`, fs incl. `edit_file`, `web_fetch` + `state` | scope | **engagement + `exploit_allowed`** |
 | **`critic`** | `state-read`, fs-read | **none** | **engagement** |
@@ -68,8 +68,10 @@ allowlists are already the norm (`state`, parsers, `api_spec_load` are on all fo
 preset's identity is its prompt plus its gate, not a unique tool.
 
 The network class must stay derived from the allowlist, not trusted: the registry's `networkTools`
-check gains the `browser_*` and `proxy_*` families, so a preset declared `none` that carries a
-reach tool is a registry test failure rather than a quiet hole.
+check gains the `browser_*` and `proxy_*` families and `web_search`, so a preset declared `none`
+that carries a reach tool is a registry test failure rather than a quiet hole. `web_search` reaches
+a host the engagement does not authorize and is gated per call by `roe.osint_allowed`, not by the
+preset ([`docs/web-search-and-osint.md`](web-search-and-osint.md) §10).
 
 ### 2.1 `webapp` — the mode-gated HTTP specialist
 
@@ -98,7 +100,8 @@ policy anyway. That is a prompt-level posture, stated as one, not a boundary.
 `cme_parse` and `bloodhound_parse` arrive with `state`, so the role's job is to run the
 collectors and land their output through the parsers, then read the graph it just built. It keeps
 `write_file` because collector output is evidence and lands under `.styx/out/`. It has no
-`web_fetch`: AD work is internal network, and `recon` remains the role with general web reach.
+`web_fetch` and no `web_search`: AD work is internal network, and `recon` remains the role with
+general web reach.
 
 Under `exploit_allowed: false` it still enumerates — Kerberoasting-class steps are exploit-class
 calls, hard-denied per call — which is the behaviour §6.3 already promises.
