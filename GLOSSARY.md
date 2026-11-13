@@ -96,6 +96,27 @@ and tampering are separate acts; it never pauses traffic waiting for a human.
 The recorded exchange stream of one session, kept on disk as evidence. It holds real bytes;
 sensitive values are redacted where the capture becomes model context, never on disk.
 
+## API declarations
+
+**API declaration**
+An OpenAPI, Swagger, or Postman document saying what an API offers and where it is served. A fact
+source, never an authorization source: it names a surface, and the engagement decides whether any of
+it is reachable.
+
+**Declared host**
+A host an API declaration serves from, recorded in engagement state tagged `declared` because nothing
+observed it. It is recorded at all only because its address was inside the engagement's pool at load.
+
+**Declared surface**
+The endpoint inventory a load produces — each operation's method, path, effective server, and auth
+*requirement* — written as a derived artifact beside the receipt. A rendering of a document, not
+evidence of anything.
+
+**Refused server**
+A server a declaration names that the engagement does not authorize, or one that cannot be resolved or
+has no HTTP scheme. Named with its reason and never silently skipped; the operations under it are
+reported unavailable.
+
 ## Sandbox image
 
 **Sandbox image**

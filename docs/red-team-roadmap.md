@@ -65,10 +65,13 @@ implementations follow once each design is decided.
    interception/replay proxy, scope-checked like any network tool. Decided in
    [`docs/browser-and-proxy.md`](browser-and-proxy.md): both are harness-side built-ins, and the
    proxy is the scope edge for reach traffic that is not itself a tool call.
-9. **OpenAPI/Postman-driven API testing.** An API spec can be a target; its declared base
-   URLs are authorized inside the engagement. It also supplies what diff-scoped PR scans need:
-   with a target-declaring artifact in the tree, `--scope-mode diff` / `--diff-base` can narrow a
-   run to the targets a change actually declares ([`docs/headless-ci.md`](headless-ci.md) §11).
+9. **OpenAPI/Postman-driven API testing.** An API spec can be a target; its declared servers are
+   usable **only where the engagement already authorizes them** — a declaration is a fact, never a
+   scope grant. Decided in [`docs/api-spec-targets.md`](api-spec-targets.md), boundary in
+   [ADR-0014](adr/0014-a-specification-declares-facts-never-authorization.md). It also supplies what
+   diff-scoped PR scans need: with a target-declaring artifact in the tree, `--scope-mode diff` /
+   `--diff-base` can narrow a run to the targets a change actually declares
+   ([`docs/headless-ci.md`](headless-ci.md) §11).
 10. **Report generation + local run viewer.** Markdown/JSON (later SARIF) generated from
     engagement state; a `view`-class viewer over the existing session/audit JSONL.
 11. **Specialist subagents + parallel orchestration.** Add webapp, identity (AD), post-exploit,

@@ -283,13 +283,17 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `state_query` | read engagement state: entities, findings, neighborhood reads over the relationship graph | no |
 | `state_update` | write engagement state through typed, atomic ops (upserts, evidence, status, verification, edges) | no |
 | `nmap_parse` / `nuclei_parse` / `sqlmap_parse` / `gobuster_parse` / `cme_parse` / `bloodhound_parse` | parse one scanner artifact into engagement state over one harness-side pipeline (per-format extractor → atomic op batch → receipt) | no |
+| `api_spec_load` | load an OpenAPI 3.0/3.1, Swagger 2.0, or Postman v2.1 document into the declared surface: in-scope servers become `declared` hosts, the endpoint inventory is written as a derived artifact, and an out-of-scope declaration is refused by name — never a scope grant | no |
 | `attack_path_suggest` | suggest the cheapest costed attack paths from current access to a target host or service, or the positioning routes plus the priced exploit for a target finding; advisory text only, never scheduled | no |
 | `exploit_plan_suggest` | rank the engagement's exploitation candidates by positioning + exploit cost; advisory text only, never scheduled | no |
 
 One exec surface per mechanism: `bash` for shell, `code_exec` for language runtimes.
 Strict mode applies to all built-ins; the repair layer validates their arguments. The six
 parser tools share one strict `{path}` schema and confine that path to the session
-workspace; model `docs/parser-tool-contracts.md`.
+workspace; model `docs/parser-tool-contracts.md`. `api_spec_load` shares that shape without being a
+parser: it reads a declaration rather than scanner output, writes only `host` entities tagged
+`declared`, and refuses any server the engagement does not already authorize; model
+[`docs/api-spec-targets.md`](api-spec-targets.md).
 
 The one exception is `exploit_plan_suggest`, which takes no parameters at all: its parameter
 object declares no properties, and the provider rejects that shape under strict mode (#51),
@@ -350,7 +354,9 @@ run inside subagents, so the write path must reach them, provenance already carr
 attribution, and a subagent planning the next move reads the same path ranking and exploitation
 plan the main loop does. All four presets also receive the six parser tools
 (docs/parser-tool-contracts.md §9): a subagent that runs a scanner must be able to parse what
-it produced.
+it produced. All four also receive `api_spec_load`
+([`docs/api-spec-targets.md`](api-spec-targets.md) §8): a subagent told to test an API must be able
+to read the API's own declaration.
 
 None receive `dispatch_subagent`. Presets are pack-agnostic (§8.5).
 
@@ -400,6 +406,11 @@ Every tool call resolves to exactly one verdict: **allow / prompt / deny**.
   them where there is no store. They carry no scope targets — the artifact is a local file
   and a parse reaches no network — so the rule table alone decides.
   (docs/parser-tool-contracts.md §9)
+- `api_spec_load` is gated the same way and for the same reason: safe mode denies it (no pool to
+  check a declaration against, no store for the host) and engagement mode allows it, audited. It
+  carries no scope targets of its own — every declared server was checked at load, and the requests
+  that follow it are ordinary network calls, checked as they always are. **A declaration is a scope
+  check, never a scope grant.** ([`docs/api-spec-targets.md`](api-spec-targets.md) §3, §8, ADR-0014)
 - `attack_path_suggest` is gated identically — safe mode denies it, engagement mode allows it,
   audited — because it is a read of the same local record. It is pure local computation with
   no scope targets, and it never schedules or pre-authorizes a step it suggests: acting on a
@@ -752,6 +763,11 @@ the missing variable (§1 fail on demand).
   parser tools read artifacts from the session workspace and, beside `state_update`, are
   the only path into the store; the pending-parse watch over that directory is how the
   harness notices a scan nobody parsed (`docs/parser-tool-contracts.md` §3–§4).
+- A loaded API document's endpoint inventory is a **derived** artifact under `.styx/out/api/`:
+  gitignored with the rest of that directory, rewritten on each load of the same document, and
+  outside the pending-parse watch — the watch is for scanner output, and no parser reads a rendering
+  of a document the repository already holds
+  ([`docs/api-spec-targets.md`](api-spec-targets.md) §4.2).
 - Implementation: `internal/engagementstate`; model `docs/engagement-state.md`, rationale
   ADR-0004. Parser framework: `internal/parsers`; contract `docs/parser-tool-contracts.md`,
   rationale ADR-0005.
