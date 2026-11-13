@@ -371,15 +371,24 @@ validates MCP tool arguments itself regardless of server-side strictness. Recomm
 servers per pack: §8.6. styx ships none.
 
 Implementation: servers are configured per project under `mcp.servers` in
-`.styx/config.yaml` (`name`, `command`, `args`, `env`, `disabled`), launched over stdio via
-the official Go SDK, and their tools registered as `mcp__<server>__<tool>`. An MCP tool
+`.styx/config.yaml`, and their tools register as `mcp__<server>__<tool>` — one list, one name
+namespace, two transports. An entry is **stdio** (`name`, `command`, `args`, `env`, `disabled`;
+launched as a subprocess via the official Go SDK) or **remote** (`transport: http`, `url`, `auth`,
+and its limits; connected over streamable HTTP). With `transport` absent the entry is inferred from
+`command` / `url`, so every existing config parses unchanged; `sse` is refused by name. An MCP tool
 call follows the same normative order as any built-in (§5.3) — schema validation against
 the server's own advertised input schema, then the policy engine, then the audit write,
 then dispatch — and the tool name family is addressable by the rule table (`mcp__*`,
 `mcp__<server>__*`). A malformed call is repaired or denied by the harness and never
-passed through. Connection lifecycle (connecting / ready / failed / closed) is emitted on
-the session bus and rendered in the stream and the status line; a server that fails to
-launch or disconnects mid-session is a visible tool-level error, never a loop crash.
+passed through. Connection lifecycle (connecting / ready / auth_required / auth_failed /
+failed / closed) is emitted on the session bus and rendered in the stream and the status line; a
+server that fails to launch, cannot authenticate, or disconnects mid-session is a visible tool-level
+error, never a loop crash. A remote server's OAuth grant is taken only on an explicit operator
+action, lives outside the repository at mode `0600`, and is audited by metadata — issuer, scopes,
+expiry — never by value ([`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md) §5–§7,
+ADR-0020). A remote endpoint is declared infrastructure, not a target: it is never scope-checked and
+never part of the container's egress allowlist, and the server's own downstream I/O is outside scope
+enforcement (ADR-0019).
 
 ---
 
@@ -555,6 +564,10 @@ engagement state changes mid-session, so they cannot be part of that byte-stable
   operator-owned. Secrets and real engagement targets never leave the operator's machine
   except into the audit file itself.
 - **Fail closed**: audit-write failure denies the tool call.
+- The audit also records a remote MCP server's authorization, refresh, and revocation as their own
+  entry kind (server, issuer, scopes, expiry) rather than a verdict: a security action that is not a
+  tool call still must not go unrecorded, and an authorization whose entry cannot be written is
+  refused ([`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md) §6, §9).
 - Engagement end appends a timestamped engagement-notes block to STYX.md (§10.2).
 
 ---
@@ -693,7 +706,9 @@ Inline cards at the point the action occurred: tool name, parameters, risk class
 ### 9.4 Slash commands
 
 Core ten: `/help` `/compact` `/clear` `/resume` `/model` `/mode` `/engagement` `/pack`
-`/status` `/memory` — plus `/skills` and `/<skill-name>` for agent skills (§8.4).
+`/status` `/memory` — plus `/skills` and `/<skill-name>` for agent skills (§8.4), and `/mcp` for the
+server panel: transport, status, auth state, tool count, and the *authorize* / *revoke* actions for a
+remote server ([`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md) §13).
 
 ### 9.5 Degraded isolation & subagent rendering
 
@@ -737,7 +752,11 @@ Decision #9; compaction session events from #12.
   `.styx/config.yaml`. Project wins on conflict. Consistent with `engagement.yaml`.
 - Keys named by decisions: `model` (pinned IDs), permission-rule overrides,
   `compaction.mode` (default `auto`) / `compaction.threshold` (0.85) /
-  `compaction.keep_turns` (10), `update_notifier` (default on).
+  `compaction.keep_turns` (10), `update_notifier` (default on), and the `mcp.servers[]` entry keys —
+  `transport` (`stdio` / `http`, inferred from `command` / `url` when absent), `url`, `auth`
+  (`oauth` for an `http` entry whose key is absent, `bearer`, `none`), `token_env`, `client_id`,
+  `timeout` (30s), `connect_timeout` (10s), `max_response_bytes` (1 MiB), `max_retries` (3)
+  ([`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md) §2).
 - New keys additive; readers tolerate unknown keys (same-major contract).
 
 ### 10.4 Skills directories
@@ -754,6 +773,14 @@ the missing variable (§1 fail on demand). `EXA_API_KEY`, the web search provide
 same rule for the same reason: read once by the search client, never rendered, and absent means the
 first `web_search` fails naming the variable rather than startup refusing
 ([`docs/web-search-and-osint.md`](web-search-and-osint.md) §3).
+
+**One stored credential, and it is not a variable.** A remote MCP server's OAuth grant is the
+harness's only persisted secret: `~/.local/share/styx/mcp/<project>/<server>-<hash>/token.json` at
+mode `0600`, outside the repository, keyed by server plus endpoint hash so an edited URL never
+inherits a grant issued to a different host. It never enters config, the system prompt, a tool
+result, a session file, or an audit param; the records carry the grant's issuer, scopes, and expiry
+instead ([`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md) §6). A static bearer token stays
+env-only through `token_env`, on the same rule as the keys above.
 
 ### 10.6 Engagement state
 

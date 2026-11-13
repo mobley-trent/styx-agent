@@ -110,6 +110,20 @@ the target pool: the pool says what styx may act against, not what it may tell a
 One hit a provider returns: a title, a URL, a snippet. Third-party text about a page nobody in the
 harness read — an address, never a destination, and never an observation of the target.
 
+## Remote MCP
+
+**Remote MCP server**
+An MCP server the harness reaches over streamable HTTP at an endpoint the operator declares, rather
+than a subprocess it launches. Its endpoint is infrastructure, never a target.
+
+**Server authorization**
+The OAuth grant styx holds for one remote MCP server: its issuer, scopes, expiry, and the token that
+never reaches model context. Taken only by an explicit operator act, and revocable by deleting it.
+
+**Authorization card**
+The live-region ask that starts a server authorization. Not a **Permission prompt**: it authorizes a
+server rather than a tool call, and no policy verdict produced it.
+
 ## API declarations
 
 **API declaration**
