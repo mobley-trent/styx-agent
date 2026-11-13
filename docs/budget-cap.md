@@ -89,6 +89,7 @@ produced it. What reaches that bus:
 | Compaction summary turn | yes | `internal/agent/summarize.go` emits its usage on the same bus |
 | State-digest append | nothing to count | the digest is harness text, not a model call |
 | Tool execution | nothing to count | the ceiling measures model spend (§1) |
+| Search-provider query | nothing to count | not a model turn, so not measurable from usage accounting; bounded by `max_results` and the operator's plan instead ([`docs/web-search-and-osint.md`](web-search-and-osint.md) §9) |
 
 **"Across root and child agents" is not an aggregation problem; it is the shape the code already
 has.** A subagent is a tool call whose loop shares the session's emitter, so there is no second

@@ -84,7 +84,12 @@ implementations follow once each design is decided.
     dispatching several runs in one turn under a four-run concurrency cap, and delegation is
     allowed in engagement mode because it authorizes nothing
     ([ADR-0016](adr/0016-delegation-authorizes-nothing.md)).
-12. **Web search / OSINT tool.** A scope-checked network tool.
+12. **Web search / OSINT tool.** A harness-side search tool whose query has no destination, so
+    the scope check has nothing to match: a written `roe.osint_allowed` permission authorizes the
+    disclosure instead, results are untrusted third-party text, and nothing they mention becomes
+    engagement state. Decided in [`docs/web-search-and-osint.md`](web-search-and-osint.md),
+    boundary in
+    [ADR-0018](adr/0018-public-source-reach-is-a-class-not-a-target-check.md).
 13. **MCP remote/HTTP transport + OAuth.** Extend `internal/mcpclient` beyond stdio, behind
     the same policy gate.
 14. **Child-session UX.** Expose subagent runs as inspectable sessions.
