@@ -484,7 +484,9 @@ supply the targets to narrow *to*, so the flag does not ship in v1.2.
   ([`docs/parser-tool-contracts.md`](parser-tool-contracts.md) §3). Those files cannot appear in a
   PR.
 - **The first target-declaring artifact is v1.3's.** An OpenAPI/Postman document whose declared
-  base URLs the engagement authorizes is roadmap item 9, not item 5.
+  servers the engagement authorizes is roadmap item 9, not item 5 — and it is now decided:
+  [`docs/api-spec-targets.md`](api-spec-targets.md) is the declaration source §11 waited for, and
+  §11.3 records what changed on contact with a real declaration.
 
 Shipping the flag ahead of that source leaves two dishonest implementations: derive nothing, so a
 "diff-scoped" scan silently tests nothing or falls back to everything; or scrape target literals
@@ -501,7 +503,7 @@ These are fixed; implementing `--scope-mode diff` is applying them, not re-decid
 **Declarations, never literals.** A diff becomes targets only through a file type the harness
 already understands as *declaring* them, and only for declarations the engagement authorizes.
 Literals scraped from source are not targets. A changed file that declares nothing contributes
-nothing.
+nothing — and, per §11.3, a file whose declarations cannot be read is a different case.
 
 **Intersection, never union.** Diff scope can only remove targets from the engagement's pool.
 `--scope-mode diff` requires `--engagement`: with no engagement file there is no scope to narrow to,
@@ -537,3 +539,32 @@ widening is the engagement file's job, performed by a human in a reviewed change
 **Nothing else moves.** A prompt is still denied `no-operator`, the gate still reads the store, the
 five codes still apply, and §8.6 still holds: diff scoping narrows **authorization**, the severity
 gate narrows **nothing**. `--scope-mode` accepts only `diff`; any other value is a usage error (`2`).
+
+### 11.3 The declaration source, and what changed on contact
+
+[`docs/api-spec-targets.md`](api-spec-targets.md) (#146) is the artifact §11.1 was waiting for: an
+OpenAPI 3.0/3.1, Swagger 2.0, or Postman v2.1 document declares servers, and the engagement decides
+whether any of them is a target. Three refinements follow; the rest of §11.2 is unchanged.
+
+**Which changed files declare.** A changed file is a candidate iff its extension is `.json`, `.yaml`,
+or `.yml` **and** its content carries a format key (`openapi`, `swagger`, or a Postman `info.schema`).
+A candidate is loaded by the same loader the `api_spec_load` tool uses, harness-side, with **no state
+write**: the scope is computed before the first turn, and a CI run may exit without taking one.
+Extension alone would admit every YAML in the tree; content alone would decode every changed file. A
+changed Postman **environment** file is not a declaration — it declares no server, and it is where the
+secrets are.
+
+**A broken declaration refuses the run.** A candidate that carries a format key and will not parse
+**refuses the run (`1`) before the container starts**, naming the file and the parse error. §11.2's "a
+changed file that declares nothing contributes nothing" covers a README and a document with no
+servers; it does not cover one whose declarations could not be read. A run narrowed from a document
+it failed to parse has tested nothing or everything while claiming that document's scope, and a PR
+that breaks the API's own spec is exactly what a reviewer wants stopped. *A file that declares
+nothing* contributes nothing; *a file whose declarations were unreadable* is a refusal.
+
+**Changed operations inform; hosts narrow.** The changed candidates' usable declared hosts are
+unioned and intersected with the pool, as §11.2 already says — a diff removes targets and never adds
+one. The operations a diff changed on those hosts also reach the model as run context
+(`changed: POST /users/{id}`), set in the frozen engagement context before the first turn: it aims the
+run at the change and authorizes nothing, because host level is the only granularity the gate, the
+container edge, and the audit enforce identically.
