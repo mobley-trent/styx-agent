@@ -78,7 +78,12 @@ implementations follow once each design is decided.
     [ADR-0015](adr/0015-a-report-renders-state-and-the-roe-never-the-audit.md).
 11. **Specialist subagents + parallel orchestration.** Add webapp, identity (AD), post-exploit,
     and critic presets with context carry. **One nesting level is retained for now** (spec
-    §4.2); deepening it stays a conscious later decision.
+    §4.2); deepening it stays a conscious later decision. Decided in
+    [`docs/specialist-subagents.md`](specialist-subagents.md): the critic is read-only and
+    advisory ([ADR-0017](adr/0017-a-critic-advises-and-never-records.md)), fan-out is the model
+    dispatching several runs in one turn under a four-run concurrency cap, and delegation is
+    allowed in engagement mode because it authorizes nothing
+    ([ADR-0016](adr/0016-delegation-authorizes-nothing.md)).
 12. **Web search / OSINT tool.** A scope-checked network tool.
 13. **MCP remote/HTTP transport + OAuth.** Extend `internal/mcpclient` beyond stdio, behind
     the same policy gate.
@@ -151,5 +156,6 @@ ticket, so `--max-budget` is absent from the tree; that work is tracked by
 headless run with its export and severity gate, and the exploitation phase with the autonomy
 level — is shipped. Of the v1.3 reach designs, the **browser and proxy** are decided in
 [`docs/browser-and-proxy.md`](browser-and-proxy.md), the **API specification** in
-[`docs/api-spec-targets.md`](api-spec-targets.md), and **reports and the run viewer** in
-[`docs/reports-and-viewer.md`](reports-and-viewer.md); the rest are open.
+[`docs/api-spec-targets.md`](api-spec-targets.md), **reports and the run viewer** in
+[`docs/reports-and-viewer.md`](reports-and-viewer.md), and **specialist subagents and parallel
+orchestration** in [`docs/specialist-subagents.md`](specialist-subagents.md); the rest are open.

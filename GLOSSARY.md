@@ -279,8 +279,20 @@ Its tool calls pass through the same policy engine; prompts surface live in the 
 with subagent attribution.
 
 **Role preset**
-A built-in subagent definition. v1 presets: `coder`, `recon`, `exploit-dev`,
-`log-triage`.
+A built-in subagent definition: system prompt, tool allowlist, turn bound, network class,
+and an optional engagement gate. Presets: `coder`, `recon`, `exploit-dev`, `log-triage`,
+`webapp`, `identity`, `post-exploit`, `critic`. A preset's gate follows what the role
+presumes, never what a particular call is allowed to do.
+
+**Engagement frame**
+The posture block stamped into a specialist run's prompt when it is dispatched — mode, exploit
+posture, time window, expiry — and fixed for the run's life. Posture, never authorization: no
+target list, no secret, and the policy engine stays authoritative.
+
+**Verdict block**
+The critic's fixed report shape: one line per judged finding (recommended change, reason, evidence,
+confidence) plus explicit clean and gap sections, so an empty critique is stated rather than
+implied. Plain text the main loop reads; nothing parses it.
 
 ## Skills & memory
 

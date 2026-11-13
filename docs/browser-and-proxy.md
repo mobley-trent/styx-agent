@@ -303,8 +303,9 @@ model reads them through the filtered tools below rather than by re-reading the 
   already permitted; `exploit_allowed: false` is a gate on exploitation tooling, not on replaying
   a captured request. It stays destructive-free and is audited per call.
 - **Presets** (spec §5.4): `browser_*` to `recon` and `exploit-dev`; `proxy_*` to `exploit-dev`
-  only. `coder` and `log-triage` stay network-free, as they are today. The webapp specialist
-  preset (item 11) inherits from `exploit-dev` when that design lands, not from this one.
+  only. `coder` and `log-triage` stay network-free, as they are today. The `webapp` specialist
+  preset inherits `browser_*` and `proxy_*` from `exploit-dev`'s row but is gated on an engagement
+  rather than on `exploit_allowed` ([`docs/specialist-subagents.md`](specialist-subagents.md) §2).
 - **A non-interactive run can browse only in scope**, because every prompt there is a
   `no-operator` denial (ADR-0007). Nothing here widens a headless run.
 
