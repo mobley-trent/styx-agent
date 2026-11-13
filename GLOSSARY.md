@@ -76,6 +76,26 @@ Container execution when the harness cannot enforce container egress at the host
 edge: the container gets no external network plus a harness-mediated egress path scoped to
 the engagement. A visible, audited downgrade — never silent, never the quiet default.
 
+## Reach
+
+**Browser tool**
+The harness's own browser capability: load a page, read it, act on it. Harness-owned rather than
+MCP-supplied because the harness must enforce scope on destinations the model never passes as
+arguments.
+
+**Element handle**
+The snapshot-scoped identifier an action uses to name a page element. The model can address only
+elements it has read, and a handle from an older snapshot is refused rather than guessed at.
+
+**Interception proxy**
+The harness's egress path for reach traffic: it records HTTP exchanges, replays them for the
+model, and enforces engagement scope on every request that is not itself a tool call. Recording
+and tampering are separate acts; it never pauses traffic waiting for a human.
+
+**Capture**
+The recorded exchange stream of one session, kept on disk as evidence. It holds real bytes;
+sensitive values are redacted where the capture becomes model context, never on disk.
+
 ## Sandbox image
 
 **Sandbox image**
