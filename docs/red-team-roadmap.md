@@ -62,7 +62,9 @@ implementations follow once each design is decided.
 ### Reach — v1.3
 
 8. **Browser + HTTP-proxy tooling.** A Playwright-class browser and a Caido/Burp-class
-   interception/replay proxy, scope-checked like any network tool.
+   interception/replay proxy, scope-checked like any network tool. Decided in
+   [`docs/browser-and-proxy.md`](browser-and-proxy.md): both are harness-side built-ins, and the
+   proxy is the scope edge for reach traffic that is not itself a tool call.
 9. **OpenAPI/Postman-driven API testing.** An API spec can be a target; its declared base
    URLs are authorized inside the engagement. It also supplies what diff-scoped PR scans need:
    with a target-declaring artifact in the tree, `--scope-mode diff` / `--diff-base` can narrow a
@@ -142,4 +144,5 @@ item is decided, and one is not built. The budget cap above never graduated an i
 ticket, so `--max-budget` is absent from the tree; that work is tracked by
 [#153](https://github.com/mobley-trent/styx-agent/issues/153). The rest — the sandbox image, the
 headless run with its export and severity gate, and the exploitation phase with the autonomy
-level — is shipped. Still open: the reach and provider designs.
+level — is shipped. Of the v1.3 reach designs, the **browser and proxy** are decided in
+[`docs/browser-and-proxy.md`](browser-and-proxy.md); the rest are open.
