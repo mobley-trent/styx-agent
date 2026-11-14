@@ -37,8 +37,15 @@ fails closed instead of guessing.
   line completes and the next model call is refused. Overshoot is bounded by a single turn's cost,
   not in general, because a 1M-context turn is not cheap. The graduated warnings exist to make that
   crossing rare, and the spec says so rather than implying a hard edge.
+- **The seam also runs before a run's first turn.** The check sits at the top of each turn rather
+  than at the end of the previous one, so a run that begins already at the ceiling — a nested run
+  dispatched after the root spent it — makes no model call at all. Without that, its first call
+  would be exactly the unpriced turn below, a call nobody measured that the ceiling meant to forbid.
 - **`--max-budget` cannot run against a provider that omits usage.** The refusal lands at its honest
   point of use: an unpriced turn would make the status bar, the summary, and the ceiling lie at once.
+  That turn still answers its tool calls before the run ends — tools cost no model money,
+  and every call the model made keeps its result — but no further model call follows
+  it. The run ends after the turn, never inside it.
 - **The exit-code space is untouched.** A budget stop is a broken run (`1`), so ADR-0009's five codes
   stand, no pipeline learns a sixth number, and precedence already puts broken ahead of a gate
   verdict — the gate is not consulted at all, rather than computed and outranked.

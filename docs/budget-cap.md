@@ -6,8 +6,9 @@ delivering the budget half of the roadmap's operating surface
 ([`docs/red-team-roadmap.md`](red-team-roadmap.md) §1, item 6).
 Companion to [`docs/headless-ci.md`](headless-ci.md), which decides the run itself.
 Keystone rationale: [`docs/adr/0010-a-budget-cap-is-measured-never-estimated.md`](adr/0010-a-budget-cap-is-measured-never-estimated.md).
-**Implementation:** tracked by [#153](https://github.com/mobley-trent/styx-agent/issues/153) — the
-design is decided and `--max-budget` is not yet built.
+**Implementation:** [#153](https://github.com/mobley-trent/styx-agent/issues/153) — `--max-budget`
+shipped as decided here, with the arithmetic in `internal/budget`, the seam in `internal/agent`,
+and the flag, startup refusal, and summary line in `cmd/styx` and `internal/app`.
 
 The rest of that CI surface is decided beside this document and is deliberately **not** repeated
 here: the run's shape, streams, and end conditions ([#113](https://github.com/mobley-trent/styx-agent/issues/113),
@@ -129,6 +130,13 @@ turns seam refuses its next model call at the same ceiling. A subagent stopped t
 tool error to the root — a delegated run that ran out of money is a failed delegation, not a failed
 run — and the root's own next seam then ends the run.
 
+**The check runs before every model call, including a run's first.** Because the seam sits at the
+top of each turn rather than at the end of the previous one, a run that begins already at the
+ceiling makes no model call at all. Nothing about the rule is new: it is the post-hoc rule read at
+the boundary. A subagent dispatched after the root has spent the cap is precisely such a run, and
+letting it take one turn would be the unpriced call §6 refuses — a call nobody measured that the
+ceiling was meant to forbid.
+
 ## 5. Warnings
 
 Two graduated thresholds, announced **once each per run**, in order:
@@ -172,6 +180,9 @@ usage event at all. A turn with no usage is a turn styx cannot price.
   result would be read off a run nobody capped.
 - **A reported zero is not a missing report.** Usage present with zero completion tokens is priced at
   whatever it says; only an absent payload is unpriced.
+- **The run ends after the turn, not inside it.** The unpriced turn's own tool calls still run, for
+  §4's reason: every call the model made gets a result, and a tool costs no model money. What the
+  turn cannot do is lead to another model call — there is nothing left to measure one against.
 - **Considered and rejected:** continuing with "dollars unknown" printed (the cap becomes advisory);
   counting tokens instead (the ceiling is dollars, and the provider supplied neither quantity honestly);
   treating the turn as free (an invented price, §1).

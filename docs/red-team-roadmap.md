@@ -47,10 +47,9 @@ implementations follow once each design is decided.
    `findings.sarif` (SARIF 2.1.0). Diff-scoped PR scans are **not** in v1.2: the flag needs a
    target-declaring artifact to narrow to, which item 9 introduces
    ([`docs/headless-ci.md`](headless-ci.md) §11).
-6. **USD budget cap.** A `--max-budget`-style cumulative ceiling across root and child agents
-   with graduated wrap-up warnings, enforced on the cost signal styx already tracks
-   ([`docs/budget-cap.md`](budget-cap.md)). **Decided, not yet built:** the implementation is
-   tracked by [#153](https://github.com/mobley-trent/styx-agent/issues/153).
+6. **USD budget cap.** A `--max-budget` cumulative ceiling across root and child agents with
+   graduated wrap-up warnings, enforced on the cost signal styx already tracks
+   ([`docs/budget-cap.md`](budget-cap.md)). Decided and built ([#153](https://github.com/mobley-trent/styx-agent/issues/153)).
 7. **Exploitation-phase orchestration within the ROE.** Exploitation runs as a state-driven
    phase that is auto-allowed when in-scope + engagement mode (as every in-scope action
    already is), with destructive actions still prompting; plus an explicit engagement-file
@@ -168,12 +167,10 @@ needs the target-declaring artifacts that item 9 introduces
 [`docs/sandbox-image.md`](sandbox-image.md), and the **exploitation-phase orchestration** in
 [`docs/exploitation-phase.md`](exploitation-phase.md).
 
-The v1.2 operating surface is therefore **design-complete, not implementation-complete**: every
-item is decided, and one is not built. The budget cap above never graduated an implementation
-ticket, so `--max-budget` is absent from the tree; that work is tracked by
-[#153](https://github.com/mobley-trent/styx-agent/issues/153). The rest — the sandbox image, the
-headless run with its export and severity gate, and the exploitation phase with the autonomy
-level — is shipped. Of the v1.3 reach designs, the **browser and proxy** are decided in
+The v1.2 operating surface is therefore **shipped**: every item is decided and built — the sandbox
+image, the headless run with its export and severity gate, the exploitation phase with the autonomy
+level, and the USD budget cap (`--max-budget`, [#153](https://github.com/mobley-trent/styx-agent/issues/153)),
+which was the last one outstanding. Of the v1.3 reach designs, the **browser and proxy** are decided in
 [`docs/browser-and-proxy.md`](browser-and-proxy.md), the **API specification** in
 [`docs/api-spec-targets.md`](api-spec-targets.md), **reports and the run viewer** in
 [`docs/reports-and-viewer.md`](reports-and-viewer.md), **specialist subagents and parallel

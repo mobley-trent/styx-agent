@@ -215,6 +215,14 @@ type Loop struct {
 	// what a subagent run gets: a subagent consumes state through state_query
 	// and reports to the parent, which carries the view.
 	digest StateDigest
+	// budget, when set, is the run's spend reader: the between-turns seam
+	// refuses the next model call once the ceiling is spent, and announces
+	// the graduated warnings below it (docs/budget-cap.md §4, §5). Nil is an
+	// unbudgeted run, which the seam leaves untouched.
+	budget BudgetReader
+	// budgetNote is the note text last appended, so a level is announced once
+	// per run and re-appended only when compaction evicted the note.
+	budgetNote string
 
 	// compactArmed is the hysteresis flag for auto-compaction (§4.5). It is
 	// per-loop, so a shared Compactor carries no per-conversation state.
@@ -470,6 +478,16 @@ func (l *Loop) Run(ctx context.Context, history []model.Message, input string) (
 			return Result{Turns: turn - 1, Messages: conversation(messages)}, err
 		}
 
+		// The budget is a between-turns concern (docs/budget-cap.md §4): the
+		// turn that crossed the ceiling has completed and its tool calls have
+		// run, so what this seam refuses is the next model call — post-hoc
+		// accounting, so the overshoot is real rather than estimated.
+		var budgetErr error
+		messages, budgetErr = l.checkBudget(messages, turn)
+		if budgetErr != nil {
+			return Result{Turns: turn - 1, Messages: conversation(messages)}, budgetErr
+		}
+
 		// Compaction is a between-turns concern (§4.5): it runs at the
 		// boundary before each model call — including the first, so an
 		// over-threshold history (a long resumed session) is compacted before
@@ -501,7 +519,17 @@ func (l *Loop) Run(ctx context.Context, history []model.Message, input string) (
 			Calls:     callRefs(out.calls),
 		})
 
+		// A completed turn the provider reported no usage for is a turn the
+		// cap cannot price, so a budgeted run ends here rather than continue
+		// with a ceiling it is not enforcing (docs/budget-cap.md §6). The
+		// turn's own tool calls still run first: every call the model made
+		// gets a result, and a tool costs no model money either way.
+		unpriced := l.budget != nil && out.usage == nil
+
 		if len(out.calls) == 0 {
+			if unpriced {
+				return l.stopUnmeasured(turn, messages)
+			}
 			return Result{Answer: out.text, Turns: turn, Messages: conversation(messages)}, nil
 		}
 
@@ -510,6 +538,9 @@ func (l *Loop) Run(ctx context.Context, history []model.Message, input string) (
 		if err != nil {
 			l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: failureText(err)})
 			return Result{Turns: turn, Messages: conversation(messages)}, err
+		}
+		if unpriced {
+			return l.stopUnmeasured(turn, messages)
 		}
 	}
 }

@@ -66,6 +66,11 @@ type Options struct {
 	// non-empty value fails the run (exit 3) when a gated finding is at or
 	// above it (docs/headless-ci.md §8).
 	FailOn string
+	// MaxBudget is the per-run USD ceiling --max-budget named, 0 when no cap
+	// was asked for (docs/budget-cap.md). It bounds model spend only — root,
+	// subagent, repair, and compaction turns alike — and a spent cap ends the
+	// run as broken (exit 1) rather than as a verdict.
+	MaxBudget float64
 	// Version is the running binary's version, shown in the status line.
 	Version string
 	// SourceBuild marks an unstamped (go build / go install) binary. The update
@@ -154,6 +159,9 @@ type Harness struct {
 	// failOn is the --fail-on threshold, empty when no gate was asked for
 	// (docs/headless-ci.md §8).
 	failOn engagementstate.Severity
+	// maxBudget is the run's USD ceiling, 0 when no cap was asked for
+	// (docs/budget-cap.md). The loop reads it through the harness's Spend.
+	maxBudget float64
 
 	// model is the pinned model ID currently in force. /model swaps it without
 	// touching the byte-stable prompt prefix (§3.1).
@@ -251,6 +259,9 @@ func Run(ctx context.Context, opts Options) error {
 	if strings.TrimSpace(opts.FailOn) != "" && !opts.NonInteractive {
 		return errors.New("styx: --fail-on needs a non-interactive run")
 	}
+	if opts.MaxBudget > 0 && !opts.NonInteractive {
+		return errors.New("styx: --max-budget needs a non-interactive run")
+	}
 	h, err := Build(ctx, opts)
 	if err != nil {
 		return err
@@ -308,6 +319,13 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 	// Configuration: built-in defaults, then global, then project (§10.3).
 	cfg, err := config.Load(config.DefaultGlobalPath(), config.ProjectPath(workDir))
 	if err != nil {
+		return nil, err
+	}
+
+	// A budgeted run must be able to price every turn it makes, so a model with
+	// no configured rate refuses here — before the container is created
+	// (docs/budget-cap.md §2.1). A run without a cap never asks.
+	if err := checkBudgetModel(cfg, opts.MaxBudget); err != nil {
 		return nil, err
 	}
 
@@ -375,6 +393,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		headless:     opts.NonInteractive,
 		task:         strings.TrimSpace(opts.Task),
 		failOn:       failOn,
+		maxBudget:    opts.MaxBudget,
 		outDir:       strings.TrimSpace(opts.OutDir),
 		now:          now,
 		session:      session,
@@ -426,6 +445,25 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		h.notifier = update.NewNotifier(opts.Version, opts.UpdateFetcher)
 	}
 	return h, nil
+}
+
+// checkBudgetModel refuses a budgeted run against a model styx cannot price
+// (docs/budget-cap.md §2.1, §6). A model with none of the three rates set has
+// no price to bill, so --max-budget against it would be a ceiling nobody
+// enforces; the refusal lands before the container exists, naming the model and
+// the keys to set. A run without a cap is unaffected.
+func checkBudgetModel(cfg *config.Config, maxBudget float64) error {
+	if maxBudget <= 0 {
+		return nil
+	}
+	m, ok := cfg.ModelByID(cfg.Model)
+	if !ok {
+		return fmt.Errorf("--max-budget needs a priced model, and %q is not in the pinned model set", cfg.Model)
+	}
+	if !m.Priced() {
+		return fmt.Errorf("--max-budget cannot price model %q: set input_per_million, output_per_million, or cache_hit_per_million for it in the config", m.ID)
+	}
+	return nil
 }
 
 // loadEngagement is the engagement gate's single implementation (§7.2). Both
@@ -860,6 +898,12 @@ func (h *Harness) loopOptions() []agent.LoopOption {
 		agent.WithIsolationProvider(func() audit.Isolation { return h.isolation() }),
 		agent.WithCompactor(h.compactor),
 	}
+	// A budgeted run installs the spend reader here, so subagent loops — built
+	// from these same options — check the same ceiling, and an unbudgeted run
+	// installs nothing (docs/budget-cap.md §4).
+	if h.budgeted() {
+		opts = append(opts, agent.WithBudget(h))
+	}
 	if h.headless {
 		// No operator is attached, and that is structural rather than a special
 		// case in the operator adapter: the loop resolves every prompt to a
@@ -892,6 +936,28 @@ func newCompactor(cfg *config.Config, client model.ModelClient, modelID func() s
 		ContextWindow: window,
 	}, agent.NewDynamicModelSummarizer(client, modelID, agent.WithSummarizerUsageEmitter(emit)), nil)
 }
+
+// Spend reports the run's accumulated model spend and the ceiling it is
+// measured against: the loop's budget reader (docs/budget-cap.md §4). It reads
+// the same accumulator the status bar and the summary do, so the ceiling can
+// never disagree with the spend the operator sees.
+func (h *Harness) Spend() (spent, ceiling float64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cost, h.maxBudget
+}
+
+// budgetCap is the run's USD ceiling, 0 when no cap was asked for.
+func (h *Harness) budgetCap() float64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.maxBudget
+}
+
+// budgeted reports whether this run carries a USD ceiling. An unbudgeted run
+// installs no spend reader, so the loop's seam appends nothing and refuses
+// nothing: its transcript and its exit paths are byte-for-byte unaffected.
+func (h *Harness) budgeted() bool { return h.budgetCap() > 0 }
 
 // currentModel is the pinned model ID in force, safe to read from a running
 // loop or the UI goroutine.
