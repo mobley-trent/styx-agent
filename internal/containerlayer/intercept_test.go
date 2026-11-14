@@ -2,12 +2,14 @@ package containerlayer
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -556,17 +558,66 @@ func TestProxyRestartReusesListenerAndWritesGap(t *testing.T) {
 	}
 }
 
+func TestLargeBodyIsElidedAndRelayed(t *testing.T) {
+	payload := strings.Repeat("x", 64<<10)
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, payload)
+	}))
+	defer target.Close()
+	f := newInterceptFixture(t, target, func(capture *CaptureOptions, _ *EgressProxyOptions) {
+		capture.BodyBytes = 1024
+	})
+
+	resp, err := f.client(t).Get(target.URL + "/big")
+	if err != nil {
+		t.Fatalf("Get(/big) = %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != payload {
+		t.Fatalf("large response = %d with %d bytes, want 200 with the full %d-byte body", resp.StatusCode, len(body), len(payload))
+	}
+
+	exs := f.capture.Exchanges()
+	if len(exs) != 1 {
+		t.Fatalf("captured exchanges = %d, want 1", len(exs))
+	}
+	captured := exs[0].ResponseBody
+	if !captured.Elided || captured.Data != "" {
+		t.Errorf("captured body = %+v, want an elided body", captured)
+	}
+	if captured.Size != int64(len(payload)) {
+		t.Errorf("captured size = %d, want %d", captured.Size, len(payload))
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256([]byte(payload))); captured.SHA256 != want {
+		t.Errorf("captured digest = %q, want %q", captured.SHA256, want)
+	}
+
+	// The spill used to hold the body is gone once the exchange is relayed.
+	entries, err := os.ReadDir(f.capture.Dir())
+	if err != nil {
+		t.Fatalf("read capture dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".body-") {
+			t.Errorf("spill file %q was left behind", entry.Name())
+		}
+	}
+}
+
 func TestCaptureFailureRefusesExchange(t *testing.T) {
+	payload := strings.Repeat("would leak uncaptured", 64)
 	var hits int
 	var mu sync.Mutex
 	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		hits++
 		mu.Unlock()
-		_, _ = io.WriteString(w, "would leak uncaptured")
+		_, _ = io.WriteString(w, payload)
 	}))
 	defer target.Close()
 	f := newInterceptFixture(t, target, func(capture *CaptureOptions, _ *EgressProxyOptions) {
+		capture.BodyBytes = 16
 		capture.Open = func(string) (io.WriteCloser, error) { return failingWriter{}, nil }
 	})
 	client := f.client(t)
@@ -585,6 +636,9 @@ func TestCaptureFailureRefusesExchange(t *testing.T) {
 	}
 	if failure.Error != "capture-unavailable" || !strings.Contains(failure.Detail, "no space") {
 		t.Errorf("capture failure = %+v, want a named full-disk cause", failure)
+	}
+	if strings.Contains(failure.Detail, payload[:16]) {
+		t.Error("the refusal quoted the relayed body; a large response must not reach the client first")
 	}
 
 	// The capture is poisoned: the next exchange is refused before it leaves

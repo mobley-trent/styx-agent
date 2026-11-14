@@ -114,7 +114,7 @@ func (p *EgressProxy) interceptConnect(w http.ResponseWriter, r *http.Request) {
 	authority := net.JoinHostPort(host, port)
 
 	if err := p.verify(r.Context(), host); err != nil {
-		p.deny(w, nil, p.intercept.denied(start, http.MethodConnect, "https://"+authority, host, "https", err))
+		p.deny(w, nil, p.intercept.denied(start, requestFacts{method: http.MethodConnect, url: "https://" + authority, host: host, scheme: "https"}, err))
 		return
 	}
 	leaf, err := p.intercept.ca.Leaf(host)
@@ -199,7 +199,7 @@ func (p *EgressProxy) serveTunnelRequest(ctx context.Context, conn net.Conn, req
 		return false
 	}
 	if err := p.verify(ctx, host); err != nil {
-		p.deny(nil, conn, p.intercept.denied(start, req.Method, rawURL, host, scheme, err))
+		p.deny(nil, conn, p.intercept.denied(start, requestFacts{method: req.Method, url: rawURL, host: host, scheme: scheme}, err))
 		return false
 	}
 
@@ -207,7 +207,7 @@ func (p *EgressProxy) serveTunnelRequest(ctx context.Context, conn net.Conn, req
 	resp, err := p.transport.RoundTrip(out)
 	if err != nil {
 		if errors.Is(err, ErrNotAllowed) {
-			p.deny(nil, conn, p.intercept.denied(start, req.Method, rawURL, host, scheme, err))
+			p.deny(nil, conn, p.intercept.denied(start, requestFacts{method: req.Method, url: rawURL, host: host, scheme: scheme}, err))
 			return false
 		}
 		writeTunnelFailure(conn, err)
@@ -217,40 +217,37 @@ func (p *EgressProxy) serveTunnelRequest(ctx context.Context, conn net.Conn, req
 	removeHopHeaders(resp.Header)
 
 	keep := req.ProtoAtLeast(1, 1) && !req.Close && !resp.Close && resp.ContentLength >= 0
-	limit := p.intercept.capture.keepLimit()
-	respRec := newBodyRecorder(resp.Body, limit)
-	small, err := readUpTo(respRec, limit)
+	relay, err := readRelayBody(p.intercept.capture.dir, resp.Body, p.intercept.capture.keepLimit())
 	if err != nil {
 		writeTunnelFailure(conn, err)
 		return false
 	}
-	ex := p.intercept.exchange(start, req.Method, rawURL, host, scheme, headersOf(req.Header), requestBody(reqRec), resp, respRec)
-
-	if !small {
-		// The body is too large to hold, so it streams: the record is written
-		// after the bytes are on the wire, and a failure poisons the capture so
-		// no later exchange passes.
-		if err := writeTunnelHead(conn, resp, keep); err != nil {
-			return false
-		}
-		if _, err := conn.Write(respRec.keptBytes()); err != nil {
-			return false
-		}
-		if _, err := io.Copy(conn, respRec); err != nil {
-			return false
-		}
-		_, _ = p.intercept.capture.Write(ex)
-		return keep
+	defer relay.close()
+	body, err := relay.reader()
+	if err != nil {
+		writeTunnelFailure(conn, err)
+		return false
 	}
+	ex := p.intercept.exchange(start, requestFacts{
+		method:  req.Method,
+		url:     rawURL,
+		host:    host,
+		scheme:  scheme,
+		headers: headersOf(req.Header),
+		body:    requestBody(reqRec, p.intercept.capture.bodyMax),
+	}, resp, relay.body(p.intercept.capture.bodyMax))
 
-	// Small enough to record verbatim: the record is written before the client
-	// can see the exchange, so a full disk refuses it rather than letting it
-	// pass uncaptured (§8).
+	// The record is written before the client can see the exchange, whatever
+	// its size, so a full disk refuses it rather than letting it pass
+	// uncaptured (§8).
 	if _, err := p.intercept.capture.Write(ex); err != nil {
 		writeTunnelJSON(conn, http.StatusBadGateway, proxyDenial{Error: "capture-unavailable", Detail: err.Error()})
 		return false
 	}
-	if err := writeTunnelResponse(conn, resp, keep, respRec.keptBytes()); err != nil {
+	if err := writeTunnelHead(conn, resp, keep); err != nil {
+		return false
+	}
+	if _, err := io.Copy(conn, body); err != nil {
 		return false
 	}
 	return keep
@@ -277,7 +274,7 @@ func (p *EgressProxy) interceptForward(w http.ResponseWriter, r *http.Request) {
 	resp, err := p.transport.RoundTrip(out)
 	if err != nil {
 		if errors.Is(err, ErrNotAllowed) {
-			p.deny(w, nil, p.intercept.denied(start, r.Method, rawURL, host, scheme, err))
+			p.deny(w, nil, p.intercept.denied(start, requestFacts{method: r.Method, url: rawURL, host: host, scheme: scheme}, err))
 			return
 		}
 		writeProxyError(w, err)
@@ -286,30 +283,36 @@ func (p *EgressProxy) interceptForward(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 	removeHopHeaders(resp.Header)
 
-	limit := p.intercept.capture.keepLimit()
-	respRec := newBodyRecorder(resp.Body, limit)
-	small, err := readUpTo(respRec, limit)
+	relay, err := readRelayBody(p.intercept.capture.dir, resp.Body, p.intercept.capture.keepLimit())
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
-	ex := p.intercept.exchange(start, r.Method, rawURL, host, scheme, headersOf(r.Header), requestBody(reqRec), resp, respRec)
-
-	if !small {
-		copyHeader(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(respRec.keptBytes())
-		_, _ = io.Copy(w, respRec)
-		_, _ = p.intercept.capture.Write(ex)
+	defer relay.close()
+	body, err := relay.reader()
+	if err != nil {
+		writeProxyError(w, err)
 		return
 	}
+	ex := p.intercept.exchange(start, requestFacts{
+		method:  r.Method,
+		url:     rawURL,
+		host:    host,
+		scheme:  scheme,
+		headers: headersOf(r.Header),
+		body:    requestBody(reqRec, p.intercept.capture.bodyMax),
+	}, resp, relay.body(p.intercept.capture.bodyMax))
+
+	// The record is written before the client can see the exchange, whatever
+	// its size, so a full disk refuses it rather than letting it pass
+	// uncaptured (§8).
 	if _, err := p.intercept.capture.Write(ex); err != nil {
 		writeCaptureFailure(w, err)
 		return
 	}
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(respRec.keptBytes())
+	_, _ = io.Copy(w, body)
 }
 
 // Replay re-sends a captured exchange with the overrides the caller names and
@@ -385,7 +388,7 @@ func (p *EgressProxy) Replay(ctx context.Context, req ReplayRequest) (ReplayResu
 	resp, err := p.transport.RoundTrip(out.WithContext(ctx))
 	if err != nil {
 		if errors.Is(err, ErrNotAllowed) {
-			denied := p.intercept.denied(start, method, rawURL, u.Hostname(), u.Scheme, err)
+			denied := p.intercept.denied(start, requestFacts{method: method, url: rawURL, host: u.Hostname(), scheme: u.Scheme}, err)
 			denied.ReplayOf = src.ID
 			_, _ = p.intercept.capture.Write(denied)
 			return ReplayResult{}, fmt.Errorf("%w: replay %q to %s", ErrNotAllowed, src.ID, u.Host)
@@ -406,7 +409,14 @@ func (p *EgressProxy) Replay(ctx context.Context, req ReplayRequest) (ReplayResu
 			return ReplayResult{}, fmt.Errorf("containerlayer: read replay response: %w", err)
 		}
 	}
-	ex := p.intercept.exchange(start, method, rawURL, u.Hostname(), u.Scheme, headersOf(out.Header), bodyOf(body, p.intercept.capture.bodyMax), resp, respRec)
+	ex := p.intercept.exchange(start, requestFacts{
+		method:  method,
+		url:     rawURL,
+		host:    u.Hostname(),
+		scheme:  u.Scheme,
+		headers: headersOf(out.Header),
+		body:    bodyOf(body, p.intercept.capture.bodyMax),
+	}, resp, respRec.body(p.intercept.capture.bodyMax))
 	ex.ReplayOf = src.ID
 	receipt, err := p.intercept.capture.Write(ex)
 	if err != nil {
@@ -437,34 +447,42 @@ func (p *EgressProxy) upstreamRequest(ctx context.Context, req *http.Request, sc
 	return out, nil
 }
 
+// requestFacts is the request half of an exchange: what the proxy saw, one
+// destination, one method, one recorded body.
+type requestFacts struct {
+	method  string
+	url     string
+	host    string
+	scheme  string
+	headers []Header
+	body    Body
+}
+
 // exchange assembles the record of one exchange.
-func (i *interceptor) exchange(start time.Time, method, rawURL, host, scheme string, reqHeaders []Header, reqBody Body, resp *http.Response, respRec *bodyRecorder) Exchange {
-	ex := Exchange{
+func (i *interceptor) exchange(start time.Time, req requestFacts, resp *http.Response, respBody Body) Exchange {
+	return Exchange{
 		Time:            start,
-		Method:          method,
-		URL:             rawURL,
-		Host:            host,
-		Scheme:          scheme,
+		Method:          req.method,
+		URL:             req.url,
+		Host:            req.host,
+		Scheme:          req.scheme,
 		Status:          resp.StatusCode,
-		RequestHeaders:  reqHeaders,
+		RequestHeaders:  req.headers,
 		ResponseHeaders: headersOf(resp.Header),
-		RequestBody:     reqBody,
+		RequestBody:     req.body,
+		ResponseBody:    respBody,
 		DurationMS:      i.now().Sub(start).Milliseconds(),
 	}
-	if respRec != nil {
-		ex.ResponseBody = respRec.body(i.capture.bodyMax)
-	}
-	return ex
 }
 
 // denied is the record of a request the proxy refused on scope (§4.3).
-func (i *interceptor) denied(start time.Time, method, rawURL, host, scheme string, cause error) Exchange {
+func (i *interceptor) denied(start time.Time, req requestFacts, cause error) Exchange {
 	return Exchange{
 		Time:       start,
-		Method:     method,
-		URL:        rawURL,
-		Host:       host,
-		Scheme:     scheme,
+		Method:     req.method,
+		URL:        req.url,
+		Host:       req.host,
+		Scheme:     req.scheme,
 		Status:     http.StatusForbidden,
 		Denied:     true,
 		Reason:     "out-of-scope",
@@ -493,11 +511,11 @@ func (p *EgressProxy) deny(w http.ResponseWriter, conn net.Conn, ex Exchange) {
 
 // requestBody renders the body a proxied request forwarded, zero when it sent
 // none.
-func requestBody(rec *recordingBody) Body {
+func requestBody(rec *recordingBody, limit int64) Body {
 	if rec == nil {
 		return Body{}
 	}
-	return rec.body(rec.keepLimit - 1)
+	return rec.body(limit)
 }
 
 // bodyOf renders an override body for the record.
@@ -562,18 +580,6 @@ func writeTunnelHead(conn net.Conn, resp *http.Response, keep bool) error {
 	}
 	b.WriteString("\r\n")
 	_, err := io.WriteString(conn, b.String())
-	return err
-}
-
-// writeTunnelResponse writes a whole response over a raw connection.
-func writeTunnelResponse(conn net.Conn, resp *http.Response, keep bool, body []byte) error {
-	if err := writeTunnelHead(conn, resp, keep); err != nil {
-		return err
-	}
-	if len(body) == 0 {
-		return nil
-	}
-	_, err := conn.Write(body)
 	return err
 }
 

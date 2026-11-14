@@ -2,6 +2,7 @@ package containerlayer
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -587,6 +588,76 @@ func (b *bodyRecorder) body(limit int64) Body {
 	body.Encoding = "base64"
 	body.Data = base64.StdEncoding.EncodeToString(b.kept)
 	return body
+}
+
+// relayBody is a response body read once before it is relayed: what the
+// capture keeps, what it elided, and a source the client can then be served
+// from. A body over the verbatim bound spills into the capture directory, so
+// the record can be written before any byte reaches the client — an exchange
+// that cannot be recorded is never relayed, however large it is (§8).
+type relayBody struct {
+	rec   *bodyRecorder
+	spill *os.File
+}
+
+// body renders the captured body.
+func (b *relayBody) body(limit int64) Body { return b.rec.body(limit) }
+
+// reader serves the body that was read, from memory or from the spill file.
+func (b *relayBody) reader() (io.Reader, error) {
+	if b.spill == nil {
+		return bytes.NewReader(b.rec.keptBytes()), nil
+	}
+	if _, err := b.spill.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("containerlayer: rewind spooled response body: %w", err)
+	}
+	return b.spill, nil
+}
+
+// close removes the spill file, if there is one.
+func (b *relayBody) close() {
+	if b.spill == nil {
+		return
+	}
+	name := b.spill.Name()
+	_ = b.spill.Close()
+	_ = os.Remove(name)
+	b.spill = nil
+}
+
+// readRelayBody reads a whole response body, spilling it into dir when it
+// passes the verbatim bound. Reading it all is what buys the fail-closed
+// ordering: the digest a bounded record keeps is only known once the last byte
+// has been seen, and the client must not start receiving an exchange that is
+// not yet in the record.
+func readRelayBody(dir string, body io.Reader, keepLimit int64) (*relayBody, error) {
+	if body == nil {
+		return &relayBody{rec: newBodyRecorder(bytes.NewReader(nil), keepLimit)}, nil
+	}
+	rec := newBodyRecorder(body, keepLimit)
+	small, err := readUpTo(rec, keepLimit)
+	if err != nil {
+		return nil, fmt.Errorf("containerlayer: read response body: %w", err)
+	}
+	relay := &relayBody{rec: rec}
+	if small {
+		return relay, nil
+	}
+	//nolint:gosec // the directory is the session's capture directory.
+	spill, err := os.CreateTemp(dir, ".body-*")
+	if err != nil {
+		return nil, fmt.Errorf("containerlayer: spool response body: %w", err)
+	}
+	relay.spill = spill
+	if _, err := spill.Write(rec.keptBytes()); err != nil {
+		relay.close()
+		return nil, fmt.Errorf("containerlayer: spool response body: %w", err)
+	}
+	if _, err := io.Copy(spill, rec); err != nil {
+		relay.close()
+		return nil, fmt.Errorf("containerlayer: spool response body: %w", err)
+	}
+	return relay, nil
 }
 
 // recordingBody is a request body that records what the transport forwards,
