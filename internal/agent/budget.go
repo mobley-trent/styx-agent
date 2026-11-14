@@ -56,11 +56,11 @@ func (e *ErrBudgetExhausted) Error() string {
 	return fmt.Sprintf("budget exhausted: %s after %s", budget.Spend{Spent: e.Spent, Cap: e.Cap}, turns)
 }
 
-// ErrBudgetUnmeasured is a completed model turn whose provider reported no
-// usage, in a run that therefore cannot measure its ceiling
-// (docs/budget-cap.md §6). A cap that cannot be measured is not a cap, so the
-// run ends rather than continue while claiming one.
-var ErrBudgetUnmeasured = errors.New("budget cannot be enforced: the provider reported no usage")
+// ErrUnpricedTurn is a completed model turn whose provider reported no usage
+// — the glossary's unpriced turn — in a budgeted run that therefore cannot
+// measure its ceiling (docs/budget-cap.md §6). A cap that cannot be measured is
+// not a cap, so the run ends rather than continue while claiming one.
+var ErrUnpricedTurn = errors.New("budget cannot be enforced: the provider reported no usage")
 
 // budgetNotePrefix marks the harness-appended budget note inside a
 // conversation, the way digestPrefix marks the engagement-state digest. It is
@@ -142,6 +142,6 @@ func (l *Loop) emitBudgetEvent(sp budget.Spend, level budget.Level, turn int) {
 // usage (docs/budget-cap.md §6): the ceiling cannot be measured, so the run
 // stops rather than claim one it is not enforcing.
 func (l *Loop) stopUnmeasured(turn int, messages []model.Message) (Result, error) {
-	l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: ErrBudgetUnmeasured.Error()})
-	return Result{Turns: turn, Messages: conversation(messages)}, ErrBudgetUnmeasured
+	l.emitEvent(sessions.Event{Kind: sessions.KindError, Turn: turn, Failure: ErrUnpricedTurn.Error()})
+	return Result{Turns: turn, Messages: conversation(messages)}, ErrUnpricedTurn
 }

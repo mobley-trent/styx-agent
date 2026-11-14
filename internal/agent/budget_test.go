@@ -237,10 +237,10 @@ func TestBudgetedRunStopsOnUnpricedTurn(t *testing.T) {
 	)
 
 	_, err := loop.Run(context.Background(), nil, "work")
-	if !errors.Is(err, ErrBudgetUnmeasured) {
-		t.Fatalf("Run() = %v, want ErrBudgetUnmeasured", err)
+	if !errors.Is(err, ErrUnpricedTurn) {
+		t.Fatalf("Run() = %v, want ErrUnpricedTurn", err)
 	}
-	if got, want := ErrBudgetUnmeasured.Error(), "budget cannot be enforced: the provider reported no usage"; got != want {
+	if got, want := ErrUnpricedTurn.Error(), "budget cannot be enforced: the provider reported no usage"; got != want {
 		t.Errorf("refusal = %q, want %q", got, want)
 	}
 	if got := fake.Calls(); got != 1 {
