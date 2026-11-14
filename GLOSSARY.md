@@ -354,12 +354,30 @@ ends. Never silent, never model-invented after the fact.
 
 ## Model interaction
 
+**Provider**
+A model endpoint styx declares: its base URL, the environment variable its credential is
+read from, the capabilities it supports, and how it bills. A model belongs to exactly one;
+several may be configured at once, and one of them is the default.
+
+**Provider capability**
+A declared property of a provider that changes how the harness talks to it — schema-enforced
+tool arguments, a separate reasoning channel. Declared, never discovered, and changing only
+serialization: what may run is decided elsewhere and identically on every provider. Absent
+means the less capable behaviour, and the harness says so before a session starts.
+
+**Model route**
+The model an agent resolves to: the root's model for the main loop and for any role nothing
+routes, or the model a role names. A route, never a fallback — an unavailable provider fails
+that agent's first turn, and nothing substitutes another model behind the record's back.
+
 **Repair layer**
 The harness component that validates tool-call arguments against their schemas and
 feeds structured errors back to the model, bounded per turn.
 
 **Strict mode**
-DeepSeek's schema-enforced tool-calling mode, applied uniformly to all built-in tools.
+A provider capability: schema-enforced tool-calling, applied uniformly to all built-in tools
+where the provider declares it. Where it is absent the repair layer is the only argument
+validation, and the harness names that asymmetry before the session starts.
 
 **Compaction**
 Reduction of conversation context: tool-output truncation at capture, plus threshold-triggered compaction — old tool results are evicted first, and the oldest conversation segment is summarized into a state summary only if eviction isn't enough. Never touches the system prompt, engagement context, ROE state, or audit records. Manual `/compact` remains available as an override.

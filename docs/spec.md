@@ -69,7 +69,8 @@ Design principles (each traces to a closed ticket):
 ### Platform & provider commitments
 
 - Linux + macOS; static binaries, CGO disabled, amd64 + arm64, glibc-agnostic, macOS 13+.
-- Model provider: **DeepSeek API** only in v1, pinned model IDs, OpenAI-compatible wire.
+- Model provider: **DeepSeek API** only in v1, pinned model IDs, OpenAI-compatible wire. v1.3 adds
+declared OpenAI-compatible providers beside it ([`docs/providers-and-routing.md`](providers-and-routing.md)).
 - Container runtime: Docker (Podman via compatible socket works but is untested).
 - Source: `github.com/mobley-trent/styx-agent`, Apache-2.0.
 
@@ -146,6 +147,11 @@ Research: `docs/research/2026-09-28-deepseek-api.md`; decision #3. Environment f
 (live-verified): #10.
 
 ### 3.1 Provider & models
+
+> **Superseded for v1.3.** Providers and routing are governed by
+> [`docs/providers-and-routing.md`](providers-and-routing.md) ([ADR-0002](adr/0002-provider-breadth-and-per-agent-routing.md),
+> [ADR-0022](adr/0022-a-provider-declares-its-endpoint-and-capabilities.md)). The DeepSeek-only
+> posture below is the v1 baseline, still the shipped default.
 
 - Pin explicit model IDs — never aliases: **`deepseek-flash`** is the default;
   **`deepseek-v4-pro`** for hard reasoning. The configured IDs are validated against

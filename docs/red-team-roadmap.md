@@ -103,8 +103,13 @@ implementations follow once each design is decided.
     through the same renderer, while a running run stays the live region's business
     ([ADR-0021](adr/0021-a-child-run-is-an-address-in-its-parents-log.md)).
 15. **Provider breadth + per-agent model routing.** General OpenAI-compatible endpoints, a
-    per-agent model override, and a small model for title/summary work; DeepSeek stays the
-    default. See [ADR-0002](adr/0002-provider-breadth-and-per-agent-routing.md).
+    per-agent model override, and a small model for summary work; DeepSeek stays the default.
+    Decided in [`docs/providers-and-routing.md`](providers-and-routing.md): a provider is a
+    declaration (endpoint, credential variable, declared capabilities, billing clock), `routing:`
+    names a model per role, and a route never falls back
+    ([ADR-0002](adr/0002-provider-breadth-and-per-agent-routing.md),
+    [ADR-0022](adr/0022-a-provider-declares-its-endpoint-and-capabilities.md)). Title generation is
+    not in that design, because the tree generates none.
 
 ## 2. Sequencing
 
@@ -174,6 +179,7 @@ level — is shipped. Of the v1.3 reach designs, the **browser and proxy** are d
 [`docs/reports-and-viewer.md`](reports-and-viewer.md), **specialist subagents and parallel
 orchestration** in [`docs/specialist-subagents.md`](specialist-subagents.md), **web search** in
 [`docs/web-search-and-osint.md`](web-search-and-osint.md), **remote MCP** in
-[`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md), and **child runs** in
-[`docs/child-runs.md`](child-runs.md). The one item 15 design still open is **provider breadth and
-per-agent routing**.
+[`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md), **child runs** in
+[`docs/child-runs.md`](child-runs.md), and **provider breadth and per-agent routing** in
+[`docs/providers-and-routing.md`](providers-and-routing.md). Every v1.3 capability in §1 is decided;
+what remains is implementation.
