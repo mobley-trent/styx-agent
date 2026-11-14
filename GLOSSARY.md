@@ -306,6 +306,11 @@ level; subagents cannot dispatch subagents. Reports return as the dispatch tool 
 Its tool calls pass through the same policy engine; prompts surface live in the TUI
 with subagent attribution.
 
+**Child run**
+A subagent run inspected after the fact: its role, run id, brief, transcript, refusals, and
+report, read as a slice of the parent session's log. Not a session — it has no id, file, or
+resume of its own, and it never outlives the session that dispatched it.
+
 **Role preset**
 A built-in subagent definition: system prompt, tool allowlist, turn bound, network class,
 and an optional engagement gate. Presets: `coder`, `recon`, `exploit-dev`, `log-triage`,

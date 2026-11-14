@@ -313,10 +313,14 @@ view. Each of those is a different artifact's job or a later ticket.
 ### 6.5 The seam to child-session UX (item 14)
 
 Subagent runs are already bracketed in the JSONL (`KindSubagent` plus `subagent`/`run_id` on inner
-events), so the viewer prints them as folded blocks with **role and run attribution**, exactly as the
-transcript recorded them. A session may have children later; that becomes a second input surface
+events), so the viewer prints them as folded blocks with **role and run attribution**, exactly as the transcript recorded them. A session may have children later; that becomes a second input surface
 (choose a run, then view it) beside `styx view`, which keeps its contract: one session id, one
 transcript. No tree, no picker, no nesting depth in this design.
+
+Decided by [#151](https://github.com/mobley-trent/styx-agent/issues/151):
+[`docs/child-runs.md`](child-runs.md) makes the second surface `styx view --runs` and `--run <id>`,
+and makes a child run a slice of this same log rather than a session of its own — so the contract
+above stands, and a run is printed by the same renderer as the transcript it came from.
 
 ## 7. One renderer, two front ends
 
