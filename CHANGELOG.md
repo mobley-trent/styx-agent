@@ -22,6 +22,21 @@ file — is documented in [RELEASING.md](RELEASING.md).
   A spent cap is a broken run (exit `1`) — the gate is never consulted and the `--out` export is
   still written — a model with none of the three rates set refuses to start, and a completed turn
   with no provider usage ends the run rather than leave the ceiling unenforced. (#153)
+- The egress proxy gains an engagement-mode interception shape beside the safe-mode tunnel.
+  CONNECT is terminated with one CA per engagement at
+  `~/.local/share/styx/pki/<project>/<engagement>/`, key at `0600`, created on first use and
+  reused; every request re-resolves against the pinned IP set and is refused with a structured
+  `403` naming the reason, an `out-of-scope` audit decision, and a capture line — never a prompt.
+  Safe mode keeps a plain tunnel with no capture. Exchanges land in
+  `.styx/out/captures/<session>/capture-<n>.jsonl`, rotating at 8 MiB and naming the new segment
+  in the receipt, bodies over 256 KiB elided to size and SHA-256, a `gap` written on restart, and
+  the record written before any byte is relayed, so a full disk refuses the exchange rather than
+  letting it pass uncaptured. The capture holds the real bytes; only the model-facing reads
+  redact `Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`, and any `token`, `key`,
+  `secret`, `password`, or `session` name, which keeps an authenticated replay authenticating
+  while its credential stays out of context. Lifecycle, CA creation, and scope denials are audit
+  decisions; proxies are never a second, quiet way around scope. The container's CA trust and
+  egress forcing, the browser, and the nine reach tools follow in their own changes. (#155)
 
 ## [v0.3.0] - 2026-11-12
 
