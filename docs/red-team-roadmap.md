@@ -97,7 +97,11 @@ implementations follow once each design is decided.
     infrastructure rather than a target — boundary in
     [ADR-0019](adr/0019-a-remote-mcp-endpoint-is-infrastructure-never-a-target.md) and
     [ADR-0020](adr/0020-authorization-is-an-operator-act-never-a-session-side-effect.md).
-14. **Child-session UX.** Expose subagent runs as inspectable sessions.
+14. **Child-session UX.** Expose subagent runs as inspectable sessions. Decided in
+    [`docs/child-runs.md`](child-runs.md): a run is an address in its parent's session log, never a
+    session of its own — `styx view --runs` indexes a session's runs and `--run <id>` prints one
+    through the same renderer, while a running run stays the live region's business
+    ([ADR-0021](adr/0021-a-child-run-is-an-address-in-its-parents-log.md)).
 15. **Provider breadth + per-agent model routing.** General OpenAI-compatible endpoints, a
     per-agent model override, and a small model for title/summary work; DeepSeek stays the
     default. See [ADR-0002](adr/0002-provider-breadth-and-per-agent-routing.md).
@@ -167,5 +171,9 @@ headless run with its export and severity gate, and the exploitation phase with 
 level — is shipped. Of the v1.3 reach designs, the **browser and proxy** are decided in
 [`docs/browser-and-proxy.md`](browser-and-proxy.md), the **API specification** in
 [`docs/api-spec-targets.md`](api-spec-targets.md), **reports and the run viewer** in
-[`docs/reports-and-viewer.md`](reports-and-viewer.md), and **specialist subagents and parallel
-orchestration** in [`docs/specialist-subagents.md`](specialist-subagents.md); the rest are open.
+[`docs/reports-and-viewer.md`](reports-and-viewer.md), **specialist subagents and parallel
+orchestration** in [`docs/specialist-subagents.md`](specialist-subagents.md), **web search** in
+[`docs/web-search-and-osint.md`](web-search-and-osint.md), **remote MCP** in
+[`docs/mcp-remote-and-oauth.md`](mcp-remote-and-oauth.md), and **child runs** in
+[`docs/child-runs.md`](child-runs.md). The one item 15 design still open is **provider breadth and
+per-agent routing**.
