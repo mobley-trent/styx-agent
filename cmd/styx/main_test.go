@@ -503,6 +503,81 @@ func TestFailOnFlag(t *testing.T) {
 	}
 }
 
+// TestMaxBudgetFlag covers docs/budget-cap.md §8: a positive plain decimal with
+// at most four fractional digits, parsed into the harness's ceiling; anything
+// else — empty, zero, negative, non-numeric, an exponent, a fifth decimal — is
+// a usage error, and so is giving the flag without -n.
+func TestMaxBudgetFlag(t *testing.T) {
+	accepted := []struct {
+		value string
+		want  float64
+	}{
+		{"2.50", 2.50},
+		{"0.0025", 0.0025},
+		{"1", 1},
+		{"0.05", 0.05},
+	}
+	for _, tc := range accepted {
+		t.Run("accepts "+tc.value, func(t *testing.T) {
+			var got *app.Options
+			previous := runApp
+			runApp = func(_ context.Context, opts app.Options) error {
+				got = &opts
+				return nil
+			}
+			t.Cleanup(func() { runApp = previous })
+
+			_, stderr, code := run([]string{"styx", "-n", "scan", "--max-budget", tc.value}, "v0.1.0")
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0 (stderr=%q)", code, stderr)
+			}
+			if got == nil || got.MaxBudget != tc.want {
+				t.Fatalf("options = %+v, want MaxBudget %v", got, tc.want)
+			}
+		})
+	}
+
+	for _, value := range []string{"", "0", "-1", "abc", "1e3", "0.00025"} {
+		t.Run("refuses "+value, func(t *testing.T) {
+			previous := runApp
+			runApp = func(context.Context, app.Options) error {
+				t.Error("the harness was launched for a bad cap")
+				return nil
+			}
+			t.Cleanup(func() { runApp = previous })
+
+			_, stderr, code := run([]string{"styx", "-n", "scan", "--max-budget=" + value}, "v0.1.0")
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2 (stderr=%q)", code, stderr)
+			}
+			if !strings.Contains(stderr, "--max-budget") {
+				t.Errorf("stderr = %q, want the flag named", stderr)
+			}
+		})
+	}
+
+	t.Run("refused without -n", func(t *testing.T) {
+		previous := runApp
+		runApp = func(context.Context, app.Options) error {
+			t.Error("the harness was launched with a headless-only flag")
+			return nil
+		}
+		t.Cleanup(func() { runApp = previous })
+
+		_, stderr, code := run([]string{"styx", "--max-budget", "2.50"}, "v0.1.0")
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2 (stderr=%q)", code, stderr)
+		}
+		if !strings.Contains(stderr, "--max-budget needs a non-interactive run") {
+			t.Errorf("stderr = %q, want the flag refused without -n", stderr)
+		}
+	})
+
+	if !strings.Contains(usage, "--max-budget <usd>") {
+		t.Error("the flag is not documented in usage")
+	}
+}
+
 // TestVerdictExitCodes covers §8.1: a failed gate is 3, a run that denied a
 // prompt with the gate passing is 4, a broken run stays 1, and a clean run is 0.
 // The runner has already printed the verdict's line, so the CLI adds none.

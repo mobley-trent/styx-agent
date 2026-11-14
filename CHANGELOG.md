@@ -10,6 +10,19 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+
+- `--max-budget <usd>` caps a non-interactive run's model spend. The ceiling is measured from the
+  run's own usage accounting and the configured per-model rates, never estimated before a call, so
+  the crossing turn completes and its tool calls run while the next model call is refused. Spend is
+  priced by `internal/model` unchanged and compared by a new pure `internal/budget`; the loop's
+  between-turns seam checks it for every loop, subagents included. Half and 80% announce themselves
+  once each to the model as a tail-appended note and to the operator as a `styx: ` line, one new
+  `sessions.KindBudget` event carries the measurement, and the summary's usage line names the cap.
+  A spent cap is a broken run (exit `1`) — the gate is never consulted and the `--out` export is
+  still written — a model with none of the three rates set refuses to start, and a completed turn
+  with no provider usage ends the run rather than leave the ceiling unenforced. (#153)
+
 ## [v0.3.0] - 2026-11-12
 
 ### Changed

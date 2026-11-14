@@ -75,6 +75,12 @@ const (
 	// persisted so the session's cost is reconstructable from its own log, and
 	// it is what the status bar's spend readout is folded from.
 	KindUsage Kind = "usage"
+	// KindBudget reports a budgeted run's spend against its ceiling
+	// (docs/budget-cap.md §5, §9): the graduated level it has reached and the
+	// dollars that put it there. It is persisted so the spend curve is
+	// reconstructable after the fact; spend never enters engagement state or
+	// any export.
+	KindBudget Kind = "budget"
 	// KindUpdate reports that a newer styx release is available (§12.3). It is
 	// emitted at most once per session by the opt-out notifier and carries the
 	// upgrade hint in Detail.
@@ -200,6 +206,13 @@ type Event struct {
 	// stamped at request time so a mid-session /model swap never misprices an
 	// in-flight turn.
 	Model string `json:"model,omitempty"`
+
+	// Spent and Cap are a run's measured model spend and its ceiling in USD
+	// (budget), and Level names the graduated threshold the spend reached:
+	// half, wrap-up, or exhausted.
+	Spent float64 `json:"spent,omitempty"`
+	Cap   float64 `json:"cap,omitempty"`
+	Level string  `json:"level,omitempty"`
 }
 
 // DefaultRoot is the session store root (§10.1):

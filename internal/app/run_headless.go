@@ -17,6 +17,7 @@ import (
 
 	"github.com/mobley-trent/styx-agent/internal/agent"
 	"github.com/mobley-trent/styx-agent/internal/audit"
+	"github.com/mobley-trent/styx-agent/internal/budget"
 	"github.com/mobley-trent/styx-agent/internal/policy"
 	"github.com/mobley-trent/styx-agent/internal/sessions"
 )
@@ -78,6 +79,7 @@ func runHeadless(ctx context.Context, h *Harness) error {
 	}()
 
 	h.printIdentity()
+	h.printBudgetCap()
 	result, err := h.SubmitResult(runCtx, h.task)
 
 	if interrupted.Load() {
@@ -136,6 +138,17 @@ func (h *Harness) printIdentity() {
 		h.Version, where, shortID(h.SessionID()))
 }
 
+// printBudgetCap announces the run's ceiling, one `styx: ` line after the
+// identity line (docs/budget-cap.md §7): a run that will stop early says so
+// before it starts.
+func (h *Harness) printBudgetCap() {
+	cap := h.budgetCap()
+	if cap <= 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(h.errWriter(), "styx: budget cap %s\n", budget.USD(cap))
+}
+
 // printSummary writes the four-line end summary (§6.3) on every exit path the
 // runner can reach. The denial count is authoritative: zero means nothing was
 // blocked, and anything else says the run did not do all of what it was asked.
@@ -144,7 +157,14 @@ func (h *Harness) printSummary(result agent.Result, denied int) {
 	usage, cost := h.Usage(), h.Cost()
 
 	_, _ = fmt.Fprintf(w, "styx: done — %d %s\n", result.Turns, plural(result.Turns, "turn", "turns"))
-	_, _ = fmt.Fprintf(w, "styx: usage %s tokens · $%.4f\n", thousands(usage.TotalTokens), cost)
+	// A budgeted run names its ceiling on the same line, so the summary stays
+	// four lines (docs/budget-cap.md §7, docs/headless-ci.md §6.3).
+	if cap := h.budgetCap(); cap > 0 {
+		_, _ = fmt.Fprintf(w, "styx: usage %s tokens · %s\n",
+			thousands(usage.TotalTokens), budget.Spend{Spent: cost, Cap: cap})
+	} else {
+		_, _ = fmt.Fprintf(w, "styx: usage %s tokens · $%.4f\n", thousands(usage.TotalTokens), cost)
+	}
 	if denied > 0 {
 		_, _ = fmt.Fprintf(w, "styx: denied %d %s (run not clean)\n", denied, plural(denied, "prompt", "prompts"))
 	} else {
@@ -213,7 +233,21 @@ func (p *headlessPrinter) event(ev sessions.Event) {
 		if ev.Status == "failed" {
 			p.refusal("mcp " + ev.Server + ": " + ev.Detail)
 		}
+	case sessions.KindBudget:
+		p.budget(ev)
 	}
+}
+
+// budget renders a graduated warning in the harness's own voice
+// (docs/budget-cap.md §5), so a headless reader watches the wall approach. The
+// exhausted level prints nothing here: its stop is the `! ` line the loop's
+// typed error already produced.
+func (p *headlessPrinter) budget(ev sessions.Event) {
+	sp := budget.Spend{Spent: ev.Spent, Cap: ev.Cap}
+	if sp.Exhausted() {
+		return
+	}
+	p.write(fmt.Sprintf("styx: budget %d%% used (%s)", sp.Percent(), sp))
 }
 
 // toolCall renders a call: an operation beginning, or the refusal that stopped

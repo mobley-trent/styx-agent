@@ -53,6 +53,14 @@ type Model struct {
 	CacheHitPerMillion float64 `yaml:"cache_hit_per_million"`
 }
 
+// Priced reports whether the model sets at least one of its three rates, i.e.
+// whether a turn it produced has a price the budget cap can count
+// (docs/budget-cap.md §2.1). A model with none is unpriced: a budgeted run
+// refuses to start against it rather than invent a default rate.
+func (m Model) Priced() bool {
+	return m.InputPerMillion != 0 || m.OutputPerMillion != 0 || m.CacheHitPerMillion != 0
+}
+
 // Info maps a configured model onto the model layer's descriptor (§3.2).
 func (m Model) Info() model.Info {
 	return model.Info{
