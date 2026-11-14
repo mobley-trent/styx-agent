@@ -60,6 +60,8 @@ engagement file; not the provider.
 A configured model is **priced** when its entry sets at least one of the three rates. A model with
 none is **unpriced**, and a budgeted run **refuses to start (`1`), before the container**, naming the
 model and the three keys. A `--max-budget` run against a model styx cannot bill is not a capped run.
+Once provider breadth and routing land, the refusal is **reachability-based** — the root model plus
+every model `routing:` names — see [`docs/providers-and-routing.md`](providers-and-routing.md) §3.4.
 
 **Consequence, stated plainly:** a genuinely free model — a local endpoint the operator declared
 with only a context window — is unpriced too, and so cannot run under `--max-budget`. That is the
