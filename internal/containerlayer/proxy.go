@@ -17,7 +17,7 @@ import (
 // name resolves to an address outside the pins).
 var ErrNotAllowed = errors.New("containerlayer: destination is outside the pinned egress scope")
 
-// EgressProxy is the degraded-isolation egress path (§5.2): the session
+// EgressProxy is the egress path for reach traffic (§5.2, §4.2): the session
 // container has no external network, and this proxy — running on the host, on
 // the session bridge's gateway — is its only way out. It resolves every
 // destination itself and forwards only to pinned addresses.
@@ -26,17 +26,26 @@ var ErrNotAllowed = errors.New("containerlayer: destination is outside the pinne
 // rebind between the check and the dial cannot redirect traffic; and it
 // re-verifies on every request, so a name that later resolves outside the
 // pins is rejected then.
+//
+// With Intercept set it is the engagement's interception proxy: CONNECT is
+// terminated with the engagement's CA, every request is scope-checked and
+// captured, and captured exchanges can be replayed. Without it — safe mode —
+// it is a plain tunnel with no capture: there is no pinned scope to enforce
+// beyond the tunnel check and nothing to attribute a capture to.
 type EgressProxy struct {
-	check   func(netip.Addr) bool
-	resolve func(ctx context.Context, host string) ([]netip.Addr, error)
-	dial    func(ctx context.Context, network, address string) (net.Conn, error)
+	check     func(netip.Addr) bool
+	resolve   func(ctx context.Context, host string) ([]netip.Addr, error)
+	dial      func(ctx context.Context, network, address string) (net.Conn, error)
+	intercept *interceptor
+	auditor   Auditor
 
-	mu         sync.Mutex
-	listener   net.Listener
-	server     *http.Server
-	url        string
-	listenAddr string
-	transport  *http.Transport
+	mu          sync.Mutex
+	listener    net.Listener
+	server      *http.Server
+	url         string
+	listenAddr  string
+	transport   *http.Transport
+	announcedCA bool
 }
 
 // EgressProxyOptions configures one proxy. Check is required; the resolver and
@@ -50,6 +59,12 @@ type EgressProxyOptions struct {
 	Resolve func(ctx context.Context, host string) ([]netip.Addr, error)
 	// Dial connects to a verified address. Nil uses net.Dialer.
 	Dial func(ctx context.Context, network, address string) (net.Conn, error)
+	// Intercept turns on engagement-mode interception (§4.2). Nil keeps the
+	// safe-mode shape: a plain tunnel with no capture.
+	Intercept *InterceptOptions
+	// Auditor records the proxy's decisions — lifecycle and scope denials,
+	// never traffic (§9). Nil records nothing.
+	Auditor Auditor
 }
 
 // NewEgressProxy builds a proxy. It does not listen until Start.
@@ -61,6 +76,7 @@ func NewEgressProxy(opts EgressProxyOptions) (*EgressProxy, error) {
 		check:   opts.Check,
 		resolve: opts.Resolve,
 		dial:    opts.Dial,
+		auditor: opts.Auditor,
 	}
 	if p.resolve == nil {
 		p.resolve = defaultResolve
@@ -70,15 +86,28 @@ func NewEgressProxy(opts EgressProxyOptions) (*EgressProxy, error) {
 		p.dial = d.DialContext
 	}
 	p.listenAddr = opts.Addr
+	if opts.Intercept != nil {
+		ic, err := newInterceptor(*opts.Intercept)
+		if err != nil {
+			return nil, err
+		}
+		p.intercept = ic
+	}
 	p.transport = &http.Transport{
 		// The harness is authoritative: never consult environment proxies.
 		Proxy: nil,
 		// No connection reuse: every request must re-resolve and re-verify,
 		// or a rebind could ride a pooled connection.
 		DisableKeepAlives: true,
+		// Relay the bytes as they are: a transparently decompressed body would
+		// no longer match the headers the capture recorded.
+		DisableCompression: true,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			return p.dialVerified(ctx, network, address)
 		},
+	}
+	if p.intercept != nil && p.intercept.upstreamTLS != nil {
+		p.transport.TLSClientConfig = p.intercept.upstreamTLS.Clone()
 	}
 	return p, nil
 }
@@ -92,21 +121,53 @@ func defaultResolve(ctx context.Context, host string) ([]netip.Addr, error) {
 	return addrs, nil
 }
 
-// Start begins listening and serving in the background.
-func (p *EgressProxy) Start() error {
+// Start begins listening and serving in the background, recording the
+// lifecycle decision (§9). It is idempotent.
+func (p *EgressProxy) Start() error { return p.start(EventProxyStart) }
+
+// start opens the listener and records the lifecycle event. It runs outside
+// the lock when it audits, so a slow audit sink cannot serialize the proxy.
+func (p *EgressProxy) start(kind ProxyEventKind) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.listener != nil {
+		p.mu.Unlock()
 		return nil
 	}
 	ln, err := net.Listen("tcp", p.listenAddress())
 	if err != nil {
+		p.mu.Unlock()
 		return fmt.Errorf("containerlayer: start egress proxy: %w", err)
 	}
 	p.listener = ln
 	p.url = "http://" + ln.Addr().String()
 	server := &http.Server{Handler: p, ReadHeaderTimeout: defaultProxyTimeout}
 	p.server = server
+	addr := ln.Addr().String()
+	announceCA := p.intercept != nil && p.intercept.ca.Created() && !p.announcedCA
+	p.mu.Unlock()
+
+	// Lifecycle is a decision, so it is recorded before the listener serves:
+	// a proxy that runs unrecorded is exactly what the audit exists to stop.
+	var events []ProxyEvent
+	if announceCA {
+		events = append(events, ProxyEvent{Kind: EventCACreated, Listener: addr, Detail: p.intercept.ca.CertPath()})
+	}
+	events = append(events, ProxyEvent{Kind: kind, Listener: addr})
+	for _, event := range events {
+		if err := p.recordEvent(event); err != nil {
+			_ = ln.Close()
+			p.mu.Lock()
+			p.listener, p.server, p.url = nil, nil, ""
+			p.mu.Unlock()
+			return err
+		}
+	}
+	if announceCA {
+		p.mu.Lock()
+		p.announcedCA = true
+		p.mu.Unlock()
+	}
+
 	go func() {
 		// Serve returns when Close is called; the error is not actionable
 		// from here. Capture server locally: Close nils p.server, and reading
@@ -140,7 +201,60 @@ func (p *EgressProxy) URL() string {
 	return p.url
 }
 
-// Close stops the proxy. It is idempotent.
+// Capture is the session's capture, nil for a plain tunnel.
+func (p *EgressProxy) Capture() *Capture {
+	if p.intercept == nil {
+		return nil
+	}
+	return p.intercept.capture
+}
+
+// CurrentSegment is the capture segment exchanges are being written to, empty
+// for a plain tunnel (§4.5).
+func (p *EgressProxy) CurrentSegment() string {
+	if p.intercept == nil {
+		return ""
+	}
+	return p.intercept.capture.Segment()
+}
+
+// Restart tears the listener down and brings it back on the same address,
+// reusing the CA (§4.4) and writing an explicit gap into the capture so the
+// stream is never silently discontinuous (§4.5, §8).
+func (p *EgressProxy) Restart() error {
+	p.mu.Lock()
+	server, ln := p.server, p.listener
+	addr := p.listenAddr
+	if ln != nil {
+		addr = ln.Addr().String()
+	}
+	p.server, p.listener, p.url = nil, nil, ""
+	p.mu.Unlock()
+
+	started := server != nil
+	if started {
+		if ln != nil {
+			_ = ln.Close()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), defaultProxyTimeout)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			return fmt.Errorf("containerlayer: restart egress proxy: %w", err)
+		}
+		if p.intercept != nil {
+			if err := p.intercept.capture.Gap("proxy restart"); err != nil {
+				return err
+			}
+		}
+	}
+	p.SetListenAddr(addr)
+	if !started {
+		return p.start(EventProxyStart)
+	}
+	return p.start(EventProxyRestart)
+}
+
+// Close stops the proxy and records the lifecycle decision. It is idempotent.
 func (p *EgressProxy) Close() error {
 	p.mu.Lock()
 	server, ln := p.server, p.listener
@@ -149,20 +263,34 @@ func (p *EgressProxy) Close() error {
 	if server == nil {
 		return nil
 	}
-	_ = ln.Close()
+	if ln != nil {
+		_ = ln.Close()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), defaultProxyTimeout)
 	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		return fmt.Errorf("containerlayer: stop egress proxy: %w", err)
+	err := server.Shutdown(ctx)
+	if err != nil {
+		err = fmt.Errorf("containerlayer: stop egress proxy: %w", err)
 	}
-	return nil
+	if auditErr := p.recordEvent(ProxyEvent{Kind: EventProxyStop}); auditErr != nil {
+		return errors.Join(err, auditErr)
+	}
+	return err
 }
 
 // ServeHTTP handles one proxy request: CONNECT tunnels and absolute-URI HTTP
-// forwards, both through dialVerified.
+// forwards, both through dialVerified, and both captured when intercepting.
 func (p *EgressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
+		if p.intercept != nil {
+			p.interceptConnect(w, r)
+			return
+		}
 		p.handleConnect(w, r)
+		return
+	}
+	if p.intercept != nil {
+		p.interceptForward(w, r)
 		return
 	}
 	p.handleForward(w, r)
@@ -172,7 +300,7 @@ func (p *EgressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	target, err := p.dialVerified(r.Context(), "tcp", r.Host)
 	if err != nil {
-		writeProxyError(w, err)
+		p.refuse(w, hostOnly(r.Host), err)
 		return
 	}
 	defer func() { _ = target.Close() }()
@@ -208,7 +336,7 @@ func (p *EgressProxy) handleForward(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		writeProxyError(w, err)
+		p.refuse(w, hostOnly(r.URL.Host), err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -260,10 +388,44 @@ func (p *EgressProxy) dialVerified(ctx context.Context, network, address string)
 	return nil, last
 }
 
+// verify resolves a destination and reports whether any address is inside the
+// pinned scope, without dialing. CONNECT has to answer a denial in plaintext
+// before the TLS handshake, so it cannot wait for the dial's own check.
+func (p *EgressProxy) verify(ctx context.Context, host string) error {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if !p.allowed(ip) {
+			return fmt.Errorf("%w: %s", ErrNotAllowed, ip)
+		}
+		return nil
+	}
+	addrs, err := p.resolve(ctx, host)
+	if err != nil {
+		return fmt.Errorf("containerlayer: proxy resolve %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("containerlayer: proxy resolve %q: no addresses", host)
+	}
+	for _, addr := range addrs {
+		if p.allowed(addr) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s resolves to %s", ErrNotAllowed, host, addrs[0])
+}
+
 // allowed reports whether an address is in the pinned scope. IPv4-mapped IPv6
 // is unmapped first, so `::ffff:10.0.0.1` cannot slip past a v4 pin.
 func (p *EgressProxy) allowed(addr netip.Addr) bool {
 	return p.check(addr.Unmap())
+}
+
+// refuse writes a proxy failure. A scope refusal is also a decision, so it is
+// audited here: a denial nobody can find later is not a record (§9).
+func (p *EgressProxy) refuse(w http.ResponseWriter, host string, err error) {
+	if errors.Is(err, ErrNotAllowed) {
+		_ = p.recordEvent(ProxyEvent{Kind: EventScopeDenial, Host: host, Reason: "out-of-scope", Detail: err.Error()})
+	}
+	writeProxyError(w, err)
 }
 
 // writeProxyError maps a dial failure onto a status: scope refusals are 403,
@@ -310,6 +472,15 @@ func removeHopHeaders(h http.Header) {
 	} {
 		h.Del(k)
 	}
+}
+
+// hostOnly strips a port from an authority, tolerating one without it.
+func hostOnly(authority string) string {
+	host, _, err := net.SplitHostPort(authority)
+	if err != nil {
+		return authority
+	}
+	return host
 }
 
 const defaultProxyTimeout = 30 * time.Second

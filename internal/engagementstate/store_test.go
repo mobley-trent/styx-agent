@@ -209,7 +209,7 @@ func TestSecondSessionReadsButCannotWrite(t *testing.T) {
 
 func TestStaleLockIsReclaimed(t *testing.T) {
 	root := t.TempDir()
-	dir := filepath.Join(projectComponent("/work/acme"), engagementComponent("acme-q4"))
+	dir := filepath.Join(projectComponent("/work/acme"), EngagementKey("acme-q4"))
 	if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
 		t.Fatalf("prepare store directory: %v", err)
 	}
