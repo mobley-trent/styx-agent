@@ -153,7 +153,7 @@ func Open(projectDir, engagementName string, opts ...Option) (*Store, error) {
 	}
 
 	s.project = projectComponent(projectDir)
-	s.dir = filepath.Join(s.root, s.project, engagementComponent(s.engagement))
+	s.dir = filepath.Join(s.root, s.project, EngagementKey(s.engagement))
 	s.path = filepath.Join(s.dir, "state.json")
 
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
@@ -906,10 +906,12 @@ func projectComponent(projectDir string) string {
 	return sanitizeComponent(filepath.Base(filepath.Clean(abs))) + "-" + hex.EncodeToString(sum[:4])
 }
 
-// engagementComponent is the per-engagement directory name (§1). It always
-// carries a short hash of the declared name, so two engagements whose names
-// differ only in characters a file name cannot hold never share a document.
-func engagementComponent(name string) string {
+// EngagementKey is the per-engagement directory name (§1). It always carries a
+// short hash of the declared name, so two engagements whose names differ only
+// in characters a file name cannot hold never share a document. It is exported
+// so another store keyed per engagement — the interception proxy's PKI —
+// derives the same component this store does.
+func EngagementKey(name string) string {
 	sum := sha256.Sum256([]byte(name))
 	return sanitizeComponent(name) + "-" + hex.EncodeToString(sum[:4])
 }
