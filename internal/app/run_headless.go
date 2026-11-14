@@ -142,11 +142,11 @@ func (h *Harness) printIdentity() {
 // identity line (docs/budget-cap.md §7): a run that will stop early says so
 // before it starts.
 func (h *Harness) printBudgetCap() {
-	cap := h.budgetCap()
-	if cap <= 0 {
+	ceiling := h.budgetCap()
+	if ceiling <= 0 {
 		return
 	}
-	_, _ = fmt.Fprintf(h.errWriter(), "styx: budget cap %s\n", budget.USD(cap))
+	_, _ = fmt.Fprintf(h.errWriter(), "styx: budget cap %s\n", budget.USD(ceiling))
 }
 
 // printSummary writes the four-line end summary (§6.3) on every exit path the
@@ -159,9 +159,9 @@ func (h *Harness) printSummary(result agent.Result, denied int) {
 	_, _ = fmt.Fprintf(w, "styx: done — %d %s\n", result.Turns, plural(result.Turns, "turn", "turns"))
 	// A budgeted run names its ceiling on the same line, so the summary stays
 	// four lines (docs/budget-cap.md §7, docs/headless-ci.md §6.3).
-	if cap := h.budgetCap(); cap > 0 {
+	if ceiling := h.budgetCap(); ceiling > 0 {
 		_, _ = fmt.Fprintf(w, "styx: usage %s tokens · %s\n",
-			thousands(usage.TotalTokens), budget.Spend{Spent: cost, Cap: cap})
+			thousands(usage.TotalTokens), budget.Spend{Spent: cost, Cap: ceiling})
 	} else {
 		_, _ = fmt.Fprintf(w, "styx: usage %s tokens · $%.4f\n", thousands(usage.TotalTokens), cost)
 	}

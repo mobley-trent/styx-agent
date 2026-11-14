@@ -941,7 +941,7 @@ func newCompactor(cfg *config.Config, client model.ModelClient, modelID func() s
 // measured against: the loop's budget reader (docs/budget-cap.md §4). It reads
 // the same accumulator the status bar and the summary do, so the ceiling can
 // never disagree with the spend the operator sees.
-func (h *Harness) Spend() (spent, cap float64) {
+func (h *Harness) Spend() (spent, ceiling float64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.cost, h.maxBudget

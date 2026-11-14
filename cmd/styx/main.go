@@ -325,7 +325,7 @@ func parseArgs(args []string) (cliOptions, error) {
 	if opts.maxBudgetSet {
 		amount, err := parseUSD(opts.maxBudget)
 		if err != nil {
-			return opts, fmt.Errorf("--max-budget %q: %v", opts.maxBudget, err)
+			return opts, fmt.Errorf("--max-budget %q: %w", opts.maxBudget, err)
 		}
 		if !opts.nonInteractive {
 			return opts, errors.New("--max-budget needs a non-interactive run (-n)")

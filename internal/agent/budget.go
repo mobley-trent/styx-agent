@@ -17,7 +17,7 @@ import (
 type BudgetReader interface {
 	// Spend returns the run's accumulated model spend in USD and the run's
 	// ceiling. A non-positive ceiling means the run is not budgeted.
-	Spend() (spent, cap float64)
+	Spend() (spent, ceiling float64)
 }
 
 // WithBudget installs the run's spend reader. Nil leaves the run unbudgeted:
@@ -100,8 +100,8 @@ func (l *Loop) checkBudget(messages []model.Message, turn int) ([]model.Message,
 	if l.budget == nil {
 		return messages, nil
 	}
-	spent, cap := l.budget.Spend()
-	sp := budget.Spend{Spent: spent, Cap: cap}
+	spent, ceiling := l.budget.Spend()
+	sp := budget.Spend{Spent: spent, Cap: ceiling}
 
 	if sp.Exhausted() {
 		l.emitBudgetEvent(sp, budget.LevelExhausted, turn)

@@ -18,16 +18,16 @@ import (
 // scriptedBudget is a BudgetReader whose measurement a test controls: the
 // spend is read fresh at every seam, exactly as the app's accumulator is.
 type scriptedBudget struct {
-	spend func() (spent, cap float64)
+	spend func() (spent, ceiling float64)
 }
 
 func (b scriptedBudget) Spend() (float64, float64) { return b.spend() }
 
 // perTurnBudget bills a fixed amount for every model turn the fake completed,
 // so a test reads spend against turn count instead of scripting the reader.
-func perTurnBudget(fake *fakemodel.Fake, perTurn, cap float64) scriptedBudget {
+func perTurnBudget(fake *fakemodel.Fake, perTurn, ceiling float64) scriptedBudget {
 	return scriptedBudget{spend: func() (float64, float64) {
-		return perTurn * float64(fake.Calls()), cap
+		return perTurn * float64(fake.Calls()), ceiling
 	}}
 }
 
