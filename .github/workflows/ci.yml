@@ -87,8 +87,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y nftables
 
-      # The hermetic egress tests need root to program nft/iptables. They skip
-      # gracefully anywhere privileges are absent, so the main gate still runs
-      # them (as a no-op) and this job is what actually exercises enforcement.
-      - name: Egress tests
-        run: sudo env "PATH=$PATH" "GOCACHE=/tmp/gocache" "GOPATH=/tmp/gopath" go test ./internal/containerlayer/ -run TestHermeticEgress -v -count=1 -timeout 10m
+      # The hermetic container tests need root to program nft/iptables, and they
+      # are the only place the pinned image itself is exercised: egress
+      # enforcement, and the engagement CA install that container TLS depends
+      # on. They skip gracefully anywhere privileges are absent, so the main
+      # gate still runs them (as a no-op) and this job is what actually proves
+      # them against the image.
+      - name: Hermetic container tests
+        run: sudo env "PATH=$PATH" "GOCACHE=/tmp/gocache" "GOPATH=/tmp/gopath" go test ./internal/containerlayer/ -run TestHermetic -v -count=1 -timeout 10m
