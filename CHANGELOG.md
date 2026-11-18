@@ -37,6 +37,18 @@ file — is documented in [RELEASING.md](RELEASING.md).
   while its credential stays out of context. Lifecycle, CA creation, and scope denials are audit
   decisions; proxies are never a second, quiet way around scope. The container's CA trust and
   egress forcing, the browser, and the nine reach tools follow in their own changes. (#155)
+- The session container trusts the engagement's interception proxy and reaches it or nothing. The
+  CA is bound read-only at `/usr/local/share/ca-certificates/styx-engagement.crt` and installed
+  with `update-ca-certificates`; an install the harness cannot confirm — the bundle update failing,
+  or the CA's hashed link missing afterwards — refuses the session, naming the mount and the
+  install step, rather than running with TLS that fails or silently skips verification. Every
+  session now starts its egress proxy, safe-mode tunnel included, and carries `HTTP_PROXY`,
+  `HTTPS_PROXY`, and their lower-case spellings in the container; while capture is on the session
+  firewall permits nothing but the proxy's own listener, so a tool that ignores the environment is
+  denied at the edge instead of passing uncaptured, and where the firewall cannot be programmed
+  the internal network already leaves the proxy as the only path. The capture opens with the
+  session, `/mode safe` and session end stop the listener and flush the segment, and lifecycle, CA
+  creation and installation, and scope denials are audit decisions. (#156)
 
 ## [v0.3.0] - 2026-11-12
 

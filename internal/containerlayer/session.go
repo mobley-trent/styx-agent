@@ -79,6 +79,14 @@ type SessionOptions struct {
 	// DNSAddr optionally pins the resolver's listen address; empty binds the
 	// session gateway on port 53.
 	DNSAddr string
+	// Interception makes the session's egress proxy the engagement's
+	// interception proxy (§4.2, §4.4): the CA is bound into the container and
+	// installed at start, and every exchange is captured. Nil keeps the
+	// safe-mode shape: a plain tunnel with no capture.
+	Interception *InterceptionOptions
+	// Auditor records the proxy's decisions — lifecycle, CA custody, and
+	// scope denials — in the session's audit trail. Nil records nothing.
+	Auditor Auditor
 }
 
 // Session is one running per-session container plus its egress enforcement: a
@@ -95,6 +103,8 @@ type Session struct {
 	spec        EgressSpec
 	firewall    Firewall
 	proxy       *EgressProxy
+	capture     *Capture
+	auditor     Auditor
 	dns         *DNSServer
 	dnsIP       string
 	isolation   Isolation
@@ -108,11 +118,13 @@ type Session struct {
 	closed bool
 }
 
-// StartSession brings up the session container and its egress path. It never
-// returns a session whose isolation is silently unenforced: if the firewall
-// cannot be programmed it falls back to degraded isolation (an internal
-// network plus the harness proxy), and if that cannot be established either it
-// refuses.
+// StartSession brings up the session container and its egress path. Its
+// listener is the session's egress proxy in both modes (§4.2): a plain tunnel
+// in safe mode, and with Interception the engagement's MITM, capture, and
+// container CA trust. It never returns a session whose isolation is silently
+// unenforced: if the firewall cannot be programmed it falls back to degraded
+// isolation (an internal network plus the harness proxy), and if that cannot
+// be established either it refuses.
 func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	if opts.Runtime == nil {
 		return nil, errors.New("containerlayer: session options need a runtime")
@@ -157,7 +169,14 @@ func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	subnet, gateway := sessionSubnet(id)
 	spec := EgressSpec{Bridge: bridge, Allowed: opts.Allowed}
 
-	s := &Session{rt: opts.Runtime, bridge: bridge, spec: spec, workspace: workspace, keepAlive: DefaultKeepAlive}
+	s := &Session{rt: opts.Runtime, bridge: bridge, spec: spec, workspace: workspace, keepAlive: DefaultKeepAlive, auditor: opts.Auditor}
+
+	// The capture opens before anything else: an engagement whose evidence
+	// cannot be written is refused before a network, a listener, or a
+	// container exists (§8).
+	if err := s.openCapture(opts); err != nil {
+		return nil, s.fail(err)
+	}
 
 	// Try enforced isolation first: an external bridge with the allowlist
 	// programmed at the host edge.
@@ -179,15 +198,30 @@ func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 		Name: "styx-net-" + id, Bridge: bridge, Subnet: subnet, Gateway: gateway,
 	})
 	if err != nil {
-		return nil, err
+		return nil, s.fail(err)
 	}
 	s.networkID = networkID
 
-	if err := fw.Apply(ctx, spec); err != nil {
+	// The proxy listens on the gateway the container dials. It starts before
+	// the rules because while capture is on the rules are about its listener.
+	if err := s.startProxy(opts, gateway); err != nil {
+		return nil, s.fail(err)
+	}
+
+	applySpec := spec
+	if opts.Interception != nil {
+		allowed, err := captureOnlyAllowlist(s.proxy.URL())
+		if err != nil {
+			return nil, s.fail(err)
+		}
+		applySpec.Allowed = allowed
+	}
+
+	if err := fw.Apply(ctx, applySpec); err != nil {
 		// The rules did not take: remove whatever a half-programmed backend
 		// left, tear the network back down, and degrade — never leave a
 		// container running on an unenforced bridge or a stray rule set.
-		_ = fw.Remove(ctx, spec)
+		_ = fw.Remove(ctx, applySpec)
 		_ = opts.Runtime.RemoveNetwork(ctx, networkID)
 		s.networkID = ""
 		return s.startDegraded(ctx, opts, image, workspace, subnet, gateway, err)
@@ -196,7 +230,10 @@ func StartSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	s.isolation = IsolationContainer
 	s.startDNS(opts, gateway)
 
-	if err := s.startContainer(ctx, opts, image, workspace, nil); err != nil {
+	if err := s.startContainer(ctx, opts, image, workspace); err != nil {
+		return nil, s.fail(err)
+	}
+	if err := s.trustCA(ctx, opts); err != nil {
 		return nil, s.fail(err)
 	}
 	if err := s.discoverToolset(ctx, opts); err != nil {
@@ -214,39 +251,84 @@ func (s *Session) startDegraded(ctx context.Context, opts SessionOptions, image,
 		Internal: true, Subnet: subnet, Gateway: gateway,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("containerlayer: degraded isolation unavailable (firewall: %w): %w", cause, err)
+		return nil, s.fail(fmt.Errorf("containerlayer: degraded isolation unavailable (firewall: %w): %w", cause, err))
 	}
 	s.networkID = networkID
 
-	proxy, err := NewEgressProxy(EgressProxyOptions{
-		Addr:  proxyListenAddr(opts.ProxyAddr, gateway),
-		Check: prefixChecker(s.spec.Allowed),
-	})
-	if err != nil {
+	// A listener bound to the enforced network's gateway does not survive the
+	// network it belonged to, so degrading starts a fresh one on this one.
+	if s.proxy != nil {
+		_ = s.proxy.Close()
+		s.proxy = nil
+	}
+	if err := s.startProxy(opts, gateway); err != nil {
 		return nil, s.fail(fmt.Errorf("containerlayer: degraded isolation unavailable: %w", err))
 	}
-	if err := proxy.Start(); err != nil {
-		return nil, s.fail(err)
-	}
-	s.proxy = proxy
 	s.isolation = IsolationDegraded
 	s.startDNS(opts, gateway)
 
 	// Inside the internal network the gateway is the container's route to the
 	// proxy; the proxy URL is what the exec tools' clients dial.
-	env := []string{
-		"HTTP_PROXY=" + proxy.URL(),
-		"HTTPS_PROXY=" + proxy.URL(),
-		"http_proxy=" + proxy.URL(),
-		"https_proxy=" + proxy.URL(),
+	if err := s.startContainer(ctx, opts, image, workspace); err != nil {
+		return nil, s.fail(err)
 	}
-	if err := s.startContainer(ctx, opts, image, workspace, env); err != nil {
+	if err := s.trustCA(ctx, opts); err != nil {
 		return nil, s.fail(err)
 	}
 	if err := s.discoverToolset(ctx, opts); err != nil {
 		return nil, s.fail(err)
 	}
 	return s, nil
+}
+
+// openCapture opens the session's capture stream, which the interception proxy
+// writes and teardown flushes (§4.5). Safe mode keeps none: there is nothing to
+// attribute a capture to.
+func (s *Session) openCapture(opts SessionOptions) error {
+	if opts.Interception == nil {
+		return nil
+	}
+	if opts.Interception.CA == nil {
+		return errors.New("containerlayer: interception needs the engagement's CA")
+	}
+	capture, err := OpenCapture(CaptureOptions{Dir: opts.Interception.CaptureDir, Now: opts.Interception.Now})
+	if err != nil {
+		return err
+	}
+	s.capture = capture
+	return nil
+}
+
+// startProxy starts the session's single egress proxy: the engagement's
+// interception proxy when interception is configured, a plain tunnel
+// otherwise. Either way the session owns its lifetime — no listener outlives
+// it (§7).
+func (s *Session) startProxy(opts SessionOptions, gateway string) error {
+	proxyOpts := EgressProxyOptions{
+		Addr:    proxyListenAddr(opts.ProxyAddr, gateway),
+		Check:   prefixChecker(s.spec.Allowed),
+		Auditor: s.auditor,
+	}
+	if opts.Interception != nil {
+		if s.capture == nil {
+			return errInterceptionWithoutCapture
+		}
+		proxyOpts.Intercept = &InterceptOptions{
+			CA:          opts.Interception.CA,
+			Capture:     s.capture,
+			UpstreamTLS: opts.Interception.UpstreamTLS,
+			Now:         opts.Interception.Now,
+		}
+	}
+	proxy, err := NewEgressProxy(proxyOpts)
+	if err != nil {
+		return err
+	}
+	if err := proxy.Start(); err != nil {
+		return err
+	}
+	s.proxy = proxy
+	return nil
 }
 
 // discoverToolset reads the image's own declaration of what it carries: one
@@ -272,18 +354,27 @@ func (s *Session) discoverToolset(ctx context.Context, opts SessionOptions) erro
 
 // startContainer creates and starts the session container on the selected
 // network. It is shared by the enforced and degraded paths; only the network
-// and the proxy environment differ.
-func (s *Session) startContainer(ctx context.Context, opts SessionOptions, image, workspace string, proxyEnv []string) error {
+// differs. The proxy environment and the read-only CA mount are the same in
+// both (§4.2, §4.4).
+func (s *Session) startContainer(ctx context.Context, opts SessionOptions, image, workspace string) error {
 	var binds []string
 	if strings.TrimSpace(opts.Workspace) != "" {
 		binds = append(binds, opts.Workspace+":"+workspace)
+	}
+	var env []string
+	if s.proxy != nil {
+		env = proxyEnvironment(s.proxy.URL())
+	}
+	if opts.Interception != nil {
+		// The certificate only: the CA's key never leaves the host (§4.4).
+		binds = append(binds, caBind(opts.Interception.CA.CertPath()))
 	}
 	spec := ContainerSpec{
 		Image:      image,
 		Name:       "styx-session-" + sessionID(opts.Name),
 		NetworkID:  s.networkID,
 		Cmd:        []string{"sh", "-c", s.keepAlive},
-		Env:        proxyEnv,
+		Env:        env,
 		Binds:      binds,
 		DNS:        s.dnsServers(),
 		WorkingDir: workspace,
@@ -326,14 +417,18 @@ func (s *Session) Toolset() []byte {
 	return append([]byte(nil), s.toolset...)
 }
 
-// ProxyURL is the fallback proxy's URL, empty when egress is enforced at the
-// host edge.
+// ProxyURL is the session's egress proxy URL: the container's proxy
+// environment and, while capture is on, the only destination the firewall
+// permits. Empty only before the proxy starts.
 func (s *Session) ProxyURL() string {
 	if s.proxy == nil {
 		return ""
 	}
 	return s.proxy.URL()
 }
+
+// Capture is the session's capture stream, nil in safe mode.
+func (s *Session) Capture() *Capture { return s.capture }
 
 // DNSAddr is the harness resolver's address, empty when it is not running.
 func (s *Session) DNSAddr() string {
@@ -434,7 +529,9 @@ func formatExecResult(res ExecResult) string {
 
 // Close tears the session down in the order that leaves no residue: the
 // container first (it holds the network), then the host-edge rules, then the
-// fallback proxy, then the network. It is idempotent.
+// proxy, then the capture it was writing, then the network. Stopping the proxy
+// before flushing the capture is what makes the flush the last word (§7). It is
+// idempotent.
 func (s *Session) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -443,6 +540,7 @@ func (s *Session) Close() error {
 	}
 	s.closed = true
 	containerID, networkID, firewall, proxy, dns, spec := s.containerID, s.networkID, s.firewall, s.proxy, s.dns, s.spec
+	capture := s.capture
 	s.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -461,6 +559,11 @@ func (s *Session) Close() error {
 	}
 	if proxy != nil {
 		if err := proxy.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if capture != nil {
+		if err := capture.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}

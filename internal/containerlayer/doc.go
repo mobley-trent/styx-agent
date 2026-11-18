@@ -15,4 +15,11 @@
 // re-resolved against the pinned scope, every exchange is captured and
 // replayable, and a scope refusal is a structured 403 plus an audit entry —
 // never a prompt, because a tunnel has no in-flight call to raise a card on.
+//
+// Every session starts that proxy and points the container at it (§4.2); in
+// engagement mode the CA is bound into the container read-only and installed at
+// start, an install that cannot be confirmed refuses the session (§4.4), and
+// the session firewall permits nothing but the proxy's own listener, so a tool
+// that ignores the proxy environment is denied at the edge instead of passing
+// uncaptured. Teardown stops the listener and flushes the capture (§7).
 package containerlayer

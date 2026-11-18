@@ -36,8 +36,9 @@ func TestStartSessionEnforcedProgramsFirewall(t *testing.T) {
 	if len(fw.applied) != 1 || fw.applied[0].Bridge != s.Bridge() {
 		t.Errorf("firewall applied = %+v, want one spec scoped to %s", fw.applied, s.Bridge())
 	}
-	if s.ProxyURL() != "" {
-		t.Errorf("proxy = %q, want none when egress is enforced at the host edge", s.ProxyURL())
+	// Both modes route the container through the session proxy (§4.2).
+	if s.ProxyURL() == "" {
+		t.Error("enforced session has no egress proxy")
 	}
 
 	specs := rt.containerSpecs()
@@ -46,6 +47,9 @@ func TestStartSessionEnforcedProgramsFirewall(t *testing.T) {
 	}
 	if specs[0].NetworkID == "" || specs[0].NetworkID == "bridge" || specs[0].NetworkID == "host" {
 		t.Errorf("container network = %q, want the session network, never default bridge or host", specs[0].NetworkID)
+	}
+	if !hasEnvPrefix(specs[0].Env, "HTTPS_PROXY="+s.ProxyURL()) {
+		t.Errorf("container env = %v, want the proxy settings", specs[0].Env)
 	}
 }
 

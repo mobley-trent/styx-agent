@@ -340,6 +340,8 @@ func TestModeTeardownClosesTheEngagementContainer(t *testing.T) {
 	opts.Engagement = engPath
 	opts.ContainerRuntime = func() (containerlayer.Runtime, error) { return rt, nil }
 	opts.ContainerFirewall = appFakeFirewall{}
+	// The fake network has no gateway to bind; loopback is enough to come up.
+	opts.ContainerProxyAddr = "127.0.0.1:0"
 
 	h, err := Build(context.Background(), opts)
 	if err != nil {

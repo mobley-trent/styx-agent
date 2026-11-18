@@ -63,6 +63,12 @@ type ManagerOptions struct {
 	FirewallRunner     Runner
 	ProxyAddr          string
 	DNSAddr            string
+	// Interception makes the session's egress proxy the engagement's
+	// interception proxy: CA trust in the container and a capture per session
+	// (§4.2, §4.4). Nil runs the safe-mode tunnel.
+	Interception *InterceptionOptions
+	// Auditor records the proxy's decisions in the session's audit trail.
+	Auditor Auditor
 	// OnStart is called once after the session starts, so the app can surface
 	// the isolation level (banner, status, audit).
 	OnStart func(SessionInfo)
@@ -144,6 +150,8 @@ func (m *Manager) start(ctx context.Context, opts ManagerOptions) (*Session, Run
 		FirewallRunner:     opts.FirewallRunner,
 		ProxyAddr:          opts.ProxyAddr,
 		DNSAddr:            opts.DNSAddr,
+		Interception:       opts.Interception,
+		Auditor:            opts.Auditor,
 	})
 	if err != nil {
 		return nil, rt, err
@@ -176,6 +184,31 @@ func (m *Manager) Isolation() Isolation {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.isolation
+}
+
+// ProxyURL is the session's egress proxy URL — what the container's proxy
+// environment carries — empty before the session starts. While capture is on it
+// is also the only destination the session firewall permits.
+func (m *Manager) ProxyURL() string {
+	m.mu.Lock()
+	session := m.session
+	m.mu.Unlock()
+	if session == nil {
+		return ""
+	}
+	return session.ProxyURL()
+}
+
+// Capture is the started session's capture stream, nil before start and in
+// safe mode where there is nothing to attribute a capture to.
+func (m *Manager) Capture() *Capture {
+	m.mu.Lock()
+	session := m.session
+	m.mu.Unlock()
+	if session == nil {
+		return nil
+	}
+	return session.Capture()
 }
 
 // Info returns the started session's info, or an unavailable one before start.
