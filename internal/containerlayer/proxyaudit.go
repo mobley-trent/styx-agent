@@ -18,6 +18,10 @@ const (
 	// EventCACreated is the first use of an engagement's certification
 	// authority (§4.4).
 	EventCACreated ProxyEventKind = "ca-create"
+	// EventCAInstalled is the engagement's CA installed into the session
+	// container's trust bundle, or an install that could not be confirmed and
+	// refused the session (§4.4).
+	EventCAInstalled ProxyEventKind = "ca-install"
 	// EventScopeDenial is a proxied request refused on scope (§4.3). It is
 	// never a prompt: a tunnel has no in-flight call to raise a card on.
 	EventScopeDenial ProxyEventKind = "scope-denial"

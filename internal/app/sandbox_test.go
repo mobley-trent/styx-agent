@@ -170,6 +170,9 @@ func TestToolsetDigestDeliversOnce(t *testing.T) {
 		RuntimeFactory: func() (containerlayer.Runtime, error) { return &appFakeRuntime{}, nil },
 		Firewall:       appFakeFirewall{},
 		Image:          customRef,
+		// The fake network has no gateway to bind; loopback is enough to prove
+		// the session comes up.
+		ProxyAddr: "127.0.0.1:0",
 	})
 	digest := &toolsetDigest{container: container}
 

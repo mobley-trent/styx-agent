@@ -92,6 +92,10 @@ type Options struct {
 	ContainerRuntime func() (containerlayer.Runtime, error)
 	// ContainerFirewall overrides the host-edge firewall (tests).
 	ContainerFirewall containerlayer.Firewall
+	// ContainerProxyAddr overrides the egress proxy's listen address. Empty
+	// binds the session gateway, which is what the container can reach; tests
+	// with a fake network bind loopback instead.
+	ContainerProxyAddr string
 	// Executor overrides exec dispatch entirely (tests): when set, no
 	// container runtime is constructed.
 	Executor agent.Executor
@@ -217,6 +221,7 @@ type Harness struct {
 	sandboxVerifier      containerlayer.ImageVerifier
 	runtimeFactory       func() (containerlayer.Runtime, error)
 	firewall             containerlayer.Firewall
+	proxyAddr            string
 	fetcher              agent.Fetcher
 	logFetcher           agent.LogFetcher
 	// notifier is the opt-out update notifier, or nil when it is disabled
@@ -409,6 +414,7 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		sandboxVerifier:      opts.SandboxVerifier,
 		runtimeFactory:       factory,
 		firewall:             opts.ContainerFirewall,
+		proxyAddr:            opts.ContainerProxyAddr,
 		fetcher:              opts.Fetcher,
 		logFetcher:           opts.LogFetcher,
 	}
@@ -546,6 +552,14 @@ func (h *Harness) configure() error {
 	if h.execOverride != nil {
 		exec = h.execOverride
 	} else {
+		// An engagement's interception proxy needs its CA and the session's
+		// capture before the container exists (§4.4, §4.5). A CA that cannot
+		// be opened refuses the activation rather than running MITM the
+		// container cannot trust.
+		intercept, err := h.interception(eng)
+		if err != nil {
+			return err
+		}
 		container = containerlayer.NewManager(containerlayer.ManagerOptions{
 			RuntimeFactory: h.runtimeFactory,
 			Image:          image,
@@ -558,6 +572,9 @@ func (h *Harness) configure() error {
 			Allowed:      allowedEgress(eng, h.Config),
 			Pins:         namePins(eng),
 			Firewall:     h.firewall,
+			ProxyAddr:    h.proxyAddr,
+			Interception: intercept,
+			Auditor:      proxyAuditor{h: h},
 			OnStart: func(info containerlayer.SessionInfo) {
 				h.emitIsolation(info)
 			},

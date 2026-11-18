@@ -25,6 +25,9 @@ type fakeRuntime struct {
 	execs             []ExecRequest
 	execResult        ExecResult
 	execErr           error
+	// execHook, when set, answers an exec and reports whether it did, so a
+	// test can fail one command (the CA install) while the rest behave.
+	execHook func(req ExecRequest) (ExecResult, bool)
 	// ensureImageErr fails image availability; ensuredImages records what was
 	// asked for, so the StartSession wiring is assertable.
 	ensureImageErr error
@@ -97,6 +100,11 @@ func (r *fakeRuntime) Exec(_ context.Context, id string, req ExecRequest) (ExecR
 		return ExecResult{}, errors.New("fake: unknown container")
 	}
 	r.execs = append(r.execs, req)
+	if r.execHook != nil {
+		if res, ok := r.execHook(req); ok {
+			return res, nil
+		}
+	}
 	return r.execResult, r.execErr
 }
 
