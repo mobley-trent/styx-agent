@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -166,6 +167,20 @@ func (c *CA) Pool() *x509.CertPool {
 	pool := x509.NewCertPool()
 	pool.AddCert(c.cert)
 	return pool
+}
+
+// SPKIHash is the base64 SHA-256 of the CA certificate's DER
+// SubjectPublicKeyInfo — the pin Chromium's
+// --ignore-certificate-errors-spki-list accepts. The browser is handed this on
+// its command line and never the CA installed system-wide (§4.4): exactly one
+// process trusts exactly this CA, and the operator's own browsing is untouched.
+func (c *CA) SPKIHash() (string, error) {
+	spki, err := x509.MarshalPKIXPublicKey(c.cert.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("containerlayer: encode the CA public key: %w", err)
+	}
+	sum := sha256.Sum256(spki)
+	return base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
 // Leaf issues — or returns from cache — the certificate the proxy presents for

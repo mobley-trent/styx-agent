@@ -27,6 +27,9 @@ build/
 # styx runtime artifacts (the per-session audit trail)
 styx-audit-*.jsonl
 
+# Profiles left behind by an interrupted real-Chromium integration run
+/browser-integration-*/
+
 # Release notes generated from CHANGELOG.md by the release workflow
 /release-notes.md
 

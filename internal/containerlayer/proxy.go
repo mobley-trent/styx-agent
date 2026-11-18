@@ -269,8 +269,12 @@ func (p *EgressProxy) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultProxyTimeout)
 	defer cancel()
 	err := server.Shutdown(ctx)
-	if err != nil {
+	if err != nil && !errors.Is(err, net.ErrClosed) {
 		err = fmt.Errorf("containerlayer: stop egress proxy: %w", err)
+	} else {
+		// Shutdown re-closes the listener this method already closed; an
+		// already-closed listener is teardown, not a failure.
+		err = nil
 	}
 	if auditErr := p.recordEvent(ProxyEvent{Kind: EventProxyStop}); auditErr != nil {
 		return errors.Join(err, auditErr)

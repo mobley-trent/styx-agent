@@ -125,6 +125,12 @@ func DefaultRules(mode Mode) *RuleTable {
 		{Tool: "code_exec", Action: VerdictPrompt, Source: "default"},
 		{Tool: "web_fetch", Action: VerdictPrompt, Source: "default"},
 		{Tool: "ssh_logs", Action: VerdictPrompt, Source: "default"},
+		// The browser is a network capability with the same shape as web_fetch:
+		// it prompts in both modes, and engagement scope — never the mode flag —
+		// is what widens a navigate whose host is in scope
+		// (docs/browser-and-proxy.md §6). Only browser_navigate carries a scope
+		// target; the action tools act on the page the model already read.
+		{Tool: "browser_*", Action: VerdictPrompt, Source: "default"},
 		// Delegation is consequential: prompt.
 		{Tool: "dispatch_subagent", Action: VerdictPrompt, Source: "default"},
 		// Proposing a plan is read-only: it asks the operator for

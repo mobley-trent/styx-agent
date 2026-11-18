@@ -12,6 +12,24 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- The harness browser drives a pinned Chromium as a host subprocess behind the session proxy.
+  The six `browser_*` tools (navigate, read, click, type, screenshot, download) launch the browser
+  lazily on first use with `--proxy-server` at the harness proxy and QUIC and WebRTC's non-proxied
+  UDP disabled, so no second egress path exists, and with the engagement CA's SPKI pinned on the
+  command line so exactly one process trusts it. The binary is a declared prerequisite: an absent
+  or wrong-major build is a named error, never a silent downgrade. CDP binds a random loopback
+  port reported only in the profile's `DevToolsActivePort`, and the harness reaches it through a
+  per-launch token gate on its own loopback listener. `browser_read` returns a bounded aria
+  snapshot (8192 by default, capped at 32768) whose interactive nodes carry per-snapshot numbers;
+  click, type, and download accept only those numbers, and an unknown or stale handle is a named
+  error telling the model to take a fresh snapshot. Screenshots and downloads are artifacts under
+  `.styx/out/browser/<session>/` and `.styx/out/downloads/<session>/` — paths, sizes, and metadata,
+  never bytes — with a server-supplied download name reduced to a safe basename. No tool reads or
+  returns a cookie, `Set-Cookie`, `Authorization`, or storage value. The profile lives at
+  `~/.local/share/styx/browsers/<project>/<engagement>/` behind a pid-checked lockfile that refuses
+  a second writer by naming the locking session; safe mode gets an ephemeral profile deleted at
+  session end. A crash is a named transport error, the next call relaunches with the profile's
+  cookies intact, and teardown closes the browser gracefully before releasing the profile. (#157)
 - `--max-budget <usd>` caps a non-interactive run's model spend. The ceiling is measured from the
   run's own usage accounting and the configured per-model rates, never estimated before a call, so
   the crossing turn completes and its tool calls run while the next model call is refused. Spend is
