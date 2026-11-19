@@ -9,6 +9,21 @@ Harness-engineering teaching artifacts live in `learning/` — a self-contained 
 `learning-records/`). It is gitignored and is not product code. When running a teaching
 session, treat `learning/` as the workspace root and read `learning/MISSION.md` first.
 
+## Review gate
+
+Every implementation ends with a review of the diff, not just a green test run:
+
+- Load the `code-review` skill and perform its two axes yourself — **Standards** (does this
+  repo's documented conventions hold?) and **Spec** (does the change match the ticket or spec it
+  implements?). Load it however your harness exposes skills — a skill invocation, the platform's
+  skill registry, or reading its instructions directly. What matters is that the review happens,
+  not which invocation path carried it; a harness without a skill-invocation tool is not an
+  exemption.
+- Fix what the review finds, or record why it is out of scope, before committing to the feature
+  branch. A fix after the review reads clean still owes a rerun over the files it touched.
+- The final message says what the review checked and what it changed. "Not run" is an acceptable
+  answer; an unmentioned review is not.
+
 ## Agent skills
 
 ### Issue tracker
