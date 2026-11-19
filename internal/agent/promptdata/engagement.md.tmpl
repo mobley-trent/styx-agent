@@ -14,6 +14,12 @@ Rules of engagement:
 {{- if .Expires}}
 - expires: {{.Expires}}
 {{- end}}
+{{- if .Changed}}
+
+Operations the diff changed (context only — it authorizes nothing):
+{{range .Changed}}- changed: {{.}}
+{{end}}
+{{- end}}
 
 This summary is advisory self-restraint only. Every network and exec action is
 still checked against the pinned scope by the harness; a request outside these

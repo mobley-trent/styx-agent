@@ -615,3 +615,82 @@ func TestVerdictExitCodes(t *testing.T) {
 		})
 	}
 }
+
+// TestDiffScopeFlagUsage pins docs/headless-ci.md §11.2's flag contract: a
+// scope flag that cannot be honoured is a usage error (2), never a silently
+// ignored one.
+func TestDiffScopeFlagUsage(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "scope mode without -n",
+			args: []string{"styx", "--scope-mode", "diff", "--engagement", "e.yaml", "--diff-base", "main"},
+			want: "--scope-mode needs a non-interactive run",
+		},
+		{
+			name: "diff base without -n",
+			args: []string{"styx", "--diff-base", "main"},
+			want: "--diff-base needs a non-interactive run",
+		},
+		{
+			name: "scope mode without an engagement",
+			args: []string{"styx", "-n", "--scope-mode", "diff", "--diff-base", "main", "scan"},
+			want: "--scope-mode diff needs --engagement",
+		},
+		{
+			name: "scope mode without a base",
+			args: []string{"styx", "-n", "--engagement", "e.yaml", "--scope-mode", "diff", "scan"},
+			want: "--scope-mode diff needs --diff-base",
+		},
+		{
+			name: "unknown scope mode",
+			args: []string{"styx", "-n", "--engagement", "e.yaml", "--diff-base", "main", "--scope-mode", "full", "scan"},
+			want: `--scope-mode "full": want diff`,
+		},
+		{
+			name: "empty scope mode",
+			args: []string{"styx", "-n", "--engagement", "e.yaml", "--diff-base", "main", "--scope-mode=", "scan"},
+			want: "--scope-mode needs a mode",
+		},
+		{
+			name: "diff base without a scope mode",
+			args: []string{"styx", "-n", "--engagement", "e.yaml", "--diff-base", "main", "scan"},
+			want: "--diff-base needs --scope-mode diff",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stderr, code := run(tt.args, "v0.1.0")
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2 (stderr=%q)", code, stderr)
+			}
+			if !strings.Contains(stderr, tt.want) {
+				t.Errorf("stderr = %q, want %q", stderr, tt.want)
+			}
+			if !strings.Contains(stderr, "Usage: styx") {
+				t.Errorf("stderr has no usage after a usage error: %q", stderr)
+			}
+		})
+	}
+}
+
+// TestParseDiffScopeFlags checks the accepted shape reaches the harness: the
+// mode, the ref, and the one task.
+func TestParseDiffScopeFlags(t *testing.T) {
+	opts, err := parseArgs([]string{
+		"-n", "--engagement", "e.yaml", "--diff-base", "origin/main",
+		"--scope-mode", "diff", "scan the change",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs() = %v", err)
+	}
+	if opts.scopeMode != "diff" || opts.diffBase != "origin/main" {
+		t.Errorf("scope mode = %q, base = %q; want diff and origin/main", opts.scopeMode, opts.diffBase)
+	}
+	if opts.task != "scan the change" {
+		t.Errorf("task = %q, want the one positional", opts.task)
+	}
+}

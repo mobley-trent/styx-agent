@@ -1,6 +1,9 @@
 package apispec
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -76,4 +79,16 @@ func sortedKeys(m map[string]any) []string {
 // document sample does not wreck an error's shape.
 func collapse(text string) string {
 	return strings.Join(strings.Fields(text), " ")
+}
+
+// fingerprintNode hashes one decoded node's canonical JSON. encoding/json
+// sorts map keys, so the same declaration hashes the same on every read, and a
+// diff can tell a changed operation from an untouched one.
+func fingerprintNode(v any) string {
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:8])
 }
