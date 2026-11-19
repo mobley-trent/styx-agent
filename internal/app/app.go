@@ -22,6 +22,7 @@ import (
 
 	"github.com/mobley-trent/styx-agent/internal/agent"
 	"github.com/mobley-trent/styx-agent/internal/agent/subagent"
+	"github.com/mobley-trent/styx-agent/internal/apispec"
 	"github.com/mobley-trent/styx-agent/internal/audit"
 	"github.com/mobley-trent/styx-agent/internal/browser"
 	"github.com/mobley-trent/styx-agent/internal/config"
@@ -683,6 +684,26 @@ func (h *Harness) configure() error {
 	// a parse writes engagement state, so safe mode denies it
 	// (docs/parser-tool-contracts.md §9).
 	baseTools = append(baseTools, agent.ParserTools(h.WorkDir, stateStoreHandle(stateStore), pendingParses)...)
+	// `api_spec_load` reads a declaration rather than scanner output, but it is
+	// gated the same way: safe mode denies it (there is no pool to check a
+	// declaration against and no store for the host it declares) and engagement
+	// mode allows it, audited (docs/api-spec-targets.md §8, ADR-0014). Its
+	// usable servers are resolved once here and pinned for the session through
+	// the container's authoritative resolver.
+	var apiScope apispec.Scope
+	var apiPool []string
+	if eng != nil {
+		apiScope = eng.Scope()
+		apiPool = eng.Targets()
+	}
+	baseTools = append(baseTools, agent.APISpecTool(agent.APISpecOptions{
+		Workspace: h.WorkDir,
+		Store:     stateStoreHandle(stateStore),
+		Scope:     apiScope,
+		Resolver:  engagement.DefaultResolver,
+		Pool:      apiPool,
+		Pin:       declaredPins(container),
+	}))
 	// The six browser tools are registered in both modes. The rule table
 	// prompts for them, and engagement scope widens an in-scope navigate
 	// (docs/browser-and-proxy.md §6).
@@ -1278,6 +1299,19 @@ func allowedEgress(eng *engagement.Engagement, cfg *config.Config) []netip.Prefi
 		}
 	}
 	return out
+}
+
+// declaredPins returns the sink api_spec_load pins a usable declared server's
+// addresses through (docs/api-spec-targets.md §3.1). A session with no
+// container has no resolver to program, so the sink is nil and the load writes
+// state only.
+func declaredPins(container *containerlayer.Manager) func(string, []netip.Addr) {
+	if container == nil {
+		return nil
+	}
+	return func(host string, addrs []netip.Addr) {
+		container.AddPins([]containerlayer.NamePin{{Name: host, Addrs: addrs}})
+	}
 }
 
 // namePins maps the engagement's authorized names onto the container layer's

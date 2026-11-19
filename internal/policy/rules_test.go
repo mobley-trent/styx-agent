@@ -3,6 +3,7 @@ package policy
 import (
 	"testing"
 
+	"github.com/mobley-trent/styx-agent/internal/apispec"
 	"github.com/mobley-trent/styx-agent/internal/parsers"
 )
 
@@ -173,6 +174,12 @@ func TestDefaultRules(t *testing.T) {
 		{name: "safe: bloodhound_parse denies", mode: ModeSafe, tool: "bloodhound_parse", want: VerdictDeny},
 		{name: "engagement: nmap_parse allows", mode: ModeEngagement, tool: "nmap_parse", want: VerdictAllow},
 		{name: "engagement: bloodhound_parse allows", mode: ModeEngagement, tool: "bloodhound_parse", want: VerdictAllow},
+
+		// `api_spec_load` is the same mode difference: safe mode has no pool to
+		// check a declaration against and no store for the host it declares
+		// (docs/api-spec-targets.md §8, ADR-0014).
+		{name: "safe: api_spec_load denies", mode: ModeSafe, tool: "api_spec_load", want: VerdictDeny},
+		{name: "engagement: api_spec_load allows", mode: ModeEngagement, tool: "api_spec_load", want: VerdictAllow},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -215,6 +222,9 @@ func TestDefaultRules(t *testing.T) {
 // mode.
 func isStateTool(tool string) bool {
 	if tool == "state_query" || tool == "state_update" || tool == "attack_path_suggest" || tool == "exploit_plan_suggest" {
+		return true
+	}
+	if tool == apispec.ToolName {
 		return true
 	}
 	return parsers.Known(tool)

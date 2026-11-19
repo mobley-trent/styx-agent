@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 
+	"github.com/mobley-trent/styx-agent/internal/apispec"
 	"github.com/mobley-trent/styx-agent/internal/parsers"
 )
 
@@ -173,5 +174,9 @@ func DefaultRules(mode Mode) *RuleTable {
 	for _, name := range parsers.Names() {
 		rules = append(rules, Rule{Tool: name, Action: stateAction, Source: "default"})
 	}
+	// `api_spec_load` is engagement-gated the same way: safe mode has no pool to
+	// check a declaration against and no store for the host it declares
+	// (docs/api-spec-targets.md §8, ADR-0014).
+	rules = append(rules, Rule{Tool: apispec.ToolName, Action: stateAction, Source: "default"})
 	return &RuleTable{Rules: rules}
 }

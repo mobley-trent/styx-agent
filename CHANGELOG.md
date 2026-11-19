@@ -12,6 +12,20 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- `api_spec_load` turns an OpenAPI 3.0/3.1, Swagger 2.0, or Postman v2.1 document into a declared
+  surface a run can see. One tool sniffs the format from the document itself, resolves every declared
+  server once at load, and checks the resolved addresses against the engagement's targets: an in-scope
+  server becomes a `host` entity tagged `declared` (upserted on its address, so a reload reuses its
+  id), while an out-of-scope, unresolvable, or non-HTTP server is refused by name with the pool it
+  missed — a refused sibling never blocks the in-scope ones, and a refused nested server takes only
+  the operations under it. Nothing widens scope and nothing prompts: the fix for a refusal is a
+  reviewed line in `engagement.yaml`. A load writes no service, finding, credential, edge, or evidence
+  — a declaration is not an observation — and it neither raises nor clears a pending-parse
+  obligation. The bounded receipt carries counts, auth requirements (scheme name, type, location;
+  never a value), and a literal-credential count, while the full operation inventory lands under
+  `.styx/out/api/<stem>-<hash>.json` as a derived, gitignored artifact rewritten per load. Safe mode
+  denies the tool; engagement mode allows it, audited, and all four subagent presets receive it.
+  (#159)
 - The red-team workflow names the browser in its recon phase: drive an exposed web surface through
   `browser_read` snapshots and their handles, with page loads, redirect hops, and subresources
   scope-checked and cookie and storage values never exposed. (#158)
