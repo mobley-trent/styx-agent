@@ -21,7 +21,7 @@ import (
 // gate, CDP, the aria snapshot, a click, typing, a screenshot, and a download
 // against the host's pinned Chromium. It is opt-in because it needs a browser:
 //
-//	STYX_BROWSER_INTEGRATION=1 go test ./internal/browser -run Integration -v
+//	STYX_BROWSER_INTEGRATION=1 go test ./internal/browser -run TestBrowserDriverAgainstChromium -v
 //
 // Its origin and proxy are loopback stubs, so it never touches a real target.
 func TestBrowserDriverAgainstChromium(t *testing.T) {

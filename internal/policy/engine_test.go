@@ -77,6 +77,31 @@ func TestEngineEngagementScopeSemantics(t *testing.T) {
 			want: VerdictPrompt, wantRsn: ReasonRuleMatch,
 		},
 		{
+			name: "engagement in-scope browser navigation auto-allows",
+			mode: ModeEngagement, scope: scope,
+			call: Call{Tool: "browser_navigate", ScopeTargets: []Target{{Addr: inScopeHost}}},
+			want: VerdictAllow, wantRsn: ReasonInScope,
+		},
+		{
+			name: "engagement out-of-scope browser navigation prompts",
+			mode: ModeEngagement, scope: scope,
+			call: Call{Tool: "browser_navigate", ScopeTargets: []Target{{Addr: outScopeHost}}},
+			want: VerdictPrompt, wantRsn: ReasonOutOfScope,
+		},
+		{
+			name: "safe mode browser navigation prompts even in scope",
+			mode: ModeSafe, scope: scope,
+			call: Call{Tool: "browser_navigate", ScopeTargets: []Target{{Addr: inScopeHost}}},
+			want: VerdictPrompt, wantRsn: ReasonRuleMatch,
+		},
+		{
+			// Only navigate carries a scope target; an action on the page the
+			// model already read is a rule-table question in both modes.
+			name: "engagement browser action without a target prompts",
+			mode: ModeEngagement, scope: scope, call: Call{Tool: "browser_click"},
+			want: VerdictPrompt, wantRsn: ReasonRuleMatch,
+		},
+		{
 			name: "engagement mode flag alone widens nothing (no targets)",
 			mode: ModeEngagement, scope: scope, call: Call{Tool: "write_file"},
 			want: VerdictPrompt, wantRsn: ReasonRuleMatch,

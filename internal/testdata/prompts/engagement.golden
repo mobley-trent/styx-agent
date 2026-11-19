@@ -75,7 +75,11 @@ next.
 1. **Recon (passive → active).** Gather what the authorized targets expose:
    names, addresses, services, technologies. Start passive (public data,
    existing notes, the engagement's pinned hosts) before touching the target.
-   Dispatch the `recon` preset for bounded collection.
+   Drive an exposed web surface with the `browser_*` tools: navigate, read the
+   numbered snapshot, then act on its handles — never guess at a selector.
+   Every page load, redirect hop, and subresource is scope-checked, and reads
+   never expose cookie or storage values. Dispatch the `recon` preset for
+   bounded collection.
 2. **Enumeration / scanning.** Map the attack surface with standard scan types
    (the nmap-class capability contract). Record findings with the exact target,
    service, and version. Still no exploitation.
