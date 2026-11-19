@@ -79,6 +79,16 @@ func runHeadless(ctx context.Context, h *Harness) error {
 	}()
 
 	h.printIdentity()
+	// Diff scope is legible before the first turn: what the change narrowed to,
+	// and what contributed nothing (docs/headless-ci.md §11.2).
+	h.printDiffScope(printer)
+	// A change that maps to no authorized target is a successful no-op: the one
+	// line above, the normal end summary, and nothing scanned. It is never a
+	// refusal and never a full-scope run, and no turn is spent on it.
+	if h.diffEmpty {
+		h.printSummary(agent.Result{}, 0)
+		return nil
+	}
 	h.printBudgetCap()
 	result, err := h.SubmitResult(runCtx, h.task)
 
@@ -134,8 +144,32 @@ func (h *Harness) printIdentity() {
 		// (docs/exploitation-phase.md §6).
 		where = fmt.Sprintf("engagement %s · exploit %s", eng.Name(), eng.ROE().AutonomyLevel())
 	}
-	_, _ = fmt.Fprintf(h.errWriter(), "styx: %s · %s · session %s\n",
-		h.Version, where, shortID(h.SessionID()))
+	parts := []string{h.Version, where}
+	// A scoped run says so, with the base it was scoped against, so no reader
+	// has to infer whether a run was narrowed (docs/headless-ci.md §11.2).
+	if h.scopeMode != "" {
+		parts = append(parts, fmt.Sprintf("diff scope (base %s)", h.diffBaseCommit))
+	}
+	parts = append(parts, "session "+shortID(h.SessionID()))
+	_, _ = fmt.Fprintf(h.errWriter(), "styx: %s\n", strings.Join(parts, " · "))
+}
+
+// printDiffScope writes the diff scope's legibility lines, in the harness's own
+// voice: what contributed nothing, and either the effective pool or §11.2's
+// one-line no-op.
+func (h *Harness) printDiffScope(printer *headlessPrinter) {
+	if h.scopeMode == "" {
+		return
+	}
+	for _, note := range h.diffNotes {
+		printer.write("styx: diff scope: " + note)
+	}
+	if h.diffEmpty {
+		printer.write("styx: diff scope: no authorized target matched the change")
+		return
+	}
+	printer.write(fmt.Sprintf("styx: diff scope: base %s · targets %s",
+		h.diffBaseCommit, strings.Join(h.diffTargets, ", ")))
 }
 
 // printBudgetCap announces the run's ceiling, one `styx: ` line after the

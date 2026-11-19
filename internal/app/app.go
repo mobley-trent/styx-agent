@@ -27,6 +27,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/browser"
 	"github.com/mobley-trent/styx-agent/internal/config"
 	"github.com/mobley-trent/styx-agent/internal/containerlayer"
+	"github.com/mobley-trent/styx-agent/internal/diffscope"
 	"github.com/mobley-trent/styx-agent/internal/engagement"
 	"github.com/mobley-trent/styx-agent/internal/engagementstate"
 	"github.com/mobley-trent/styx-agent/internal/findingsexport"
@@ -73,6 +74,17 @@ type Options struct {
 	// subagent, repair, and compaction turns alike — and a spent cap ends the
 	// run as broken (exit 1) rather than as a verdict.
 	MaxBudget float64
+	// ScopeMode is --scope-mode. Only ScopeModeDiff is accepted: it narrows the
+	// run to the targets the change declares (docs/headless-ci.md §11.2,
+	// docs/api-spec-targets.md §5), and it needs an engagement, an explicit
+	// base, and -n.
+	ScopeMode string
+	// DiffBase is --diff-base, the ref a diff-scoped run resolves to its
+	// merge-base with HEAD.
+	DiffBase string
+	// DiffScope replaces the diff-scope computation (tests). Nil reads the
+	// project's git repository.
+	DiffScope func(ctx context.Context, opts diffscope.Options) (diffscope.Result, error)
 	// Version is the running binary's version, shown in the status line.
 	Version string
 	// SourceBuild marks an unstamped (go build / go install) binary. The update
@@ -168,6 +180,20 @@ type Harness struct {
 	// maxBudget is the run's USD ceiling, 0 when no cap was asked for
 	// (docs/budget-cap.md). The loop reads it through the harness's Spend.
 	maxBudget float64
+	// scopeMode is --scope-mode: "diff" runs narrowed to what the change
+	// declares. diffBase is the ref named and diffBaseCommit the merge-base it
+	// resolved to, which the identity line carries; diffTargets is the
+	// effective pool and diffNotes what contributed nothing. diffEmpty marks a
+	// change that matched no authorized target: the run ends clean having
+	// scanned nothing. changedOps is the diff's operations on the narrowed
+	// hosts: prompt context that authorizes nothing (docs/headless-ci.md
+	// §11.2, docs/api-spec-targets.md §5.3).
+	scopeMode      string
+	diffBaseCommit string
+	diffTargets    []string
+	diffNotes      []string
+	diffEmpty      bool
+	changedOps     []string
 
 	// model is the pinned model ID currently in force. /model swaps it without
 	// touching the byte-stable prompt prefix (§3.1).
@@ -340,6 +366,13 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		return nil, err
 	}
 
+	// The scope flags are validated before anything runs, so a combination that
+	// cannot be honoured is a usage refusal rather than a silently ignored
+	// flag (docs/headless-ci.md §11.2).
+	if err := checkScopeOptions(opts); err != nil {
+		return nil, err
+	}
+
 	// Engagement gate: strict, refuse-to-start validation (§7.2). The launch
 	// door and the in-session /engagement door run exactly this gate.
 	var eng *engagement.Engagement
@@ -348,6 +381,29 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 		if err != nil {
 			return nil, fmt.Errorf("styx: refusing to start: %w", err)
 		}
+	}
+
+	// Diff scope narrows the pool to what the change declares
+	// (docs/headless-ci.md §11.2, docs/api-spec-targets.md §5). It is computed
+	// before the first turn and before the container exists, and it writes
+	// nothing: another session's engagement store is untouched, and a refusal
+	// costs no container. The result can only remove targets from the pool.
+	var scope *diffscope.Result
+	if strings.TrimSpace(opts.ScopeMode) != "" {
+		reader := opts.DiffScope
+		if reader == nil {
+			reader = diffscope.Compute
+		}
+		result, err := reader(ctx, diffscope.Options{
+			Root:       workDir,
+			Base:       opts.DiffBase,
+			Engagement: eng,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("styx: refusing to start: %w", err)
+		}
+		scope = &result
+		eng = eng.Narrow(result.Targets)
 	}
 
 	// Project memory (§10.2): absent is fine, malformed is not our call.
@@ -427,6 +483,24 @@ func Build(ctx context.Context, opts Options) (*Harness, error) {
 	h.compactor = newCompactor(cfg, client, h.currentModel, h.emit)
 	if eng != nil {
 		h.engagementStart = now()
+	}
+	// The narrowing is recorded before anything runs: the effective pool, the
+	// base commit it came from, and what contributed nothing. An unlogged
+	// scope decision refuses the run (docs/headless-ci.md §11.2).
+	if scope != nil {
+		h.scopeMode = ScopeModeDiff
+		h.diffBaseCommit = scope.ShortBase()
+		h.diffTargets = scope.TargetNames()
+		h.diffNotes = scope.Notes
+		h.diffEmpty = eng == nil || eng.Scope().Empty()
+		h.changedOps = scope.Changed
+		if err := h.auditDiffScope(*scope); err != nil {
+			h.mu.Lock()
+			h.Engagement = nil
+			h.mu.Unlock()
+			_ = h.Close()
+			return nil, err
+		}
 	}
 	if err := h.configure(); err != nil {
 		// The session never ran, so it leaves no engagement notes behind: the
@@ -524,7 +598,7 @@ func (h *Harness) configure() error {
 	selection := skillpacks.Select(h.packDetection(mode))
 	prompt, err := agent.BuildSystemPrompt(agent.PromptInput{
 		Mode:       mode,
-		Engagement: engagementContext(eng),
+		Engagement: engagementContext(eng, h.changedOps),
 		Memory:     h.memory,
 		Packs:      selection.Detection,
 		Sandbox:    h.promptToolset(official),
@@ -1403,8 +1477,9 @@ func (h *Harness) emitIsolation(info containerlayer.SessionInfo) {
 }
 
 // engagementContext renders the §7.4 advisory scope summary, or nil in safe
-// mode.
-func engagementContext(eng *engagement.Engagement) *agent.EngagementContext {
+// mode. changed is the diff's changed operations on the narrowed hosts: run
+// context, set before the first turn, authorizing nothing (§5.3).
+func engagementContext(eng *engagement.Engagement, changed []string) *agent.EngagementContext {
 	if eng == nil {
 		return nil
 	}
@@ -1414,6 +1489,7 @@ func engagementContext(eng *engagement.Engagement) *agent.EngagementContext {
 		ExploitAllowed:       eng.ROE().ExploitAllowed,
 		ExploitAuto:          eng.ROE().AutonomyLevel() == policy.AutonomyAuto,
 		DestructiveForbidden: eng.ROE().DestructiveForbidden,
+		Changed:              changed,
 	}
 	if w := eng.ROE().TimeWindow; w != nil {
 		tz := w.TZ

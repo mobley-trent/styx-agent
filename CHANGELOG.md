@@ -12,6 +12,20 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- `--scope-mode diff` / `--diff-base <ref>` narrow a non-interactive run to the targets a change
+  actually declares, intersected with the engagement's pool — a diff can only ever remove targets,
+  never add one. A changed file is a declaration only when its extension is `.json`/`.yaml`/`.yml`
+  *and* its content carries a format key; candidates are read through the same loader
+  `api_spec_load` uses, harness-side and with no state write, so a CI run that exits without a turn
+  records nothing. A changed declaration that will not load refuses the run (`1`) naming the file and
+  the parse error, because a scope flag must not claim a narrowing the run cannot keep; a changed
+  file that declares nothing contributes nothing. The diff's changed operations on the narrowed
+  hosts reach the model as engagement context (`changed: POST /users/{id}`) that authorizes nothing,
+  since host level is the only granularity the gate, the container edge, and the audit enforce
+  identically. A change that maps to no authorized target exits `0` with one line, the normal
+  summary, and nothing scanned; the identity line carries the mode and the base commit, the audit
+  records the effective pool, and `--scope-mode diff` needs `--engagement`, an explicit base, and
+  `-n`. (#160)
 - `api_spec_load` turns an OpenAPI 3.0/3.1, Swagger 2.0, or Postman v2.1 document into a declared
   surface a run can see. One tool sniffs the format from the document itself, resolves every declared
   server once at load, and checks the resolved addresses against the engagement's targets: an in-scope

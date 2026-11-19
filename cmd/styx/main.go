@@ -46,6 +46,15 @@ Flags:
                         with at most four decimals (2.50, 0.0025). Once the
                         cap is spent the run refuses its next model turn and
                         exits 1; needs -n (docs/budget-cap.md)
+  --scope-mode diff     Narrow a non-interactive run to the targets the change
+                        declares, intersected with the engagement's pool: it
+                        can only remove targets, never add one; needs -n,
+                        --engagement, and --diff-base
+                        (docs/headless-ci.md §11.2, docs/api-spec-targets.md
+                        §5)
+  --diff-base <ref>     The ref --scope-mode diff resolves to its merge-base
+                        with HEAD (the PR-shaped diff); needs -n and
+                        --scope-mode diff
   --allow-unverified-image
                         Run a digest-pinned image that is not the signed
                         sandbox image, without verifying it: asks once at
@@ -127,6 +136,8 @@ func run(argv []string, version string) (stdout, stderr string, exitCode int) {
 		OutDir:               opts.out,
 		FailOn:               opts.failOn,
 		MaxBudget:            opts.maxBudgetUSD,
+		ScopeMode:            opts.scopeMode,
+		DiffBase:             opts.diffBase,
 		AllowUnverifiedImage: opts.allowUnverifiedImage,
 		Stdin:                os.Stdin,
 		Stdout:               os.Stdout,
@@ -210,6 +221,15 @@ type cliOptions struct {
 	maxBudget    string
 	maxBudgetSet bool
 	maxBudgetUSD float64
+	// scopeMode is --scope-mode: only "diff" is accepted, and scopeModeSet
+	// records that the flag was given, so an empty value is a usage error
+	// rather than no scoping (docs/headless-ci.md §11.2).
+	scopeMode    string
+	scopeModeSet bool
+	// diffBase is --diff-base: the ref diff scope resolves to its merge-base
+	// with HEAD, and diffBaseSet records that the flag was given.
+	diffBase    string
+	diffBaseSet bool
 	// allowUnverifiedImage waives image signature verification for an
 	// operator-pinned digest (docs/sandbox-image.md §7).
 	allowUnverifiedImage bool
@@ -269,6 +289,12 @@ func parseArgs(args []string) (cliOptions, error) {
 		case "--max-budget":
 			target = &opts.maxBudget
 			opts.maxBudgetSet = true
+		case "--scope-mode":
+			target = &opts.scopeMode
+			opts.scopeModeSet = true
+		case "--diff-base":
+			target = &opts.diffBase
+			opts.diffBaseSet = true
 		default:
 			// A bare argument is the task of a non-interactive run, and a stray
 			// word anywhere else. Which one it is is decided once every flag
@@ -331,6 +357,46 @@ func parseArgs(args []string) (cliOptions, error) {
 			return opts, errors.New("--max-budget needs a non-interactive run (-n)")
 		}
 		opts.maxBudgetUSD = amount
+	}
+
+	// --scope-mode and --diff-base are diff scoping's flags
+	// (docs/headless-ci.md §11.2): the mode accepts only `diff`, it needs an
+	// engagement to narrow and an explicit base, and both flags are CI-shaped,
+	// so without -n they are usage errors rather than silently ignored ones.
+	if opts.scopeModeSet {
+		opts.scopeMode = strings.TrimSpace(opts.scopeMode)
+		switch opts.scopeMode {
+		case "":
+			return opts, errors.New("--scope-mode needs a mode (diff)")
+		case app.ScopeModeDiff:
+		default:
+			return opts, fmt.Errorf("--scope-mode %q: want diff", opts.scopeMode)
+		}
+	}
+	if opts.diffBaseSet {
+		opts.diffBase = strings.TrimSpace(opts.diffBase)
+		if opts.diffBase == "" {
+			return opts, errors.New("--diff-base needs a ref")
+		}
+		if strings.HasPrefix(opts.diffBase, "-") {
+			return opts, fmt.Errorf("--diff-base %q: not a ref", opts.diffBase)
+		}
+	}
+	if opts.scopeModeSet {
+		if !opts.nonInteractive {
+			return opts, errors.New("--scope-mode needs a non-interactive run (-n)")
+		}
+		if strings.TrimSpace(opts.engagement) == "" {
+			return opts, errors.New("--scope-mode diff needs --engagement: with no engagement file there is no scope to narrow to")
+		}
+		if !opts.diffBaseSet {
+			return opts, errors.New("--scope-mode diff needs --diff-base <ref>")
+		}
+	} else if opts.diffBaseSet {
+		if !opts.nonInteractive {
+			return opts, errors.New("--diff-base needs a non-interactive run (-n)")
+		}
+		return opts, errors.New("--diff-base needs --scope-mode diff")
 	}
 
 	if !opts.nonInteractive {

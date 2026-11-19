@@ -145,13 +145,16 @@ type serverDecl struct {
 }
 
 // operationDecl is one operation and the servers in force for it. A non-empty
-// skipped reason marks a record the extractor rejected.
+// skipped reason marks a record the extractor rejected. fingerprint is a hash
+// of the operation as the document declares it, so a diff can tell a changed
+// operation from an untouched one without rendering both.
 type operationDecl struct {
-	method  string
-	path    string
-	servers []serverDecl
-	auth    []string
-	skipped string
+	method      string
+	path        string
+	servers     []serverDecl
+	auth        []string
+	skipped     string
+	fingerprint string
 }
 
 // Outcome is the target-set decision a load records in the audit trail (§8):
@@ -271,6 +274,10 @@ type InventoryOperation struct {
 	Available bool     `json:"available"`
 	Reason    string   `json:"reason,omitempty"`
 	Auth      []string `json:"auth,omitempty"`
+	// Fingerprint identifies the operation's declaration so a diff-scope run
+	// can tell a changed operation from an untouched one. It is not part of
+	// the inventory artifact: the artifact is the surface, not a change log.
+	Fingerprint string `json:"-"`
 }
 
 // defaultResolver is the production Resolver: the host resolver, unmodified.
@@ -291,10 +298,13 @@ type resolution struct {
 	reason string
 }
 
-// loader carries one load's session seams.
+// loader carries one declaration check's seams: the pool to check against and
+// the resolver to pin names with. It is shared by the tool's load and by diff
+// scope's harness-side read, so both classify a declaration identically.
 type loader struct {
 	ctx      context.Context
-	req      Request
+	scope    Scope
+	pool     []string
 	resolver Resolver
 	hosts    map[string]hostLookup
 }
@@ -330,58 +340,27 @@ func Load(ctx context.Context, req Request) (Receipt, error) {
 	if err != nil {
 		return Receipt{}, err
 	}
-	doc, err := parseDocument(req.Artifact, data)
+	// The declaration is read by the same function diff scope uses, so the tool
+	// and a scoped run can never disagree about what a document declares. Only
+	// the write half below is the tool's own.
+	decl, err := Declare(ctx, DeclareRequest{
+		Artifact: req.Artifact,
+		Data:     data,
+		Scope:    req.Scope,
+		Resolver: req.Resolver,
+		Pool:     req.Pool,
+	})
 	if err != nil {
 		return Receipt{}, err
 	}
-	if len(doc.servers) == 0 {
-		reason := doc.noServer
-		if reason == "" {
-			reason = "declares no server at all: with no base URL there is nothing to authorize"
-		}
-		return Receipt{}, fmt.Errorf("%s: %s: %s", ToolName, req.Artifact, reason)
+	if len(decl.Servers) == 0 {
+		return Receipt{}, fmt.Errorf("%s: %s: %s", ToolName, req.Artifact, decl.NoServer)
 	}
-
-	l := &loader{ctx: ctx, req: req, resolver: req.Resolver, hosts: map[string]hostLookup{}}
-	if l.resolver == nil {
-		l.resolver = defaultResolver{}
-	}
-
-	// Resolve each distinct declaration once, in document order.
-	var order []string
-	resolutions := map[string]*resolution{}
-	for _, decl := range doc.servers {
-		key := declKey(decl)
-		if _, seen := resolutions[key]; seen {
-			continue
-		}
-		order = append(order, key)
-		resolutions[key] = l.resolve(decl)
-	}
-
-	var usable []*resolution
-	var refused []Refusal
-	var unresolved []Unresolved
-	seenUnresolved := map[string]bool{}
-	for _, key := range order {
-		r := resolutions[key]
-		if r.usable {
-			usable = append(usable, r)
-			continue
-		}
-		refused = append(refused, Refusal{Server: r.decl.raw, Host: r.host, Reason: r.reason})
-		if r.decl.variable != "" && !seenUnresolved[r.decl.variable] {
-			seenUnresolved[r.decl.variable] = true
-			unresolved = append(unresolved, Unresolved{
-				Variable: r.decl.variable,
-				Server:   r.decl.raw,
-				Reason:   r.reason,
-			})
-		}
-	}
+	usable := decl.Usable()
+	refused := decl.Refused()
 	if len(usable) == 0 {
 		return Receipt{}, fmt.Errorf("%s: %s: nothing usable was declared: %s",
-			ToolName, req.Artifact, refusalSummary(refused))
+			ToolName, req.Artifact, refusalSummary(refusals(refused)))
 	}
 
 	// Record the target-set decision before anything is written: a load that
@@ -392,28 +371,27 @@ func Load(ctx context.Context, req Request) (Receipt, error) {
 			Document:  req.Artifact,
 			Usable:    len(usable),
 			Refused:   len(refused),
-			Addresses: resolvedAddresses(order, resolutions),
+			Addresses: addressesOf(decl.Servers),
 			Subagent:  req.Origin.Subagent,
 		}); err != nil {
 			return Receipt{}, fmt.Errorf("%s: record the target-set decision: %w", ToolName, err)
 		}
 	}
 
-	inventoryOps, unavailable := inventoryOperations(doc, resolutions)
 	inventory := Inventory{
 		Tool:       ToolName,
 		Document:   req.Artifact,
-		Format:     doc.format,
+		Format:     decl.Format,
 		Servers:    inventoryServers(usable),
-		Operations: inventoryOps,
-		Auth:       doc.auth,
+		Operations: decl.Operations,
+		Auth:       decl.Auth,
 	}
 
-	hosts, err := l.writeHosts(usable)
+	hosts, err := writeHosts(ctx, req.Store, req.Origin, usable)
 	if err != nil {
 		return Receipt{}, err
 	}
-	inventoryPath, err := l.writeInventory(inventory)
+	inventoryPath, err := writeInventory(req.Workspace, req.Path, inventory)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -422,48 +400,29 @@ func Load(ctx context.Context, req Request) (Receipt, error) {
 	// on disk (§3.1): a name the resolver answers for but the store never
 	// recorded would be reachable with no record of why, so a load that fails
 	// anywhere pins nothing.
-	for _, r := range usable {
-		if req.Pin == nil || isIPLiteral(r.host) {
+	for _, server := range usable {
+		if req.Pin == nil || isIPLiteral(server.Host) {
 			continue
 		}
-		req.Pin(r.host, append([]netip.Addr(nil), r.addrs...))
+		req.Pin(server.Host, append([]netip.Addr(nil), server.Addresses...))
 	}
 
 	return Receipt{
 		Tool:       ToolName,
 		Document:   req.Artifact,
-		Format:     doc.format,
+		Format:     decl.Format,
 		OK:         true,
-		Servers:    ServerCounts{Declared: len(order), Usable: len(usable), Refused: len(refused)},
+		Servers:    ServerCounts{Declared: len(decl.Servers), Usable: len(usable), Refused: len(refused)},
 		Hosts:      hosts,
-		Operations: OperationCounts{Total: len(inventoryOps), Unavailable: unavailable},
-		Auth:       doc.auth,
-		Redacted:   doc.redacted,
-		Refused:    capRefused(refused),
-		Unresolved: capUnresolved(unresolved),
-		Skipped:    capSkipped(doc.skipped),
+		Operations: OperationCounts{Total: len(decl.Operations), Unavailable: decl.Unavailable()},
+		Auth:       decl.Auth,
+		Redacted:   decl.Redacted,
+		Refused:    capRefused(refusals(refused)),
+		Unresolved: capUnresolved(unresolvedOf(decl.Servers)),
+		Skipped:    capSkipped(decl.Skipped),
 		Inventory:  inventoryPath,
-		Warnings:   capWarnings(doc.warnings),
+		Warnings:   capWarnings(decl.Warnings),
 	}, nil
-}
-
-// resolvedAddresses collects every address the declared servers resolved to,
-// usable and refused alike, deduplicated and sorted. An unresolved declaration
-// resolved to nothing and contributes nothing.
-func resolvedAddresses(order []string, resolutions map[string]*resolution) []string {
-	seen := map[netip.Addr]bool{}
-	var out []string
-	for _, key := range order {
-		for _, addr := range resolutions[key].addrs {
-			if seen[addr] {
-				continue
-			}
-			seen[addr] = true
-			out = append(out, addr.String())
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 // resolve checks one declared server against the pool (§3.1): the scheme must
@@ -504,9 +463,9 @@ func (l *loader) resolve(decl serverDecl) *resolution {
 	}
 
 	for _, addr := range r.addrs {
-		if !l.req.Scope.InScope(addr.String()) {
+		if !l.scope.InScope(addr.String()) {
 			r.reason = fmt.Sprintf("%s resolves to %s, outside engagement targets (%s)",
-				r.host, addr, l.pool())
+				r.host, addr, l.targets())
 			return r
 		}
 	}
@@ -523,9 +482,9 @@ func (l *loader) lookup(host string) ([]netip.Addr, string) {
 	out := hostLookup{}
 	raw, err := l.resolver.LookupHost(l.ctx, host)
 	if err != nil {
-		out.reason = fmt.Sprintf("%s resolves to no addresses (%v); engagement targets: %s", host, err, l.pool())
+		out.reason = fmt.Sprintf("%s resolves to no addresses (%v); engagement targets: %s", host, err, l.targets())
 	} else if len(raw) == 0 {
-		out.reason = fmt.Sprintf("%s resolves to no addresses; engagement targets: %s", host, l.pool())
+		out.reason = fmt.Sprintf("%s resolves to no addresses; engagement targets: %s", host, l.targets())
 	} else {
 		for _, value := range raw {
 			ip, err := netip.ParseAddr(strings.TrimSpace(value))
@@ -537,26 +496,26 @@ func (l *loader) lookup(host string) ([]netip.Addr, string) {
 		}
 		sort.Slice(out.addrs, func(i, j int) bool { return out.addrs[i].Compare(out.addrs[j]) < 0 })
 		if len(out.addrs) == 0 && out.reason == "" {
-			out.reason = fmt.Sprintf("%s resolves to no addresses; engagement targets: %s", host, l.pool())
+			out.reason = fmt.Sprintf("%s resolves to no addresses; engagement targets: %s", host, l.targets())
 		}
 	}
 	l.hosts[host] = out
 	return out.addrs, out.reason
 }
 
-// pool renders the engagement's targets for a refusal reason.
-func (l *loader) pool() string {
-	if len(l.req.Pool) == 0 {
+// targets renders the engagement's targets for a refusal reason.
+func (l *loader) targets() string {
+	if len(l.pool) == 0 {
 		return "no targets declared"
 	}
-	return strings.Join(l.req.Pool, ", ")
+	return strings.Join(l.pool, ", ")
 }
 
 // writeHosts upserts one `declared` host per usable server, reusing the id the
 // store already holds for the record's natural key (§4.1). It writes nothing
 // else: no service, finding, credential, edge, or evidence.
-func (l *loader) writeHosts(usable []*resolution) (Counts, error) {
-	snapshot, err := l.req.Store.Query(engagementstate.Query{Kind: engagementstate.KindHost, IncludeInactive: true, Limit: indexLimit})
+func writeHosts(ctx context.Context, store Store, origin engagementstate.Origin, usable []DeclaredServer) (Counts, error) {
+	snapshot, err := store.Query(engagementstate.Query{Kind: engagementstate.KindHost, IncludeInactive: true, Limit: indexLimit})
 	if err != nil {
 		return Counts{}, fmt.Errorf("%s: read engagement state: %w", ToolName, err)
 	}
@@ -564,17 +523,17 @@ func (l *loader) writeHosts(usable []*resolution) (Counts, error) {
 
 	written := map[string]bool{}
 	var ops []engagementstate.Op
-	for _, r := range usable {
+	for _, server := range usable {
 		id, addresses := "", []string(nil)
-		match, ok := l.matchHost(r, byAddr, byName)
+		match, ok := matchHost(server, byAddr, byName)
 		if ok {
 			id = match.id
 			addresses = append(addresses, match.addresses...)
-			for _, addr := range r.addrs {
+			for _, addr := range server.Addresses {
 				addresses = appendUnique(addresses, addr.String())
 			}
 		} else {
-			for _, addr := range r.addrs {
+			for _, addr := range server.Addresses {
 				addresses = appendUnique(addresses, addr.String())
 			}
 			id = mintedHostID(addresses[0])
@@ -591,8 +550,8 @@ func (l *loader) writeHosts(usable []*resolution) (Counts, error) {
 			Addresses: addresses,
 			Tags:      []string{declaredTag},
 		}
-		if !isIPLiteral(r.host) {
-			op.Hostname = r.host
+		if !isIPLiteral(server.Host) {
+			op.Hostname = server.Host
 		}
 		ops = append(ops, op)
 	}
@@ -603,7 +562,7 @@ func (l *loader) writeHosts(usable []*resolution) (Counts, error) {
 	if len(ops) == 0 {
 		return Counts{}, nil
 	}
-	receipt, err := l.req.Store.Update(l.ctx, l.req.Origin, ops)
+	receipt, err := store.Update(ctx, origin, ops)
 	if err != nil {
 		return Counts{}, fmt.Errorf("%s: write engagement state: %w", ToolName, err)
 	}
@@ -650,14 +609,14 @@ func indexHosts(snapshot engagementstate.Snapshot) (map[string]existingHost, map
 
 // matchHost finds the record a usable server names: any resolved address, or
 // the declared hostname.
-func (l *loader) matchHost(r *resolution, byAddr, byName map[string]existingHost) (existingHost, bool) {
-	for _, addr := range r.addrs {
+func matchHost(server DeclaredServer, byAddr, byName map[string]existingHost) (existingHost, bool) {
+	for _, addr := range server.Addresses {
 		if host, ok := byAddr[normalizeAddress(addr.String())]; ok {
 			return host, true
 		}
 	}
-	if !isIPLiteral(r.host) {
-		if host, ok := byName[strings.ToLower(r.host)]; ok {
+	if !isIPLiteral(server.Host) {
+		if host, ok := byName[strings.ToLower(server.Host)]; ok {
 			return host, true
 		}
 	}
@@ -671,7 +630,7 @@ func inventoryOperations(doc *document, resolutions map[string]*resolution) ([]I
 	out := make([]InventoryOperation, 0, len(doc.operations))
 	unavailable := 0
 	for _, op := range doc.operations {
-		row := InventoryOperation{Method: op.method, Path: op.path, Auth: op.auth}
+		row := InventoryOperation{Method: op.method, Path: op.path, Auth: op.auth, Fingerprint: op.fingerprint}
 		var chosen *resolution
 		reason := ""
 		for _, decl := range op.servers {
@@ -703,14 +662,14 @@ func inventoryOperations(doc *document, resolutions map[string]*resolution) ([]I
 }
 
 // inventoryServers renders the usable declared servers.
-func inventoryServers(usable []*resolution) []InventoryServer {
+func inventoryServers(usable []DeclaredServer) []InventoryServer {
 	out := make([]InventoryServer, 0, len(usable))
-	for _, r := range usable {
-		addresses := make([]string, 0, len(r.addrs))
-		for _, addr := range r.addrs {
+	for _, server := range usable {
+		addresses := make([]string, 0, len(server.Addresses))
+		for _, addr := range server.Addresses {
 			addresses = append(addresses, addr.String())
 		}
-		out = append(out, InventoryServer{URL: r.url, Host: r.host, Addresses: addresses})
+		out = append(out, InventoryServer{URL: server.URL, Host: server.Host, Addresses: addresses})
 	}
 	return out
 }
@@ -718,14 +677,14 @@ func inventoryServers(usable []*resolution) []InventoryServer {
 // writeInventory writes the derived inventory artifact (§4.2). The name is the
 // document's stem plus a hash of its path, so a changed document replaces its
 // inventory rather than accumulating versions.
-func (l *loader) writeInventory(inventory Inventory) (string, error) {
-	abs, err := filepath.Abs(l.req.Path)
+func writeInventory(workspace, documentPath string, inventory Inventory) (string, error) {
+	abs, err := filepath.Abs(documentPath)
 	if err != nil {
-		abs = l.req.Path
+		abs = documentPath
 	}
 	sum := sha256.Sum256([]byte(abs))
 	name := inventoryStem(abs) + "-" + hex.EncodeToString(sum[:3]) + ".json"
-	dir := filepath.Join(l.req.Workspace, InventoryDir)
+	dir := filepath.Join(workspace, InventoryDir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("%s: create %s: %w", ToolName, dir, err)
 	}

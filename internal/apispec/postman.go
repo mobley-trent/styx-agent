@@ -108,7 +108,7 @@ func postmanOperation(request map[string]any, vars map[string]string, auth any) 
 	method := strings.ToUpper(strings.TrimSpace(getString(request, "method")))
 	rawURL := postmanURL(request["url"])
 
-	op := operationDecl{method: method}
+	op := operationDecl{method: method, fingerprint: fingerprintNode(request)}
 	if req, _, ok := postmanAuth(auth); ok {
 		op.auth = []string{req.Scheme}
 	}

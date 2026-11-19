@@ -64,10 +64,11 @@ func extractOpenAPI(doc map[string]any, format string) (*document, error) {
 				auth = declared
 			}
 			out.operations = append(out.operations, operationDecl{
-				method:  strings.ToUpper(method),
-				path:    path,
-				servers: servers,
-				auth:    auth,
+				method:      strings.ToUpper(method),
+				path:        path,
+				servers:     servers,
+				auth:        auth,
+				fingerprint: fingerprintNode([]any{op, item["parameters"]}),
 			})
 		}
 	}
@@ -123,10 +124,11 @@ func extractSwagger(doc map[string]any) (*document, error) {
 				auth = declared
 			}
 			out.operations = append(out.operations, operationDecl{
-				method:  strings.ToUpper(method),
-				path:    path,
-				servers: out.servers,
-				auth:    auth,
+				method:      strings.ToUpper(method),
+				path:        path,
+				servers:     out.servers,
+				auth:        auth,
+				fingerprint: fingerprintNode([]any{op, item["parameters"]}),
 			})
 		}
 	}

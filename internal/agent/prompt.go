@@ -52,6 +52,11 @@ type EngagementContext struct {
 	// TimeWindow is the rendered ROE time window ("08:00–18:00
 	// America/New_York"), empty when the file declares none.
 	TimeWindow string
+	// Changed are the operations a diff-scoped run's change touched on the
+	// narrowed hosts, as "POST /users/{id}" (docs/api-spec-targets.md §5.3).
+	// They aim the run at the change and authorize nothing: scope stays
+	// host-level.
+	Changed []string
 }
 
 // PromptInput is everything the byte-stable prefix is assembled from (§3.3,
