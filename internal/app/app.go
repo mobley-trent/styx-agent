@@ -23,6 +23,7 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/agent"
 	"github.com/mobley-trent/styx-agent/internal/agent/subagent"
 	"github.com/mobley-trent/styx-agent/internal/audit"
+	"github.com/mobley-trent/styx-agent/internal/browser"
 	"github.com/mobley-trent/styx-agent/internal/config"
 	"github.com/mobley-trent/styx-agent/internal/containerlayer"
 	"github.com/mobley-trent/styx-agent/internal/engagement"
@@ -181,6 +182,10 @@ type Harness struct {
 	sessions  *sessions.Store
 	audit     *audit.Writer
 	container *containerlayer.Manager
+	// browserDriver is the session's host browser (docs/browser-and-proxy.md
+	// §3). It starts lazily on the first browser call and is torn down with the
+	// session; the engagement profile outlives it.
+	browserDriver *browser.Manager
 	// state is the engagement's forensic record (docs/engagement-state.md).
 	// Nil in safe mode, where there is no engagement to record, and replaced
 	// with a fresh store on every gate activation (§7.3).
@@ -584,6 +589,12 @@ func (h *Harness) configure() error {
 
 	fetcher, logFetcher := h.networkTooling(eng)
 
+	// The host browser (docs/browser-and-proxy.md §3): a pinned Chromium behind
+	// the session proxy, one per session, lazy. It is constructed here — after
+	// the container that supplies its proxy URL — and torn down with the
+	// session; the engagement's profile outlives it.
+	browserTooling, browserDriver := h.browserTools(container, eng)
+
 	// Engagement state is the per-engagement forensic record (spec §10; the
 	// model is docs/engagement-state.md). It is opened per activation and
 	// closed when the mode changes. A document whose schema version this build
@@ -672,6 +683,10 @@ func (h *Harness) configure() error {
 	// a parse writes engagement state, so safe mode denies it
 	// (docs/parser-tool-contracts.md §9).
 	baseTools = append(baseTools, agent.ParserTools(h.WorkDir, stateStoreHandle(stateStore), pendingParses)...)
+	// The six browser tools are registered in both modes. The rule table
+	// prompts for them, and engagement scope widens an in-scope navigate
+	// (docs/browser-and-proxy.md §6).
+	baseTools = append(baseTools, browserTooling...)
 
 	// The skill tool is exposed only for skills whose frontmatter carries
 	// model-invocation metadata (§8.4). No invocable skill means no tool.
@@ -748,6 +763,7 @@ func (h *Harness) configure() error {
 
 	old := h.container
 	oldState := h.state
+	oldBrowser := h.browserDriver
 
 	h.mu.Lock()
 	h.Mode = mode
@@ -756,6 +772,7 @@ func (h *Harness) configure() error {
 	h.Tools = tools
 	h.packs = selection
 	h.container = container
+	h.browserDriver = browserDriver
 	h.state = stateStore
 	h.pendingParses = pendingParses
 	h.Loop = agent.NewLoop(h.client, tools, engine, h.audit, prompt, loopOpts...)
@@ -763,6 +780,11 @@ func (h *Harness) configure() error {
 
 	if old != nil {
 		_ = old.Close()
+	}
+	if oldBrowser != nil {
+		// A mode switch stops the browser and flushes its session, while the
+		// engagement profile and CA stay (§7).
+		_ = oldBrowser.Close()
 	}
 	if oldState != nil {
 		_ = oldState.Close()
@@ -1491,6 +1513,8 @@ func (h *Harness) Close() error {
 	h.session = nil
 	container := h.container
 	h.container = nil
+	browserDriver := h.browserDriver
+	h.browserDriver = nil
 	mcp := h.mcp
 	h.mcp = nil
 	state := h.state
@@ -1506,6 +1530,9 @@ func (h *Harness) Close() error {
 	}
 	if mcp != nil {
 		errs = append(errs, mcp.Close())
+	}
+	if browserDriver != nil {
+		errs = append(errs, browserDriver.Close())
 	}
 	if container != nil {
 		errs = append(errs, container.Close())
@@ -1920,6 +1947,7 @@ func (h *Harness) Status(busy bool) tui.Status {
 		Pending:    h.pendingParseText(),
 		Session:    shortID(h.SessionID()),
 		Isolation:  string(h.isolation()),
+		Browser:    h.browserText(),
 		MCP:        mcpStatusText(h.MCPServers()),
 		Compaction: h.compactionText(),
 		Cost:       h.costText(),

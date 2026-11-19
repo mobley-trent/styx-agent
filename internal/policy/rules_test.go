@@ -6,6 +6,20 @@ import (
 	"github.com/mobley-trent/styx-agent/internal/parsers"
 )
 
+// TestBrowserToolsPromptInBothModes pins the browser's rule shape
+// (docs/browser-and-proxy.md §6): a network capability prompts in both modes,
+// and engagement scope — never the mode flag — is what widens a navigate.
+func TestBrowserToolsPromptInBothModes(t *testing.T) {
+	for _, mode := range []Mode{ModeSafe, ModeEngagement} {
+		table := DefaultRules(mode)
+		for _, name := range []string{"browser_navigate", "browser_read", "browser_click", "browser_type", "browser_screenshot", "browser_download"} {
+			if got := table.resolve(Call{Tool: name}, VerdictDeny); got.Verdict != VerdictPrompt {
+				t.Errorf("mode %q: %s verdict = %q, want prompt", mode, name, got.Verdict)
+			}
+		}
+	}
+}
+
 func TestRuleTableResolvePrecedence(t *testing.T) {
 	// deny > prompt > allow among matching rules, regardless of order (§6.1).
 	tests := []struct {

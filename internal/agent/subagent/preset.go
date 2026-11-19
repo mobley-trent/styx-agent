@@ -33,6 +33,14 @@ const DefaultMaxTurns = 40
 var networkTools = map[string]bool{
 	"web_fetch": true,
 	"ssh_logs":  true,
+	// The browser reaches the network through the harness proxy
+	// (docs/browser-and-proxy.md §3), so a networkless preset must not carry it.
+	"browser_navigate":   true,
+	"browser_read":       true,
+	"browser_click":      true,
+	"browser_type":       true,
+	"browser_screenshot": true,
+	"browser_download":   true,
 }
 
 // Preset is one built-in subagent role (§5.4): its system prompt, its tool
@@ -118,7 +126,7 @@ var presets = []Preset{
 	{
 		Name:        "recon",
 		Description: "Reconnaissance within the engagement scope: passive collection, then active probes.",
-		Tools:       append([]string{"web_fetch", "bash", "read_file", "glob", "grep"}, stateTools...),
+		Tools:       append([]string{"web_fetch", "browser_navigate", "browser_read", "browser_click", "browser_type", "browser_screenshot", "browser_download", "bash", "read_file", "glob", "grep"}, stateTools...),
 		MaxTurns:    DefaultMaxTurns,
 		Network:     NetworkScope,
 		section:     reconSection,
@@ -126,7 +134,7 @@ var presets = []Preset{
 	{
 		Name:            "exploit-dev",
 		Description:     "Develop and validate exploitation against authorized in-scope targets. Engagement-gated.",
-		Tools:           append([]string{"bash", "code_exec", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch"}, stateTools...),
+		Tools:           append([]string{"bash", "code_exec", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch", "browser_navigate", "browser_read", "browser_click", "browser_type", "browser_screenshot", "browser_download"}, stateTools...),
 		MaxTurns:        DefaultMaxTurns,
 		Network:         NetworkScope,
 		EngagementGated: true,

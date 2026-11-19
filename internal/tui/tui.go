@@ -103,6 +103,10 @@ type Status struct {
 	// "degraded-isolation"), empty when no container is running, so the bar
 	// never claims enforced egress it does not have (§5.2, §9.1).
 	Isolation string
+	// Browser is the host-browser indicator ("browser: host"), empty when no
+	// browser is running, so a host process rendering hostile page content is
+	// never invisible (docs/browser-and-proxy.md §3.1, §9.1).
+	Browser string
 	// MCP is the connected-server summary ("mcp 2/2"), empty when the project
 	// configures no MCP servers (§5.5, §9.1).
 	MCP string
@@ -903,6 +907,9 @@ func (m *Model) statusLine() string {
 	}
 	if status.Isolation != "" {
 		parts = append(parts, status.Isolation)
+	}
+	if status.Browser != "" {
+		parts = append(parts, status.Browser)
 	}
 	if status.Targets != "" {
 		parts = append(parts, status.Targets)

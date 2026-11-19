@@ -43,8 +43,11 @@ func fullRegistry(t *testing.T, ran map[string]*int32) *agent.Registry {
 	}
 	// Every preset receives the engagement-state tools and the parser tools
 	// (§5.4 of the spec, docs/parser-tool-contracts.md §9), so a session's
-	// registry must carry them for a run to start at all.
+	// registry must carry them for a run to start at all. The browser verbs
+	// ride recon and exploit-dev (docs/browser-and-proxy.md §6), so the
+	// session registry carries them too.
 	names = append(names, stateTools...)
+	names = append(names, agent.BrowserToolNames()...)
 	tools := make([]agent.Tool, 0, len(names))
 	for _, name := range names {
 		tools = append(tools, countingTool(name, ran[name]))

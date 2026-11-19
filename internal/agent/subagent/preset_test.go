@@ -19,8 +19,8 @@ func TestPresetsMatchSpec(t *testing.T) {
 		// spec): parsers run inside subagents, so the write path must reach
 		// them.
 		{"coder", append([]string{"read_file", "write_file", "edit_file", "glob", "grep", "bash", "code_exec"}, stateTools...), NetworkNone, false},
-		{"recon", append([]string{"web_fetch", "bash", "read_file", "glob", "grep"}, stateTools...), NetworkScope, false},
-		{"exploit-dev", append([]string{"bash", "code_exec", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch"}, stateTools...), NetworkScope, true},
+		{"recon", append([]string{"web_fetch", "browser_navigate", "browser_read", "browser_click", "browser_type", "browser_screenshot", "browser_download", "bash", "read_file", "glob", "grep"}, stateTools...), NetworkScope, false},
+		{"exploit-dev", append([]string{"bash", "code_exec", "read_file", "write_file", "edit_file", "glob", "grep", "web_fetch", "browser_navigate", "browser_read", "browser_click", "browser_type", "browser_screenshot", "browser_download"}, stateTools...), NetworkScope, true},
 		{"log-triage", append([]string{"read_file", "glob", "grep", "code_exec"}, stateTools...), NetworkNone, false},
 	}
 	if len(Presets()) != len(cases) {
