@@ -21,11 +21,18 @@ type Target struct {
 // dropped — the result can only ever be smaller than the pool, never larger,
 // and never contains a destination the file did not authorize.
 //
-// A declared name the pool authorizes by name keeps its name, so the session's
-// authoritative resolver still answers it and the container's egress pins land
-// on the declared addresses; a name authorized only by address narrows to those
-// addresses. The caller decides what an empty result means: a diff scope treats
-// it as the successful no-op, never as a run with full scope.
+// A declared name stays a name, whatever pool entry authorized it: whether the
+// pool names it, covers it with a wildcard, or merely contains the addresses it
+// resolved to, the narrowed pool keeps the name with exactly those addresses as
+// its pins. That is what lets the session's authoritative resolver answer a
+// request by name at all — a narrowed pool of bare addresses would leave the
+// container unable to resolve the declared host — and it authorizes nothing
+// new, because every pin is an address the pool already contained and no other
+// address joins it. A name whose addresses are not all authorized is refused
+// whole, exactly as the loader refuses it (answer-binding).
+//
+// The caller decides what an empty result means: a diff scope treats it as the
+// successful no-op, never as a run with full scope.
 func (e *Engagement) Narrow(targets []Target) *Engagement {
 	if e == nil {
 		return nil
@@ -79,40 +86,37 @@ func (s *Scope) narrow(targets []Target) ([]entry, []string) {
 			addTarget(ip.String())
 			continue
 		}
-		if s.nameAuthorized(host) {
-			pins := slices.Clone(target.Addrs)
-			sortAddrs(pins)
-			pins = slices.Compact(pins)
-			addEntry("name:"+host, entry{raw: host, kind: entryHost, name: host, pins: pins})
-			addTarget(host)
+		pins := pinnedAddrs(target.Addrs)
+		if len(pins) == 0 || !s.authorizesAll(pins) {
 			continue
 		}
-		for _, addr := range target.Addrs {
-			addr = addr.Unmap()
-			if !s.contains(addr) {
-				continue
-			}
-			addEntry("ip:"+addr.String(), entry{raw: addr.String(), kind: entryIP, ip: addr})
-			addTarget(addr.String())
-		}
+		// Keep the name, with the addresses the declaration resolved to, so the
+		// session resolver answers it and the egress pins stay the declared
+		// ones. The name itself joins nothing: these are pool addresses.
+		addEntry("name:"+host, entry{raw: host, kind: entryHost, name: host, pins: pins})
+		addTarget(host)
 	}
 	return entries, declared
 }
 
-// nameAuthorized reports whether the pool authorizes a hostname by name: an
-// exact hostname entry, or a wildcard covering it.
-func (s *Scope) nameAuthorized(name string) bool {
-	for _, e := range s.entries {
-		switch e.kind {
-		case entryHost:
-			if e.name == name {
-				return true
-			}
-		case entryWildcard:
-			if matchWildcard(e.name, name) {
-				return true
-			}
+// pinnedAddrs renders a declaration's addresses as a stable pin set.
+func pinnedAddrs(addrs []netip.Addr) []netip.Addr {
+	pins := make([]netip.Addr, 0, len(addrs))
+	for _, addr := range addrs {
+		pins = append(pins, addr.Unmap())
+	}
+	sortAddrs(pins)
+	return slices.Compact(pins)
+}
+
+// authorizesAll reports whether the pool contains every address, which is the
+// declaration's prerequisite: a name resolving partly outside the pool is
+// refused whole, never narrowed to the in-scope half (§3.1).
+func (s *Scope) authorizesAll(addrs []netip.Addr) bool {
+	for _, addr := range addrs {
+		if !s.contains(addr) {
+			return false
 		}
 	}
-	return false
+	return true
 }

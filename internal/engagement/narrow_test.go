@@ -78,3 +78,56 @@ func TestNarrowNeverAddsAnUnauthorizedTarget(t *testing.T) {
 		t.Error("an unauthorized target became reachable")
 	}
 }
+
+// TestNarrowKeepsADeclaredNameInsideACIDR is the reachability half of §5.3: a
+// spec's declared name authorized by a CIDR must stay a name in the narrowed
+// pool, or the session resolver never answers it and every request by name
+// fails. The pins are exactly the addresses the pool already contained.
+func TestNarrowKeepsADeclaredNameInsideACIDR(t *testing.T) {
+	eng, err := gate(t, baseFile)
+	if err != nil {
+		t.Fatalf("gate() = %v", err)
+	}
+	declared := []netip.Addr{netip.MustParseAddr("10.0.0.9")}
+	narrowed := eng.Narrow([]Target{{Host: "api.acme.example", Addrs: declared}})
+
+	if !narrowed.Scope().InScope("api.acme.example") {
+		t.Fatal("the declared name is not reachable by name in the narrowed pool")
+	}
+	pins := narrowed.Scope().HostPins()
+	if len(pins) != 1 || pins[0].Name != "api.acme.example" || pins[0].Wildcard {
+		t.Fatalf("host pins = %+v, want the declared name", pins)
+	}
+	if len(pins[0].Addrs) != 1 || pins[0].Addrs[0].String() != "10.0.0.9" {
+		t.Errorf("pins = %v, want the declared address", pins[0].Addrs)
+	}
+	if got := narrowed.Scope().Pins(); len(got) != 1 || got[0].String() != "10.0.0.9" {
+		t.Errorf("egress pins = %v, want the declared address alone", got)
+	}
+	if got := narrowed.Targets(); len(got) != 1 || got[0] != "api.acme.example" {
+		t.Errorf("targets = %v, want the declared name", got)
+	}
+	// Keeping the name adds no authorization: the rest of the CIDR stays out.
+	if narrowed.Scope().InScope("10.0.0.10") {
+		t.Error("an undeclared address inside the CIDR became reachable")
+	}
+}
+
+// TestNarrowRefusesANamePartlyOutsideThePool is answer-binding: a name is taken
+// whole or not at all, exactly as the loader refuses it.
+func TestNarrowRefusesANamePartlyOutsideThePool(t *testing.T) {
+	eng, err := gate(t, baseFile)
+	if err != nil {
+		t.Fatalf("gate() = %v", err)
+	}
+	narrowed := eng.Narrow([]Target{{
+		Host:  "api.acme.example",
+		Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.9"), netip.MustParseAddr("203.0.113.9")},
+	}})
+	if !narrowed.Scope().Empty() {
+		t.Fatalf("targets = %v, want none: a partly out-of-scope name was narrowed", narrowed.Targets())
+	}
+	if narrowed.Scope().InScope("api.acme.example") {
+		t.Error("a partly out-of-scope name became reachable")
+	}
+}

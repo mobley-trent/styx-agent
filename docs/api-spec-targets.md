@@ -295,7 +295,10 @@ that declares nothing* contributes nothing; *a file whose declarations were unre
 - **Hosts narrow.** The changed candidates' usable declared hosts are unioned across documents (two
   specs declaring one host name one target) and **intersected with the pool** — §11.2's
   intersection, never union, unchanged: a diff removes targets from the engagement's set and can
-  never add one.
+  never add one. A declared name stays a name in the narrowed pool, pinned to exactly the addresses
+  its declaration resolved to, so the session's authoritative resolver still answers it and a
+  request by name does not fail; whether the pool named it or covered its addresses with a CIDR
+  changes nothing about what is authorized.
 - **Refused declarations contribute nothing** and are named in a note, like any out-of-scope target
   in a diff.
 - **Unchanged documents contribute nothing.** A source-only change does not drag its spec's hosts

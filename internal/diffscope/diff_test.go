@@ -2,6 +2,7 @@ package diffscope_test
 
 import (
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -311,5 +312,80 @@ func TestComputeRefusesAnUnresolvableBase(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `base "no-such-ref"`) {
 		t.Errorf("error = %q, want the ref named", err)
+	}
+}
+
+// nameResolver answers the declared names its table holds, so a diff-scope test
+// can declare a hostname without touching DNS.
+type nameResolver map[string][]string
+
+// LookupHost answers from the table, NXDOMAIN otherwise.
+func (r nameResolver) LookupHost(_ context.Context, host string) ([]string, error) {
+	if addrs, ok := r[host]; ok {
+		return addrs, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+}
+
+const nameSpec = `openapi: 3.1.0
+info: {title: Acme, version: "1"}
+servers:
+  - url: https://api.acme.example/v1
+paths:
+  /users:
+    get: {}
+`
+
+const nameSpecChanged = `openapi: 3.1.0
+info: {title: Acme, version: "1"}
+servers:
+  - url: https://api.acme.example/v1
+paths:
+  /users:
+    get: {}
+    post: {}
+`
+
+// TestComputeKeepsADeclaredNameAuthorizedByCIDR composes the two halves: the
+// change narrows to the spec's declared name, and the narrowed pool still
+// answers that name — a pool of bare addresses would leave the container unable
+// to resolve it, so every request by name would fail.
+func TestComputeKeepsADeclaredNameAuthorizedByCIDR(t *testing.T) {
+	dir := newRepo(t)
+	write(t, dir, "api/openapi.yaml", nameSpec)
+	base := commitAll(t, dir, "base")
+	write(t, dir, "api/openapi.yaml", nameSpecChanged)
+	commitAll(t, dir, "add an operation")
+
+	eng := engagementFor(t, "10.1.0.0/24")
+	res, err := diffscope.Compute(context.Background(), diffscope.Options{
+		Root:       dir,
+		Base:       base,
+		Engagement: eng,
+		Resolver:   nameResolver{"api.acme.example": {"10.1.0.5"}},
+	})
+	if err != nil {
+		t.Fatalf("Compute() = %v", err)
+	}
+	if names := res.TargetNames(); len(names) != 1 || names[0] != "api.acme.example" {
+		t.Fatalf("targets = %v, want the declared name", names)
+	}
+	if len(res.Changed) != 1 || res.Changed[0] != "POST /users" {
+		t.Errorf("changed = %v, want [POST /users]", res.Changed)
+	}
+
+	narrowed := eng.Narrow(res.Targets)
+	if !narrowed.Scope().InScope("api.acme.example") {
+		t.Fatal("the declared name is not reachable by name after narrowing")
+	}
+	pins := narrowed.Scope().HostPins()
+	if len(pins) != 1 || pins[0].Name != "api.acme.example" {
+		t.Fatalf("host pins = %+v, want the declared name", pins)
+	}
+	if len(pins[0].Addrs) != 1 || pins[0].Addrs[0].String() != "10.1.0.5" {
+		t.Errorf("pins = %v, want the declared address", pins[0].Addrs)
+	}
+	if narrowed.Scope().InScope("10.1.0.6") {
+		t.Error("an undeclared address inside the CIDR became reachable")
 	}
 }
