@@ -53,8 +53,12 @@ type APISpecOptions struct {
 	Resolver apispec.Resolver
 	// Pool is the engagement's targets as declared, for refusal reasons.
 	Pool []string
-	// Pin records a usable declared server's addresses for the session.
+	// Pin records a usable declared server's addresses for the session, after
+	// the host batch commits.
 	Pin func(host string, addrs []netip.Addr)
+	// Audit records the load's target-set decision: the document, the usable
+	// and refused counts, and every resolved address.
+	Audit func(apispec.Outcome) error
 }
 
 // APISpecTool builds the `api_spec_load` tool. Like the parser tools it is
@@ -86,6 +90,7 @@ func APISpecTool(opts APISpecOptions) Tool {
 				Resolver:  opts.Resolver,
 				Pool:      opts.Pool,
 				Pin:       opts.Pin,
+				Audit:     opts.Audit,
 				Origin:    engagementstate.Origin{Tool: apispec.ToolName, Subagent: subagentOrigin(ctx)},
 			})
 			if err != nil {

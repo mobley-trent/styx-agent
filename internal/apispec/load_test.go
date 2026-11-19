@@ -235,6 +235,7 @@ paths:
 	workspace := t.TempDir()
 	store := newStore(t)
 	path := writeDoc(t, "openapi.yaml", doc)
+	var outcome apispec.Outcome
 	receipt, err := apispec.Load(context.Background(), apispec.Request{
 		Artifact:  "openapi.yaml",
 		Path:      path,
@@ -243,6 +244,10 @@ paths:
 		Scope:     cidrScope("10.1.0.0/24"),
 		Resolver:  acmeResolver,
 		Pool:      []string{"10.1.0.0/24"},
+		Audit: func(out apispec.Outcome) error {
+			outcome = out
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("Load() = %v", err)
@@ -259,6 +264,22 @@ paths:
 	}
 	if !strings.Contains(refused.Reason, "outside engagement targets") || !strings.Contains(refused.Reason, "10.1.0.0/24") {
 		t.Errorf("refused reason = %q, want the host and the pool it missed", refused.Reason)
+	}
+
+	// The target-set decision is audited with the document, both counts, and
+	// every resolved address — usable and refused alike (§8).
+	if outcome.Document != "openapi.yaml" || outcome.Usable != 1 || outcome.Refused != 1 {
+		t.Errorf("audit outcome = %+v, want the document and both counts", outcome)
+	}
+	wantAddresses := []string{"10.1.0.5", "203.0.113.9"}
+	if len(outcome.Addresses) != len(wantAddresses) {
+		t.Fatalf("audit addresses = %v, want %v", outcome.Addresses, wantAddresses)
+	}
+	for i, want := range wantAddresses {
+		if outcome.Addresses[i] != want {
+			t.Errorf("audit addresses = %v, want %v", outcome.Addresses, wantAddresses)
+			break
+		}
 	}
 
 	// Only the in-scope sibling reached state.

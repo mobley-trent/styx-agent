@@ -93,9 +93,17 @@ type Request struct {
 	// Pool is the engagement's targets as declared, for refusal reasons.
 	Pool []string
 	// Pin records a usable declared server's addresses for the session, so a
-	// later request against the name lands inside the pinned set (§3.1). Nil
-	// skips the registration (tests, and a session with no container).
+	// later request against the name lands inside the pinned set (§3.1). It is
+	// called only after the host batch commits and the inventory is written, so
+	// a load that fails anywhere pins nothing. Nil skips the registration
+	// (tests, and a session with no container).
 	Pin func(host string, addrs []netip.Addr)
+	// Audit records the load's target-set decision (§8): the document, the
+	// usable and refused server counts, and every resolved address. It is
+	// called once the servers are classified and before any write, so an
+	// unlogged decision never reaches state or the resolver (fail closed). Nil
+	// skips the record (tests).
+	Audit func(Outcome) error
 	// Origin is the writing tool's provenance: the harness stamps it, never
 	// the model.
 	Origin engagementstate.Origin
@@ -144,6 +152,25 @@ type operationDecl struct {
 	servers []serverDecl
 	auth    []string
 	skipped string
+}
+
+// Outcome is the target-set decision a load records in the audit trail (§8):
+// the document, its usable and refused server counts, and every address the
+// declared servers resolved to. A load is where a target set is decided, so
+// the record names it even though the declaration itself authorizes nothing.
+// It carries no secret: a variable name is not an address, and an unresolved
+// declaration resolved to nothing.
+type Outcome struct {
+	// Document is the document as the caller named it.
+	Document string
+	// Usable and Refused count the declared servers after the scope check.
+	Usable  int
+	Refused int
+	// Addresses are every resolved address, deduplicated and sorted.
+	Addresses []string
+	// Subagent attributes the load to the subagent run that made it, empty for
+	// the main loop.
+	Subagent string
 }
 
 // AuthRequirement is one scheme's requirement (§4.3): its name, its type, and
@@ -357,13 +384,19 @@ func Load(ctx context.Context, req Request) (Receipt, error) {
 			ToolName, req.Artifact, refusalSummary(refused))
 	}
 
-	// Pin the usable names for the session before anything can be requested
-	// against them (§3.1).
-	for _, r := range usable {
-		if req.Pin == nil || isIPLiteral(r.host) {
-			continue
+	// Record the target-set decision before anything is written: a load that
+	// cannot be audited must not land hosts or pins, exactly as a tool call that
+	// cannot be audited never runs (§8).
+	if req.Audit != nil {
+		if err := req.Audit(Outcome{
+			Document:  req.Artifact,
+			Usable:    len(usable),
+			Refused:   len(refused),
+			Addresses: resolvedAddresses(order, resolutions),
+			Subagent:  req.Origin.Subagent,
+		}); err != nil {
+			return Receipt{}, fmt.Errorf("%s: record the target-set decision: %w", ToolName, err)
 		}
-		req.Pin(r.host, append([]netip.Addr(nil), r.addrs...))
 	}
 
 	inventoryOps, unavailable := inventoryOperations(doc, resolutions)
@@ -385,6 +418,17 @@ func Load(ctx context.Context, req Request) (Receipt, error) {
 		return Receipt{}, err
 	}
 
+	// Pin the usable names only now that the batch committed and the surface is
+	// on disk (§3.1): a name the resolver answers for but the store never
+	// recorded would be reachable with no record of why, so a load that fails
+	// anywhere pins nothing.
+	for _, r := range usable {
+		if req.Pin == nil || isIPLiteral(r.host) {
+			continue
+		}
+		req.Pin(r.host, append([]netip.Addr(nil), r.addrs...))
+	}
+
 	return Receipt{
 		Tool:       ToolName,
 		Document:   req.Artifact,
@@ -401,6 +445,25 @@ func Load(ctx context.Context, req Request) (Receipt, error) {
 		Inventory:  inventoryPath,
 		Warnings:   capWarnings(doc.warnings),
 	}, nil
+}
+
+// resolvedAddresses collects every address the declared servers resolved to,
+// usable and refused alike, deduplicated and sorted. An unresolved declaration
+// resolved to nothing and contributes nothing.
+func resolvedAddresses(order []string, resolutions map[string]*resolution) []string {
+	seen := map[netip.Addr]bool{}
+	var out []string
+	for _, key := range order {
+		for _, addr := range resolutions[key].addrs {
+			if seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			out = append(out, addr.String())
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // resolve checks one declared server against the pool (§3.1): the scheme must

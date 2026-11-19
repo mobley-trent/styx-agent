@@ -377,6 +377,64 @@ func TestModeTeardownClosesTheEngagementContainer(t *testing.T) {
 	}
 }
 
+// TestAPISpecLoadAuditsItsTargetSet is the §8 audit contract for the loader:
+// engagement mode allows the call, and the load records the target set it
+// decided — the document, both server counts, and every resolved address.
+func TestAPISpecLoadAuditsItsTargetSet(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "openapi.yaml", `openapi: 3.1.0
+info: {title: Acme, version: "1"}
+servers:
+  - url: https://192.0.2.44/v1
+paths:
+  /users:
+    get: {}
+`)
+	fake := fakemodel.New(fakemodel.WithTurns(
+		fakemodel.ToolCalls(fakemodel.Call("c1", "api_spec_load", `{"path":"openapi.yaml"}`)),
+		fakemodel.Text("loaded the declaration"),
+	))
+	opts := buildOptions(t, dir, fake)
+	opts.Engagement = engagementFixture
+
+	h, err := Build(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Build() = %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	if err := h.Submit(context.Background(), "load the API declaration"); err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+
+	records := readAuditRecords(t, dir)
+	var row *audit.Record
+	for i := range records {
+		if records[i].Tool != "api_spec_load" {
+			continue
+		}
+		if _, ok := records[i].Params["document"]; ok {
+			row = &records[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("no target-set audit row: %+v", records)
+	}
+	if row.Params["document"] != "openapi.yaml" {
+		t.Errorf("audit document = %v, want openapi.yaml", row.Params["document"])
+	}
+	if row.Params["usable"] != float64(1) || row.Params["refused"] != float64(0) {
+		t.Errorf("audit counts = usable %v, refused %v; want 1 and 0", row.Params["usable"], row.Params["refused"])
+	}
+	addresses, ok := row.Params["addresses"].([]any)
+	if !ok || len(addresses) != 1 || addresses[0] != "192.0.2.44" {
+		t.Errorf("audit addresses = %v, want [192.0.2.44]", row.Params["addresses"])
+	}
+	if row.Verdict != audit.VerdictAllow || row.Mode != audit.ModeEngagement {
+		t.Errorf("audit row = %s/%s, want allow in engagement mode", row.Verdict, row.Mode)
+	}
+}
+
 // pinnedNow mirrors buildOptions' pinned clock for audit file naming.
 func pinnedNow(t *testing.T) (at time.Time) {
 	t.Helper()

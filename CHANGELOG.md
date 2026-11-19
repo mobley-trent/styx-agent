@@ -24,8 +24,10 @@ file — is documented in [RELEASING.md](RELEASING.md).
   obligation. The bounded receipt carries counts, auth requirements (scheme name, type, location;
   never a value), and a literal-credential count, while the full operation inventory lands under
   `.styx/out/api/<stem>-<hash>.json` as a derived, gitignored artifact rewritten per load. Safe mode
-  denies the tool; engagement mode allows it, audited, and all four subagent presets receive it.
-  (#159)
+  denies the tool; engagement mode allows it, audited — the load writes its own target-set row naming
+  the document, the usable and refused counts, and every resolved address — and all four subagent
+  presets receive it. A declared name is pinned for the session only after the host batch commits, so
+  a failed load pins nothing. (#159)
 - The red-team workflow names the browser in its recon phase: drive an exposed web surface through
   `browser_read` snapshots and their handles, with page loads, redirect hops, and subresources
   scope-checked and cookie and storage values never exposed. (#158)

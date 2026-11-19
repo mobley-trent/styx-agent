@@ -703,6 +703,7 @@ func (h *Harness) configure() error {
 		Resolver:  engagement.DefaultResolver,
 		Pool:      apiPool,
 		Pin:       declaredPins(container),
+		Audit:     h.apiSpecAudit,
 	}))
 	// The six browser tools are registered in both modes. The rule table
 	// prompts for them, and engagement scope widens an in-scope navigate
@@ -1299,6 +1300,41 @@ func allowedEgress(eng *engagement.Engagement, cfg *config.Config) []netip.Prefi
 		}
 	}
 	return out
+}
+
+// apiSpecAudit records the target-set row an api_spec_load decides
+// (docs/api-spec-targets.md §8): the document, the usable and refused server
+// counts, and every resolved address, because a load is where a target set is
+// chosen. The loop's own row records the call and its verdict before dispatch;
+// this row records what the declaration decided, and the loader writes it
+// before any host lands, so an unlogged decision writes nothing.
+func (h *Harness) apiSpecAudit(out apispec.Outcome) error {
+	if h.audit == nil {
+		return nil
+	}
+	h.mu.Lock()
+	mode := audit.ModeSafe
+	if h.Mode == policy.ModeEngagement {
+		mode = audit.ModeEngagement
+	}
+	h.mu.Unlock()
+	addresses := out.Addresses
+	if addresses == nil {
+		addresses = []string{}
+	}
+	return h.audit.Append(audit.Record{
+		Mode: mode,
+		Tool: apispec.ToolName,
+		Params: map[string]any{
+			"document":  out.Document,
+			"usable":    out.Usable,
+			"refused":   out.Refused,
+			"addresses": addresses,
+		},
+		Verdict:  audit.VerdictAllow,
+		Reason:   "declared-servers",
+		Subagent: out.Subagent,
+	})
 }
 
 // declaredPins returns the sink api_spec_load pins a usable declared server's
