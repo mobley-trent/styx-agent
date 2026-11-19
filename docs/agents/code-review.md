@@ -1,8 +1,8 @@
 # Code Review Checklist
 
-The two-axis review this repo's [`AGENTS.md`](../../AGENTS.md) review gate requires, written down
-so an agent can run it without the `code-review` skill installed. The skill is the same procedure;
-where both are available, either path yields the same review.
+The two-axis review this repo's `AGENTS.md` review gate requires, written down so an agent can
+run it without the `code-review` skill installed. The skill is the same procedure; where both are
+available, either path yields the same review.
 
 ## The two axes
 
@@ -31,7 +31,7 @@ An empty diff stops here: there is nothing to review.
 In this order:
 
 1. Issue references in the commit messages (`#123`, `Closes #45`), fetched with the workflow in
-   [`issue-tracker.md`](issue-tracker.md).
+   `docs/agents/issue-tracker.md`.
 2. A path the user passed as an argument.
 3. A spec or plan file under `docs/`, `specs/`, or `.scratch/` matching the branch or feature name.
 4. Otherwise ask. If there is no spec, skip the Spec axis and say so in the report.
