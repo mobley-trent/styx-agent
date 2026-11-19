@@ -987,6 +987,21 @@ func TestStatusBarShowsTargetsAndCost(t *testing.T) {
 	}
 }
 
+// TestStatusBarShowsTheHostBrowser covers the reach indicator
+// (docs/browser-and-proxy.md §3.1, §9.1): while a host browser is running the
+// bar says so, and it says nothing when none is.
+func TestStatusBarShowsTheHostBrowser(t *testing.T) {
+	browser := "browser: host"
+	m := New(Config{Status: func() Status { return Status{Mode: "engagement", Browser: browser} }})
+	if got := m.View().Content; !strings.Contains(got, "browser: host") {
+		t.Errorf("status bar is missing the host-browser indicator:\n%s", got)
+	}
+	browser = ""
+	if got := m.View().Content; strings.Contains(got, "browser:") {
+		t.Errorf("status bar claims a browser after it stopped:\n%s", got)
+	}
+}
+
 func TestStatusBarReflectsLiveIsolationChange(t *testing.T) {
 	isolation := ""
 	m := New(Config{Status: func() Status { return Status{Mode: "safe", Isolation: isolation} }})

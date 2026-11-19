@@ -12,6 +12,9 @@ file — is documented in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- The red-team workflow names the browser in its recon phase: drive an exposed web surface through
+  `browser_read` snapshots and their handles, with page loads, redirect hops, and subresources
+  scope-checked and cookie and storage values never exposed. (#158)
 - The harness browser drives a pinned Chromium as a host subprocess behind the session proxy.
   The six `browser_*` tools (navigate, read, click, type, screenshot, download) launch the browser
   lazily on first use with `--proxy-server` at the harness proxy and QUIC and WebRTC's non-proxied

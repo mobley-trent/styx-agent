@@ -283,6 +283,7 @@ Decisions #6 and #8; the assembly ticket's fold note adds the skill tool here (#
 | `bash` | shell commands, container-only | container egress rules apply |
 | `code_exec` | multi-language snippets (`lang` parameter; python3 first) against runtimes present in the container image (`python3` and `node` are promised by the default sandbox image, [`docs/sandbox-image.md`](sandbox-image.md) §2.1) | container egress rules apply |
 | `web_fetch` | harness-side URL fetch | scope-checked |
+| `browser_navigate` / `browser_read` / `browser_click` / `browser_type` / `browser_screenshot` / `browser_download` | the harness's host browser: load a URL, read the page's numbered aria snapshot, act on a snapshot handle, or write a screenshot/download artifact | scope-checked (`browser_navigate.url`) |
 | `ssh_logs` | read-only remote log fetch over SSH; harness-enforced read-only command allowlist (cat/tail/grep/zgrep-class) | scope-checked |
 | `web_search` | harness-side web search through the compiled-in provider; results are untrusted third-party text and are never fetched | public-source reach (`roe.osint_allowed`) |
 | `dispatch_subagent` | spawn a role-preset subagent | n/a (delegates to its tools) |
@@ -304,6 +305,18 @@ parser: it reads a declaration rather than scanner output, writes only `host` en
 the engagement does not authorize: a query has no destination, so it carries no scope targets and
 is gated by `roe.osint_allowed` instead — a written permission for a class of disclosure, never a
 target check; model [`docs/web-search-and-osint.md`](web-search-and-osint.md) §4, ADR-0018.
+
+`browser_*` is six strict tools rather than one action enum, so a call never carries a placeholder
+verb. `browser_navigate.url` contributes its host as the call's scope target, exactly as
+`web_fetch.url` does; a URL the handler cannot parse declares no targets and is refused rather than
+run unchecked. Element handles are per-snapshot: `click`, `type`, and `download` accept only the
+numbers the latest `browser_read` minted, and an unknown or stale handle is a named error telling
+the model to take a fresh snapshot. The browser is a **host prerequisite** — a pinned Chromium
+launched lazily on first use behind the session proxy, never a container tool — so an absent or
+wrong-major build is a named tool error and the rest of the session still works. Screenshots and
+downloads are artifacts under `.styx/out/`, never image bytes in context, and no tool returns a
+cookie, `Set-Cookie`, `Authorization`, or storage value. Model
+[`docs/browser-and-proxy.md`](browser-and-proxy.md) §3.
 
 The one exception is `exploit_plan_suggest`, which takes no parameters at all: its parameter
 object declares no properties, and the provider rejects that shape under strict mode (#51),
@@ -354,8 +367,8 @@ Nothing bypasses this order — MCP tools included.
 | Preset | Tools | Network |
 |---|---|---|
 | `coder` | fs + bash/code_exec + state | none |
-| `recon` | web_fetch + bash + fs-read + state | scope-checked |
-| `exploit-dev` | exec + fs + web_fetch + state | scope-checked, engagement-gated |
+| `recon` | web_fetch + browser_* + bash + fs-read + state | scope-checked |
+| `exploit-dev` | exec + fs + web_fetch + browser_* + state | scope-checked, engagement-gated |
 | `log-triage` | fs-read + code_exec + state | none |
 
 "state" is `state_query` + `state_update` + `attack_path_suggest` + `exploit_plan_suggest`
@@ -367,6 +380,10 @@ plan the main loop does. All four presets also receive the six parser tools
 it produced. All four also receive `api_spec_load`
 ([`docs/api-spec-targets.md`](api-spec-targets.md) §8): a subagent told to test an API must be able
 to read the API's own declaration.
+
+The six `browser_*` tools reach `recon` and `exploit-dev`, the two network-capable presets.
+`coder` and `log-triage` stay network-free, so a preset that declares no network carries no
+browser (docs/browser-and-proxy.md §6).
 
 None receive `dispatch_subagent`. Presets are pack-agnostic (§8.5).
 
@@ -414,6 +431,10 @@ Every tool call resolves to exactly one verdict: **allow / prompt / deny**.
   may narrow defaults and may widen prompts to allows, but **may never weaken the ROE
   hard limits (§6.3) or engagement scope checks**.
 - The engagement file authorizes **scope only, never tool rules**.
+- `browser_*` is `web_fetch`-shaped: a network capability that prompts in both modes, widened
+  only by an engagement scope match — never by the mode flag alone. Only `browser_navigate`
+  carries a scope target (`url`'s host); the other five act on the page the model already read,
+  so the rule table alone decides them. (docs/browser-and-proxy.md §6)
 - `state_query` / `state_update` are the one deliberate mode difference:
   **safe mode denies them** (there is no engagement, so there is no store to touch) and
   **engagement mode allows them, audited** — writes included, because a prompt per state
@@ -544,6 +565,11 @@ pinned IP set their expansion resolves to at load.
 - At validation, hostnames resolve once; resolved IPs are pinned. Every network call
   re-resolves the actual destination and must land inside the pinned IPs (rebinding
   defense; enforced again at the container edge, §5.2).
+- **Redirects are followed hop by hop.** `browser_navigate` is a browser, so a redirect is part
+  of the page load; every hop and every subresource request is a fresh request checked against
+  the pinned set at the proxy. An out-of-scope hop is a structured `403` page, an
+  `out-of-scope` audit entry, and a tool result naming the refused host — the in-scope page
+  still loads (docs/browser-and-proxy.md §3.3).
 
 ### 7.3 Deactivation
 
@@ -684,7 +710,9 @@ Decision #9. Charm v2 stack (Bubble Tea v2 + Lip Gloss v2 + Bubbles).
 **Chat-centric scrolling stream**: model output, tool results, diffs, subagent activity,
 prompt cards, and system banners render inline in one stream. A persistent one-line status
 bar always shows: operating mode (safe/engagement), active pack, model, isolation state
-(container ok / degraded), compaction level, and in-scope targets when engaged. It also
+(container ok / degraded), compaction level, and in-scope targets when engaged, plus
+`browser: host` while the host browser is running — a host process rendering hostile page
+content is never implied to be anything else (docs/browser-and-proxy.md §3.1). It also
 carries `exploit auto` while the engagement's exploitation autonomy level approves in-scope
 exploits without a prompt, and nothing at `prompt` — the prompt card is already its signal
 (docs/exploitation-phase.md §7).
@@ -819,6 +847,18 @@ env-only through `token_env`, on the same rule as the keys above.
 - Implementation: `internal/engagementstate`; model `docs/engagement-state.md`, rationale
   ADR-0004. Parser framework: `internal/parsers`; contract `docs/parser-tool-contracts.md`,
   rationale ADR-0005.
+
+### 10.7 Browser profile and artifacts
+
+- One **profile per engagement**, outside the repo at
+  `~/.local/share/styx/browsers/<project>/<engagement>/`, guarded by the same pid-checked
+  lockfile discipline as engagement state (§10.6): cookies and storage are the engagement's
+  login, the model never reads their values, and a session without an engagement has no
+  directory to scope a profile to, so it gets an ephemeral one deleted at session end.
+- Screenshots and downloads are session artifacts — `.styx/out/browser/<session>/` and
+  `.styx/out/downloads/<session>/` — and are never returned as bytes. They are evidence, not
+  scanner input: no v1 parser maps them onto engagement state, so they carry no pending-parse
+  obligation (docs/parser-tool-contracts.md §4, docs/browser-and-proxy.md §3.4).
 
 ---
 
