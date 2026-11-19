@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mobley-trent/styx-agent/internal/agent"
+	"github.com/mobley-trent/styx-agent/internal/apispec"
 	"github.com/mobley-trent/styx-agent/internal/parsers"
 )
 
@@ -111,7 +112,12 @@ var logTriageSection string
 // attack-path suggestion (docs/attack-paths.md §6): a subagent planning the
 // next move reads the same ranking the main loop does — and the ranked
 // exploitation plan beside it (docs/exploitation-phase.md §4).
-var stateTools = append([]string{"state_query", "state_update", "attack_path_suggest", "exploit_plan_suggest"}, parsers.Names()...)
+// `api_spec_load` joins them (docs/api-spec-targets.md §8): a subagent told to
+// test an API must be able to read the API's own declaration.
+var stateTools = append(
+	append([]string{"state_query", "state_update", "attack_path_suggest", "exploit_plan_suggest"}, parsers.Names()...),
+	apispec.ToolName,
+)
 
 // presets is the built-in registry, in stable display order (§5.4).
 var presets = []Preset{

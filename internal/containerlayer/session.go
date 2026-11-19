@@ -438,6 +438,18 @@ func (s *Session) DNSAddr() string {
 	return s.dns.Addr()
 }
 
+// AddPins adds names to the session's authoritative resolver. A declared API
+// server is resolved once, at load, and pinned for the session exactly as an
+// engagement hostname is (docs/api-spec-targets.md §3.1); its addresses were
+// already checked against the engagement pool, so the egress rules that
+// programmed from that pool permit them.
+func (s *Session) AddPins(pins []NamePin) {
+	if s.dns == nil || len(pins) == 0 {
+		return
+	}
+	s.dns.AddPins(pins)
+}
+
 // startDNS brings up the harness's authoritative resolver (§5.2). It is
 // best-effort: the resolver is a resolution guarantee, not the egress
 // boundary, so a host that cannot bind it (an unprivileged port) still runs,

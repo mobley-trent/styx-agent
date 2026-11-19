@@ -48,6 +48,28 @@ func lookupName(t *testing.T, serverAddr, name string) ([]net.IPAddr, error) {
 	return r.LookupIPAddr(ctx, name)
 }
 
+// TestDNSAddPinsPinsALoadTimeDeclaration proves the resolver can take a name
+// after it started: a declared API server is resolved once, at load, and pinned
+// for the session (docs/api-spec-targets.md §3.1).
+func TestDNSAddPinsPinsALoadTimeDeclaration(t *testing.T) {
+	server := testDNSServer(t)
+	const name = "declared.spec.example"
+	if _, ok := server.Lookup(name); ok {
+		t.Fatalf("Lookup(before AddPins) = ok, want no answer")
+	}
+
+	server.AddPins([]NamePin{{Name: name, Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.90")}}})
+	server.AddPins([]NamePin{{Name: name, Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.91")}}})
+
+	addrs, ok := server.Lookup(name)
+	if !ok || len(addrs) != 2 {
+		t.Fatalf("Lookup(after AddPins) = %v/%v, want both pins", addrs, ok)
+	}
+	if addrs[0].String() != "192.0.2.90" || addrs[1].String() != "192.0.2.91" {
+		t.Errorf("Lookup(after AddPins) = %v, want both addresses pinned", addrs)
+	}
+}
+
 func TestDNSLookupAnswersOnlyPinnedNames(t *testing.T) {
 	server := testDNSServer(t)
 

@@ -36,6 +36,7 @@ func TestBuiltinToolSchemasAreStrictCompliant(t *testing.T) {
 		ExploitPlanTool(nil, nil),
 	}
 	tools = append(tools, ParserTools(dir, nil, nil)...)
+	tools = append(tools, APISpecTool(APISpecOptions{Workspace: dir}))
 	if skillTool, ok := SkillTool(skillCatalog(t, map[string]string{
 		"demo": skillDoc("demo", "a demonstration skill", ""),
 	})); ok {

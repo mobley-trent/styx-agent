@@ -159,6 +159,22 @@ func (m *Manager) start(ctx context.Context, opts ManagerOptions) (*Session, Run
 	return session, rt, nil
 }
 
+// AddPins adds names to the session's authoritative resolver, starting the
+// session's pin set before its first Start and adding to the running resolver
+// afterwards. A name is only ever added for a destination the engagement pool
+// already authorizes (docs/api-spec-targets.md §3.1).
+func (m *Manager) AddPins(pins []NamePin) {
+	if len(pins) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.opts.Pins = append(m.opts.Pins, pins...)
+	if m.session != nil {
+		m.session.AddPins(pins)
+	}
+}
+
 // Shell runs a shell command, starting the session if needed.
 func (m *Manager) Shell(ctx context.Context, command string) (string, error) {
 	session, err := m.Start(ctx)

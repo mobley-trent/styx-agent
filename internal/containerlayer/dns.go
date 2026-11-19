@@ -68,7 +68,18 @@ func NewDNSServer(opts DNSServerOptions) (*DNSServer, error) {
 		return nil, errors.New("containerlayer: dns server needs a listen address")
 	}
 	s := &DNSServer{addr: opts.Addr, exact: make(map[string][]netip.Addr)}
-	for _, pin := range opts.Pins {
+	s.AddPins(opts.Pins)
+	return s, nil
+}
+
+// AddPins adds authorized names to the resolver (docs/api-spec-targets.md
+// §3.1: a declared server is resolved once, at load, and pinned for the
+// session). A name already pinned keeps its addresses and gains the new ones;
+// a wildcard is answered from the union of its pins.
+func (s *DNSServer) AddPins(pins []NamePin) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, pin := range pins {
 		name := normalizeDNSName(pin.Name)
 		if name == "" || len(pin.Addrs) == 0 {
 			continue
@@ -78,12 +89,22 @@ func NewDNSServer(opts DNSServerOptions) (*DNSServer, error) {
 			continue
 		}
 		if pin.Wildcard {
-			s.wildcards = append(s.wildcards, NamePin{Name: name, Wildcard: true, Addrs: addrs})
+			s.addWildcardLocked(name, addrs)
 			continue
 		}
-		s.exact[name] = addrs
+		s.exact[name] = dedupeAddrs(append(s.exact[name], addrs...))
 	}
-	return s, nil
+}
+
+// addWildcardLocked merges a wildcard's pins into the matching entry.
+func (s *DNSServer) addWildcardLocked(name string, addrs []netip.Addr) {
+	for i := range s.wildcards {
+		if s.wildcards[i].Name == name {
+			s.wildcards[i].Addrs = dedupeAddrs(append(s.wildcards[i].Addrs, addrs...))
+			return
+		}
+	}
+	s.wildcards = append(s.wildcards, NamePin{Name: name, Wildcard: true, Addrs: addrs})
 }
 
 // Start binds UDP and TCP and begins answering. Both transports bind the same
@@ -128,6 +149,8 @@ func (s *DNSServer) Addr() string {
 // Lookup resolves a name against the pinned set. It reports false for any name
 // the engagement did not authorize.
 func (s *DNSServer) Lookup(name string) ([]netip.Addr, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	n := normalizeDNSName(name)
 	if n == "" {
 		return nil, false
